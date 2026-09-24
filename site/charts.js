@@ -83,12 +83,12 @@ class Frame {
 }
 
 // Grouped or stacked columns. categories: string[]; series: [{name, values:number[], color?}]
-export function barChart(container, { title, subtitle, categories, series, stacked = false, format = fmt.num, height = 240, labelEvery = 1, yLabel }) {
+export function barChart(container, { title, subtitle, categories, series, stacked = false, format = fmt.num, height = 240, labelEvery = 1, yLabel, refLines = [] }) {
   const f = new Frame(container, { title, subtitle, series, height });
   const m = { l: 44, r: 12, t: 10, b: 34 }, W = f.width - m.l - m.r, H = height - m.t - m.b;
   const n = categories.length, k = series.length;
   const totals = categories.map((_, i) => stacked ? series.reduce((a, s) => a + (s.values[i] || 0), 0) : Math.max(...series.map(s => s.values[i] || 0)));
-  const ticks = niceTicks(Math.max(...totals, 0)), yMax = ticks[ticks.length - 1] || 1;
+  const ticks = niceTicks(Math.max(...totals, ...refLines.map(r => r.value || 0), 0)), yMax = ticks[ticks.length - 1] || 1;
   const y = v => m.t + H - (v / yMax) * H;
   ticks.forEach(t => { el("line", { x1: m.l, x2: m.l + W, y1: y(t), y2: y(t), class: "grid-line" }, f.svg);
     el("text", { x: m.l - 6, y: y(t) + 4, "text-anchor": "end", class: "axis-text" }, f.svg).textContent = format === fmt.pct ? fmt.pct(t) : (format === fmt.min ? `${fmtNum(t / 60, 1)}m` : fmt.compact(t)); });
@@ -113,6 +113,8 @@ export function barChart(container, { title, subtitle, categories, series, stack
     if (i % labelEvery === 0) el("text", { x: x0, y: height - m.b + 16, "text-anchor": "middle", class: "axis-text" }, f.svg).textContent = c;
   });
   if (yLabel) el("text", { x: m.l, y: m.t - 2, class: "axis-text" }, f.svg).textContent = yLabel;
+  refLines.forEach(r => { if (!(r.value > 0)) return; el("line", { x1: m.l, x2: m.l + W, y1: y(r.value), y2: y(r.value), stroke: cssVar("--text-secondary"), "stroke-width": 1.5 }, f.svg);
+    if (r.label) el("text", { x: m.l + W - 4, y: y(r.value) - 4, "text-anchor": "end", class: "dlabel" }, f.svg).textContent = r.label; });
   f.table(["", ...series.map(s => s.name)], categories.map((c, i) => [c, ...series.map(s => format(s.values[i]))]));
   return f.root;
 }

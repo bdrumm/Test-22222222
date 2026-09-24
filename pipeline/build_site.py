@@ -21,6 +21,7 @@ from mta_delay_insights import __version__
 from mta_delay_insights.analysis.engine import AnalysisRequest, analyze_station
 from mta_delay_insights.analysis.line_insights import line_insights
 from mta_delay_insights.sources.alerts import alert_kind
+from mta_delay_insights.realtime import build_live, fit_model
 from mta_delay_insights.sources.gtfs_static import NY_TZ, StaticGTFS
 from mta_delay_insights.sources.registry import as_records
 from mta_delay_insights.storage.db import Store
@@ -128,14 +129,46 @@ def _n(v):
         return None
 
 
+def fit_models(store: Store, static: StaticGTFS, targets: dict, now: datetime) -> tuple[dict, list[dict]]:
+    """Fit the look-back propagation model per target; returns ({id: model}, resolved targets)."""
+    models, resolved = {}, []
+    for t in targets["targets"]:
+        try:
+            rr = lib.resolve_target(static, {**t, "upstream_stops": targets.get("upstream_stops", 6)})
+            r = {**t, **{k: rr[k] for k in ("station_id", "station_name", "stop_id", "routes")}, "upstream": rr["upstream"], "terminals": rr["terminals"]}
+            resolved.append(r)
+            models[t["id"]] = fit_model(store, static, r, now.timestamp())
+        except Exception as exc:
+            logging.warning("model fit %s failed: %s", t.get("id"), exc)
+    return models, resolved
+
+
+def live_snapshot(static: StaticGTFS, resolved: list[dict], models: dict, alerts: pd.DataFrame, now: datetime,
+                  feed_bytes: dict[str, bytes] | None) -> dict | None:
+    if not feed_bytes:
+        return None
+    try:
+        return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot")
+    except Exception as exc:
+        logging.warning("live snapshot failed: %s", exc)
+        return None
+
+
 def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets: dict, store: Store,
           alerts: pd.DataFrame, context: dict[str, pd.DataFrame | None], runs: list[dict], now: datetime,
-          mode: str) -> dict:
+          mode: str, feed_bytes: dict[str, bytes] | None = None) -> dict:
     out_data = out / "data"
     if out.exists():
         shutil.rmtree(out)
     shutil.copytree(site_src, out)
     (out_data / "reports").mkdir(parents=True, exist_ok=True)
+    (out_data / "models").mkdir(parents=True, exist_ok=True)
+    models, resolved = fit_models(store, static, targets, now)
+    for tid, m in models.items():
+        (out_data / "models" / f"{tid}.json").write_text(json.dumps(m.to_dict(), default=str))
+    live = live_snapshot(static, resolved, models, alerts, now, feed_bytes)
+    if live is not None:
+        (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []
     reports = analyze_targets(store, static, targets, context.get("ridership_profile"), context.get("trains_delayed"),
                               context.get("weather_daily"), now, coverage)
@@ -159,7 +192,8 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
               "context": {k: (int(len(v)) if v is not None else 0) for k, v in context.items()},
               "gtfs": static.summary()}
     (out_data / "status.json").write_text(json.dumps(status, default=str))
-    index = {"generated_at": now.isoformat(), "mode": mode, "targets": [e for e, _ in reports],
+    index = {"generated_at": now.isoformat(), "mode": mode, "targets": [e for e, _ in reports], "live": live is not None,
+             "models": {tid: {"n_arrivals": m.n_arrivals, "n_days": m.n_days} for tid, m in models.items()},
              "sources": as_records(), "lines_available": sorted(lines.get("lines", {}).keys()),
              "alerts_active": sum(1 for a in json.loads((out_data / "alerts.json").read_text())["alerts"] if a["active_now"]),
              "status": {k: status[k] for k in ("arrivals_total", "days_with_data")}}
@@ -168,7 +202,7 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     return index
 
 
-def build_live(args) -> dict:
+def build_from_data(args) -> dict:
     data_dir = Path(args.data_dir)
     targets = lib.load_targets(args.targets)
     static = lib.load_static(args.gtfs)
@@ -180,8 +214,25 @@ def build_live(args) -> dict:
         store.upsert_alerts(alerts, seen_ts=time.time())
     context = {k: lib.load_context(data_dir, k) for k in
                ("trains_delayed", "delay_incidents", "major_incidents", "customer_journey", "ridership_profile", "weather_daily")}
+    feed_bytes = {}
+    if not args.no_feeds:
+        from mta_delay_insights import config
+        from mta_delay_insights.sources import alerts as alerts_src
+        from mta_delay_insights.sources import gtfs_realtime as rt
+        _, feeds, _ = lib.stops_and_feeds(static, targets)
+        for key in feeds:
+            try:
+                feed_bytes[key] = rt.fetch_feed_bytes(config.rt_feed_url(key))
+            except Exception as exc:
+                logging.warning("feed %s unavailable at build time: %s", key, exc)
+        try:
+            fresh = alerts_src.alerts_frame(alerts_src.fetch_alerts_json())
+            if not fresh.empty:
+                alerts = pd.concat([alerts, fresh], ignore_index=True).drop_duplicates(["alert_id", "active_start"], keep="last")
+        except Exception as exc:
+            logging.warning("alerts unavailable at build time: %s", exc)
     return build(data_dir, Path(args.site_src), Path(args.out), static, targets, store, alerts, context,
-                 lib.load_runs(data_dir), datetime.now(NY_TZ), "live")
+                 lib.load_runs(data_dir), datetime.now(NY_TZ), "live", feed_bytes)
 
 
 def build_synthetic(args) -> dict:
@@ -216,7 +267,28 @@ def build_synthetic(args) -> dict:
                "weather_daily": sim.weather_daily, "delay_incidents": None}
     runs = [{"ts": now.timestamp() - 3600 * i, "iso": (now - timedelta(hours=i)).isoformat(), "kind": "collect",
              "polls": 100, "arrivals": 900, "errors": 0} for i in range(5)]
-    return build(tmp, Path(args.site_src), Path(args.out), static, targets, store, sim.alerts, context, runs, now, "synthetic")
+    # Live snapshot: a weekday morning of the last simulated day, with one train held 6 minutes.
+    last = sc.end - timedelta(days=1)
+    while last.weekday() >= 5:
+        last -= timedelta(days=1)
+    snap_now = datetime.combine(last, datetime.min.time(), NY_TZ) + timedelta(hours=8, minutes=20)
+    feed_key, _, data = synthetic.to_rt_snapshots(sim.arrivals, snap_now.timestamp(), snap_now.timestamp(), poll_interval=30)[0]
+    from mta_delay_insights.sources import gtfs_realtime as rt
+    msg = rt.parse_feed(data)
+    held = None
+    for ent in msg.entity:
+        tu = ent.trip_update if ent.HasField("trip_update") else None
+        if tu and tu.trip.route_id == "6" and any(x.stop_id == "631N" for x in tu.stop_time_update) and tu.stop_time_update[0].stop_id != "631N":
+            held = held or tu.trip.trip_id
+            if tu.trip.trip_id == held:
+                for x in tu.stop_time_update:
+                    x.arrival.time += 360; x.departure.time += 360
+    alerts_live = sim.alerts.copy()
+    unplanned_idx = alerts_live.index[~alerts_live["planned"]] if not alerts_live.empty else []
+    if len(unplanned_idx):
+        alerts_live.loc[unplanned_idx[-1], ["active_start", "active_end", "updated_at"]] = [snap_now.timestamp() - 600, snap_now.timestamp() + 1200, snap_now.timestamp()]
+    return build(tmp, Path(args.site_src), Path(args.out), static, targets, store, alerts_live, context, runs, snap_now, "synthetic",
+                 {feed_key: msg.SerializeToString()})
 
 
 def main(argv=None) -> int:
@@ -227,9 +299,10 @@ def main(argv=None) -> int:
     ap.add_argument("--site-src", default=str(lib.ROOT / "site"))
     ap.add_argument("--out", default=str(lib.ROOT / "_site"))
     ap.add_argument("--synthetic", action="store_true")
+    ap.add_argument("--no-feeds", action="store_true", help="skip fetching the realtime feeds for the live snapshot")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
-    index = build_synthetic(args) if args.synthetic else build_live(args)
+    index = build_synthetic(args) if args.synthetic else build_from_data(args)
     print(json.dumps({"targets": [(t["id"], t["status"]) for t in index["targets"]], "out": args.out}))
     return 0
 

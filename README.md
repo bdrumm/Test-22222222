@@ -51,6 +51,7 @@ log reports the HTTP status of the live URL.
 
 | page | what it shows |
 |---|---|
+| Live | holistic status now: every route/direction with trains in service, lateness, the largest gap forming and where, active unplanned alerts; for each monitored platform the next arrivals with feed ETA, look-back-calibrated ETA and range, predicted headways, and the *downstream effects* (gaps forming, late trains inbound with their expected lateness here, alert effects) |
 | Stations | one card per monitored platform: severity, verdict, focus hours, where / why, rider impact |
 | Station report | what changed (with CIs), problem rate and lateness by hour, day × hour heatmap, daily trend, ranked locations and causes with evidence, recommendations |
 | Lines | monthly trains delayed by reported cause per line (MTA Open Data), month-over-month / year-over-year change, cause mix vs system, customer journey metrics, major incidents |
@@ -140,6 +141,26 @@ Run for a while before analysing: the upstream, merge and terminal lenses need
 arrivals at the stops before the target, which `collect --station` includes by
 default (`--all-stops` records everything on the chosen feeds).
 
+## Realtime mode
+
+```bash
+mta-insights live --station "Grand Central" --direction N --routes 4,5,6 --db data/mta.sqlite
+mta-insights serve --site _site --db data/mta.sqlite --port 8000      # Live page refreshes every 30 s
+```
+
+`live` prints the system status (per route/direction) and, for the target, the
+next arrivals with the look-back model's calibrated ETAs and the downstream
+effects of what is happening upstream right now. `serve` hosts the site locally
+and recomputes `data/live.json` from the feeds every 30 seconds, refitting the
+model from the store every 30 minutes. On GitHub Pages the Live page shows the
+snapshot the collector published (every ~6 minutes while the hourly run is
+active) and states its age.
+
+The look-back model is fitted from the collected history: how much feed ETAs
+slip by lead time, how lateness upstream carries to the platform, how often
+gaps persist, and how much each alert cause adds. See
+[docs/METHODOLOGY.md](docs/METHODOLOGY.md#8-realtime-mode-and-the-look-back-propagation-model).
+
 ## Try it offline
 
 ```bash
@@ -197,7 +218,8 @@ mta_delay_insights/
     report.py             InsightReport → Markdown / JSON
     engine.py             analyze_station(): orchestration
   synthetic.py            mini corridor + injected-cause scenarios + GTFS-RT re-encoding
-  cli.py                  mta-insights sources | static | collect | replay | context | analyze | demo
+  realtime/               status (holistic now), propagation (look-back model + forecast), server (local live mode)
+  cli.py                  mta-insights sources | static | collect | replay | context | analyze | live | serve | demo
 pipeline/                 GitHub Actions data pipeline: collect, context, build_site, data-branch helper
 site/                     static review app (vanilla JS + SVG charts) published to GitHub Pages
 tests/                    unit tests + end-to-end scenario tests

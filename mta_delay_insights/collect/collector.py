@@ -35,6 +35,10 @@ class Collector:
         self.raw_dir = Path(raw_dir) if raw_dir else None
         self.trackers = {f: ArrivalTracker(self.stops_of_interest, poll_interval_sec) for f in self.feeds}
         self.polls = 0
+        self.last_feed_bytes: dict[str, bytes] = {}
+        self.last_alerts: dict | None = None
+        self.last_poll_ts: float | None = None
+        self.on_poll: Callable[["Collector", float], None] | None = None
 
     def ingest(self, feed_key: str, data: bytes, snapshot_ts: float) -> pd.DataFrame:
         """Process one raw feed snapshot (live or replayed). Returns emitted arrivals."""
@@ -63,6 +67,7 @@ class Collector:
         for key in self.feeds:
             try:
                 data = self.fetcher(key)
+                self.last_feed_bytes[key] = data
                 arrivals = self.ingest(key, data, now)
                 summary["arrivals"] += len(arrivals)
             except Exception as exc:  # network hiccups must not kill the loop
@@ -70,11 +75,19 @@ class Collector:
                 log.warning("feed %s failed: %s", key, exc)
         if self.alerts_fetcher and self.polls % self.alerts_every_n_polls == 0:
             try:
-                summary["alerts"] = self.ingest_alerts(self.alerts_fetcher(), now)
+                payload = self.alerts_fetcher()
+                self.last_alerts = payload
+                summary["alerts"] = self.ingest_alerts(payload, now)
             except Exception as exc:
                 summary["errors"] += 1
                 log.warning("alerts failed: %s", exc)
         self.polls += 1
+        self.last_poll_ts = now
+        if self.on_poll:
+            try:
+                self.on_poll(self, now)
+            except Exception as exc:
+                log.warning("on_poll hook failed: %s", exc)
         return summary
 
     def run(self, duration_sec: float | None = None, max_polls: int | None = None) -> list[dict]:

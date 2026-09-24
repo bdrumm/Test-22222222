@@ -157,3 +157,17 @@ select, input[type=search] { font: inherit; padding: .3rem .5rem; border-radius:
 .hours { display: inline-flex; gap: .2rem; flex-wrap: wrap; }
 .hours span { padding: 0 .35rem; border-radius: 4px; background: var(--page); border: 1px solid var(--border); font-size: .78rem; font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) { .topbar { gap: .6rem; } .container { padding: 1rem 16px 2rem; } .tile .value { font-size: 1.3rem; } }
+
+/* Live page */
+.status-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .55rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); font-size: .85rem; }
+.status-chip .st { font-size: .72rem; color: var(--text-secondary); }
+.status-chip .dot { width: 9px; height: 9px; border-radius: 50%; }
+.st-good .dot { background: var(--status-good); } .st-degraded .dot { background: var(--status-warning); } .st-disrupted .dot { background: var(--status-critical); } .st-normal .dot { background: var(--status-good); }
+.chips { display: flex; flex-wrap: wrap; gap: .45rem; }
+.age { font-variant-numeric: tabular-nums; }
+.effect { padding: .45rem .6rem; border-radius: 8px; background: var(--page); border-left: 3px solid var(--status-warning); margin: .35rem 0; font-size: .9rem; }
+.effect.high { border-left-color: var(--status-critical); }
+.effect .k { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-right: .4rem; }
+.eta { font-variant-numeric: tabular-nums; }
+tr.gap-row td { background: color-mix(in oklab, var(--status-warning) 12%, transparent); }
+.refresh { display: inline-flex; gap: .5rem; align-items: center; }

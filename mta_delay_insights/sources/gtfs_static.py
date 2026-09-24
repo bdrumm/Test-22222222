@@ -157,6 +157,30 @@ class StaticGTFS:
         self._st_by_stop = {sid: df for sid, df in self.stop_times.groupby("stop_id", sort=False)}
         self._stop_names = self.stops.set_index("stop_id")["stop_name"].to_dict()
         self._parent = self.stops.set_index("stop_id")["parent_station"].to_dict()
+        # realtime trip-id suffix -> [(static trip_id, service_id)] for O(1) matching
+        self._by_suffix: dict[str, list[tuple[str, str]]] = {}
+        for tid, sid in zip(self.trips["trip_id"], self.trips["service_id"]):
+            self._by_suffix.setdefault(rt_trip_suffix(tid), []).append((tid, sid))
+        self._st_by_trip: dict[str, dict[str, int]] | None = None
+        self._service_cache: dict[date, set[str]] = {}
+
+    def _trip_stop_index(self) -> dict[str, dict[str, int]]:
+        if self._st_by_trip is None:
+            idx: dict[str, dict[str, int]] = {}
+            for tid, sid, sec in zip(self.stop_times["trip_id"], self.stop_times["stop_id"], self.stop_times["arrival_sec"]):
+                idx.setdefault(tid, {})[sid] = int(sec)
+            self._st_by_trip = idx
+        return self._st_by_trip
+
+    def scheduled_arrival(self, rt_trip_id: str, stop_id: str, service_date: date) -> float | None:
+        """Scheduled arrival (epoch seconds) of a realtime trip at a stop, or None if unmatched."""
+        tid = self.match_trip(rt_trip_id, service_date)
+        if tid is None:
+            return None
+        sec = self._trip_stop_index().get(tid, {}).get(stop_id)
+        if sec is None:
+            return None
+        return service_midnight(service_date).timestamp() + sec
 
     # ------------------------------------------------------------------ #
     # Stations
@@ -260,10 +284,13 @@ class StaticGTFS:
     def match_trip(self, rt_trip_id: str, service_date: date) -> str | None:
         """Best static trip id for a realtime trip id (suffix match among active services)."""
         suffix = rt_trip_suffix(rt_trip_id)
-        active = self.active_services(service_date)
-        cands = self.trips[self.trips["trip_id"].str.endswith("_" + suffix) & self.trips["service_id"].isin(active)]
-        if len(cands):
-            return cands.iloc[0]["trip_id"]
+        active = self._service_cache.get(service_date)
+        if active is None:
+            active = self.active_services(service_date)
+            self._service_cache[service_date] = active
+        for tid, sid in self._by_suffix.get(suffix, []):
+            if sid in active:
+                return tid
         return None
 
     # ------------------------------------------------------------------ #

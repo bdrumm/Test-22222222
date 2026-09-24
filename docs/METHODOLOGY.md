@@ -152,16 +152,64 @@ segment, the merge stop and routes, the terminal, alternates at the station.
 Metric-triggered rules add headway-management actions when bunching or gap
 shares are high.
 
-## 8. Validation
+## 8. Realtime mode and the look-back propagation model
+
+`mta_delay_insights.realtime` answers "what is the system doing right now, and
+what will reach my platform next?"
+
+**Holistic status (`status.build_live`).** Every train in the realtime feeds is
+parsed into its remaining stops and ETAs; the trip id is matched to the static
+schedule (suffix match on the service date) to get its lateness at its next stop.
+Per route and direction: trains in service, median and p90 lateness of matched
+trains, the largest headway forming anywhere on the line (largest difference
+between consecutive ETAs at any stop in the next hour, versus the scheduled
+headway at the busiest reference stop), bunching share, and active unplanned
+alerts. Status: *disrupted* when a Delays / Suspended / Rerouted alert is
+active, the largest gap is ≥ 2.5× the scheduled headway, or median lateness ≥ 8
+min; *degraded* for any unplanned alert, gap ≥ 1.6× or lateness ≥ 4 min.
+
+**Look-back model (`propagation.fit_model`).** Fitted per monitored platform
+from the collected history (default 21 days):
+
+| component | estimate | prior (used until data accumulates) |
+|---|---|---|
+| ETA calibration | median and p10/p90 of *actual − first predicted* arrival, by lead-time bucket (0–5, 5–10, 10–20, 20–40, 40–60, 60+ min) and route | bias 0; spread −45 s − 5 %·h … +60 s + 15 %·h |
+| Lateness carry | least-squares slope/intercept of lateness at the target on lateness `k` stops upstream (k = 1…6), per route | slope 1, intercept 0 |
+| Gap persistence | P(gap at target \| gap at nearest upstream stop) | 0.6 |
+| Alert effect | median lateness with an unplanned alert of cause *c* active on the route minus without | 0 |
+
+Estimates are shrunk toward the prior with weight n / (n + 20).
+
+**Forecast (`propagation.forecast_station`).** For each live train that will
+serve the platform within the hour: *model ETA* = feed ETA + calibrated bias for
+that lead time + historical alert effect for active alerts; the range is the
+p10–p90 error band. Predicted headways (model ETAs in sequence, per route) are
+compared with the scheduled headway for the hour; a headway ≥ 1.5× is a *gap*,
+≤ 0.5× is *bunched*. Trains already ≥ 3 min late upstream get an expected
+lateness at the platform from the carry model for their distance. The
+*downstream effects* list combines gaps forming, long current waits, late
+inbound trains and active alerts, ranked by severity.
+
+**Where it runs.** `mta-insights live` prints one snapshot; `mta-insights serve`
+serves the site locally and refreshes `data/live.json` every 30 s (true
+realtime); the GitHub Actions collector publishes a snapshot to Pages every ~6
+minutes during its hourly run (GitHub Pages allows about ten builds per hour),
+and the site build stores a final snapshot plus the fitted models
+(`data/models/<target>.json`).
+
+## 9. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4
 express) and injects known causes: signal failure on a segment, peak dwell,
 merge holds, missing trips, late terminal departures, weather sensitivity. The
 test-suite checks that the engine names the injected cause, and that a null
 scenario produces no finding. The collector is tested by encoding simulated
-arrivals into GTFS-RT protobuf snapshots and replaying them.
+arrivals into GTFS-RT protobuf snapshots and replaying them. The realtime
+model is tested by fitting on the simulated history, then holding one
+approaching train 7 minutes in a synthetic snapshot: the forecast must flag the
+late inbound train, the gap it creates and the active alert's effect.
 
-## 9. Known limitations
+## 10. Known limitations
 
 * Observed arrivals inherit the feed's own errors (reassigned trains, trip-id
   changes mid-run, missing predictions). Confidence is tracked per arrival.
