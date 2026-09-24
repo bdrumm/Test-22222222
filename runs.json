@@ -108,5 +108,60 @@
 "times-sq-s": "611",
 "jay-st-n": "636"
 }
+},
+{
+"ts": 1790286260.6481628,
+"iso": "2026-09-24T17:44:20.648165-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace"
+],
+"polls": 9,
+"errors": 0,
+"arrivals": 119,
+"flushed": 81,
+"alerts": 843,
+"duration_sec": 241,
+"written": {
+"2026-09-24": 219
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 9,
+"first_ts": 1790286019.5534334,
+"last_ts": 1790286259.5544097,
+"arrivals": 29
+},
+{
+"feed": "ace",
+"polls": 9,
+"first_ts": 1790286019.5534334,
+"last_ts": 1790286259.5544097,
+"arrivals": 9
+}
+]
+},
+{
+"ts": 1790286272.2405856,
+"iso": "2026-09-24T17:44:32.240586-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:5951",
+"delay_incidents:7805",
+"customer_journey:1200",
+"stations:496",
+"ridership_hourly:3744",
+"weather_daily:61"
+],
+"failed": {
+"major_incidents": "major_incidents_2020(j6d2-s8m2): 403 for https://data.ny.gov/resource/j6d2-s8m2.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\n  \"error\" : true,\n  \"message\" : \"You mu; major_incidents_2025(f462-ka72): 400 for https://data.ny.gov/resource/f462-ka72.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\"message\":\"Query coordinator error: quer; major_incidents_2025(f462-ka72): missing ['month', 'line']; columns=['open_dataset_id', 'dataset_title', 'status', 'plan_submission_date', 'description', 'plan_submission_date_notes', 'type', 'agency', 'posting"
+},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636"
+}
 }
 ]
