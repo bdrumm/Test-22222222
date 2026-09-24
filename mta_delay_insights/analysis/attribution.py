@@ -181,10 +181,12 @@ def alerts_lens(flagged: pd.DataFrame, alerts: pd.DataFrame, route_ids: list[str
                     unplanned_cat[i] = a.cause_category
     prob = flagged["problem"].values.astype(bool)
     n_prob = prob.sum()
+    if n_prob < MIN_LATE:
+        return out
     covered = unplanned_cat != None  # noqa: E711
-    if n_prob and covered.any():
+    if n_prob and covered.any() and (~covered).any():
         p_with = prob[covered].mean()
-        p_without = prob[~covered].mean() if (~covered).any() else float("nan")
+        p_without = prob[~covered].mean()
         lift = _lift(p_with, p_without)
         cats = pd.Series(unplanned_cat[prob & covered]).value_counts()
         for cat, n in cats.items():
@@ -456,8 +458,9 @@ def service_delivered_lens(profile: pd.DataFrame) -> list[Evidence]:
     if profile.empty or profile["n_sched"].isna().all():
         return out
     p = profile.dropna(subset=["service_delivered"])
+    p = p[p["n_actual"] >= 4]
     prob_buckets = p[p["problem_share"] > 0]
-    if prob_buckets.empty:
+    if len(prob_buckets) < 3:
         return out
     missing = prob_buckets["service_delivered"] < 0.9
     share = float(missing.mean())

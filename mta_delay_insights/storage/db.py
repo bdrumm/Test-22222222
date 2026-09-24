@@ -170,6 +170,17 @@ class Store:
             df = df[df["active_start"].fillna(0) <= end_ts]
         return df.reset_index(drop=True)
 
+    def coverage_intervals(self, max_gap_sec: float = 180.0) -> list[tuple[float, float]]:
+        """Contiguous polling intervals (any feed), split where polls are further apart than ``max_gap_sec``."""
+        ts = pd.read_sql("SELECT DISTINCT fetched_at FROM snapshots ORDER BY fetched_at", self.conn)["fetched_at"].tolist()
+        out: list[tuple[float, float]] = []
+        for t in ts:
+            if out and t - out[-1][1] <= max_gap_sec:
+                out[-1] = (out[-1][0], t)
+            else:
+                out.append((t, t))
+        return [(a, b) for a, b in out if b > a]
+
     def snapshot_stats(self) -> pd.DataFrame:
         return pd.read_sql("SELECT feed, COUNT(*) AS polls, MIN(fetched_at) AS first_ts, MAX(fetched_at) AS last_ts, "
                            "SUM(n_arrivals_emitted) AS arrivals FROM snapshots GROUP BY feed", self.conn)

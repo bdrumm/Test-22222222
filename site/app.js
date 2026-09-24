@@ -65,14 +65,20 @@ async function home(idx) {
       link(`#/station/${t.id}`, "Details", card, "small");
       continue;
     }
-    badge(`${t.severity.label} · ${t.severity.score}`, sevClass(t.severity.label), head);
-    const meter = h("div", "meter", null, card); h("span", null, null, meter).style.width = `${Math.min(100, t.severity.score)}%`;
-    h("p", "small", t.verdict, card).style.marginTop = ".6rem";
+    const collecting = t.coverage_windows?.mode === "window_only";
+    if (collecting) {
+      badge("collecting", "s-na", head);
+      h("p", "small", "No baseline yet: about two days of arrivals are needed before the window can be compared. The report shows what has been observed so far.", card).style.marginTop = ".6rem";
+    } else {
+      badge(`${t.severity.label} · ${t.severity.score}`, sevClass(t.severity.label), head);
+      const meter = h("div", "meter", null, card); h("span", null, null, meter).style.width = `${Math.min(100, t.severity.score)}%`;
+      h("p", "small", t.verdict, card).style.marginTop = ".6rem";
+    }
     const kv = h("div", "small secondary", null, card);
     kv.append("Focus hours: "); const hs = h("span", "hours", null, kv); (t.focus_hours || []).forEach(x => h("span", null, String(x).padStart(2, "0"), hs)); if (!t.focus_hours?.length) kv.append("all hours");
     if (t.top_location) h("div", "small secondary", `Where: ${causeName(t.top_location.cause)}`, card);
     if (t.top_cause) h("div", "small secondary", `Why: ${causeName(t.top_cause.cause)} (support ${t.top_cause.score.toFixed(2)})`, card);
-    if (t.impact) h("div", "small secondary", `Impact: ${fmt.num(t.impact.passenger_hours_per_day)} passenger-hours/day`, card);
+    if (t.impact && t.impact.ridership_source !== "no_baseline") h("div", "small secondary", `Impact: ${fmt.num(t.impact.passenger_hours_per_day)} passenger-hours/day`, card);
     h("div", "tiny muted", `${fmt.num(t.arrival_count)} arrivals · ${t.coverage_windows?.span_hours ?? "?"} h of coverage`, card);
     link(`#/station/${t.id}`, "Open report →", card, "small").style.display = "inline-block";
   }
@@ -95,8 +101,10 @@ async function station(idx, id) {
     return;
   }
   const tiles = h("div", "tiles", null, app); tiles.style.marginTop = "1rem";
-  const sev = tile(tiles, "Severity (0-100)", r.severity.score); badge(r.severity.label, sevClass(r.severity.label), sev);
-  tile(tiles, "Extra journey time", r.impact ? `${fmt.num(r.impact.passenger_hours_per_day)} pax-h/day` : "–", r.impact ? `${fmt.num1(r.impact.extra_wait_min_per_rider)} min per rider · ${fmt.compact(r.impact.riders_per_day_exposed)} riders/day` : "");
+  const noBase = !r.comparisons || r.comparisons.length === 0;
+  const sev = tile(tiles, "Severity (0-100)", noBase ? "n/a" : r.severity.score, noBase ? "needs a baseline" : ""); if (!noBase) badge(r.severity.label, sevClass(r.severity.label), sev);
+  const hasImpact = r.impact && r.impact.ridership_source !== "no_baseline";
+  tile(tiles, "Extra journey time", hasImpact ? `${fmt.num(r.impact.passenger_hours_per_day)} pax-h/day` : "n/a", hasImpact ? `${fmt.num1(r.impact.extra_wait_min_per_rider)} min per rider · ${fmt.compact(r.impact.riders_per_day_exposed)} riders/day` : "needs a baseline");
   tile(tiles, "Focus hours", r.focus_hours?.length ? hoursText(r.focus_hours) : "all hours", r.focus_mode === "detected" ? "detected automatically" : r.focus_mode);
   tile(tiles, "Arrivals analysed", `${fmt.num(r.coverage.arrivals_in_window)} / ${fmt.num(r.coverage.arrivals_in_baseline)}`, "window / baseline");
   const v = h("div", `verdict ${r.comparisons.some(c => c.direction === "worse") ? "worse" : "ok"}`, r.verdict, app);
@@ -112,8 +120,13 @@ async function station(idx, id) {
   r.ranked_causes.slice(0, 5).forEach((c, i) => { h("h3", null, `${i + 1}. ${causeName(c.cause)} · support ${c.score.toFixed(2)} · ${c.lenses.join(", ")}`, whyCard); const ul = h("ul", "evidence small", null, whyCard); c.evidence.forEach(e => h("li", null, e, ul)); });
 
   // What changed
-  h("h2", null, `What changed${r.focus_mode === "detected" ? " (focus hours)" : ""}`, app);
-  comparisonTable(r.comparisons, app);
+  if (r.comparisons?.length) {
+    h("h2", null, `What changed${r.focus_mode === "detected" ? " (focus hours)" : ""}`, app);
+    comparisonTable(r.comparisons, app);
+  } else {
+    h("h2", null, "What changed", app);
+    h("div", "empty", "No baseline period yet. Comparisons, focus-hour detection and severity appear once about two days of arrivals have been collected.", app);
+  }
   if (r.comparisons_all_hours?.length) { const d = h("details", null, null, app); h("summary", null, "All hours", d); comparisonTable(r.comparisons_all_hours, d); }
 
   // When

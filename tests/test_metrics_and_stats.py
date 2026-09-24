@@ -71,3 +71,16 @@ def test_trend_and_changepoint():
     assert res.direction == "worsening" and res.changepoint_date == str(days[10])
     flat = pd.DataFrame({"service_date": days, "hour": 8, "n_actual": 20, "apt_sec": np.random.default_rng(1).normal(10, 1, 20)})
     assert tr.trend_test(flat, "apt_sec").changepoint_date is None
+
+
+def test_apply_coverage_scales_scheduled_counts():
+    prof = pd.DataFrame({"service_date": ["2026-09-09"] * 2, "hour": [8, 9], "n_actual": [10, 3], "n_sched": [20, 20],
+                         "service_delivered": [0.5, 0.15], "bucket_start_ts": [1000.0 * 3600, 1001.0 * 3600]})
+    # hour 8 fully observed, hour 9 observed for 12 minutes only
+    out = mt.apply_coverage(prof, [(1000.0 * 3600, 1001.0 * 3600 + 720)])
+    assert abs(out.loc[0, "service_delivered"] - 0.5) < 1e-9
+    assert np.isnan(out.loc[1, "service_delivered"]) and abs(out.loc[1, "coverage_fraction"] - 0.2) < 1e-9
+    # half-covered hour is kept and scaled
+    out2 = mt.apply_coverage(prof, [(1001.0 * 3600, 1001.0 * 3600 + 1800)])
+    assert abs(out2.loc[1, "service_delivered"] - 0.3) < 1e-9
+    assert mt.apply_coverage(prof, []).equals(prof)

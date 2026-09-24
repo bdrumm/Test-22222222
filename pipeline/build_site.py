@@ -41,8 +41,25 @@ def _windows(arrivals: pd.DataFrame, now: datetime) -> tuple[datetime, datetime,
     return ws, now, first, ws, {"span_hours": round(span_h, 1), "mode": "split"}
 
 
+def coverage_from_runs(runs: list[dict]) -> list[tuple[float, float]]:
+    """Polling intervals recorded by collect runs (per feed first/last poll)."""
+    out = []
+    for r in runs:
+        if r.get("kind") != "collect":
+            continue
+        for f in r.get("per_feed", []) or []:
+            try:
+                a, b = float(f["first_ts"]), float(f["last_ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if b > a:
+                out.append((a, b))
+    return out
+
+
 def analyze_targets(store: Store, static: StaticGTFS, targets: dict, ridership: pd.DataFrame | None,
-                    incidents: pd.DataFrame | None, weather_daily: pd.DataFrame | None, now: datetime) -> list[dict]:
+                    incidents: pd.DataFrame | None, weather_daily: pd.DataFrame | None, now: datetime,
+                    coverage: list[tuple[float, float]] | None = None) -> list[dict]:
     reports = []
     for t in targets["targets"]:
         entry = {"id": t["id"], "label": t.get("label", t["station"]), "station": t["station"],
@@ -62,7 +79,8 @@ def analyze_targets(store: Store, static: StaticGTFS, targets: dict, ridership: 
             req = AnalysisRequest(station=t["station"], direction=t["direction"], routes=list(t["routes"]),
                                   window_start=ws, window_end=we, baseline_start=bs, baseline_end=be,
                                   route_share_of_entries=targets.get("route_share_of_entries", 0.5))
-            report = analyze_station(store, static, req, ridership_profile=rp, incidents=incidents, weather_daily=weather_daily)
+            report = analyze_station(store, static, req, ridership_profile=rp, incidents=incidents, weather_daily=weather_daily,
+                                     coverage_intervals=coverage)
             d = report.to_dict()
             d.update({"id": t["id"], "label": entry["label"], "coverage_windows": cov, "status": "ok",
                       "arrival_count": int(len(arr)), "first_arrival": datetime.fromtimestamp(float(arr["arrival_ts"].min()), NY_TZ).isoformat(),
@@ -118,8 +136,9 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         shutil.rmtree(out)
     shutil.copytree(site_src, out)
     (out_data / "reports").mkdir(parents=True, exist_ok=True)
+    coverage = coverage_from_runs(runs) if mode == "live" else []
     reports = analyze_targets(store, static, targets, context.get("ridership_profile"), context.get("trains_delayed"),
-                              context.get("weather_daily"), now)
+                              context.get("weather_daily"), now, coverage)
     for entry, d in reports:
         (out_data / "reports" / f"{entry['id']}.json").write_text(json.dumps(d, default=str))
     lines = line_insights(context.get("trains_delayed"), context.get("customer_journey"), context.get("major_incidents"))

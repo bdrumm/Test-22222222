@@ -27,7 +27,7 @@ class Recommendation:
 PLAYBOOK: dict[str, list[dict]] = {
     "signal": [
         dict(audience="operator", priority=1,
-             action="Prioritise signal maintenance / CBTC inspection on the approach segment {segment}",
+             action="Prioritise signal maintenance / CBTC inspection on {segment}",
              rationale="Signal alerts coincide with problem arrivals; recurring signal faults on one segment are usually a component issue.",
              expected_effect="Removes the recurring gap source; typical APT reduction equals the segment's median excess run time."),
         dict(audience="operator", priority=2,
@@ -40,7 +40,7 @@ PLAYBOOK: dict[str, list[dict]] = {
              expected_effect="Avoids the longest waits."),
     ],
     "track": [
-        dict(audience="operator", priority=1, action="Schedule rail-condition inspection / grinding on the {segment} segment",
+        dict(audience="operator", priority=1, action="Schedule rail-condition inspection / grinding on {segment}",
              rationale="Track alerts (rail condition, track fire, debris) over-index at this location.",
              expected_effect="Removes speed restrictions and the associated run-time excess."),
         dict(audience="operator", priority=2, action="Coordinate planned track work windows to avoid {hours}",
@@ -85,7 +85,7 @@ PLAYBOOK: dict[str, list[dict]] = {
              expected_effect="Lower expected wait for the same number of trains."),
     ],
     "local_segment": [
-        dict(audience="operator", priority=1, action="Investigate the approach segment {segment}: signal timers, speed restrictions, merge holds and dwell at the previous stop",
+        dict(audience="operator", priority=1, action="Investigate {segment}: signal timers, speed restrictions, merge holds and dwell at the previous stop",
              rationale="Trains lose time between {nearest_upstream} and {station}; the cause is local.",
              expected_effect="Recovers the segment's median excess run time on every late trip."),
         dict(audience="operator", priority=2, action="Review timer/grade-time signals and civil speed limits on {segment} for possible relief",
@@ -135,7 +135,7 @@ PLAYBOOK: dict[str, list[dict]] = {
              expected_effect="Lateness disappears without changing operations."),
     ],
     "segment_restriction": [
-        dict(audience="operator", priority=1, action="Inspect the {segment} segment for a speed restriction, grade-time signal or signal fault; check recent work orders",
+        dict(audience="operator", priority=1, action="Inspect {segment} for a speed restriction, grade-time signal or signal fault; check recent work orders",
              rationale="Most of the run-time loss sits on one segment.",
              expected_effect="Removing the restriction recovers the segment's excess on every trip."),
     ],
@@ -168,7 +168,7 @@ PLAYBOOK: dict[str, list[dict]] = {
              expected_effect="Restores scheduled service."),
     ],
     "fire_smoke": [
-        dict(audience="operator", priority=2, action="Track-bed cleaning and debris removal on the {segment} segment",
+        dict(audience="operator", priority=2, action="Track-bed cleaning and debris removal on {segment}",
              rationale="Fire/smoke alerts over-index; debris is the usual fuel.",
              expected_effect="Fewer smoke conditions and evacuations."),
     ],

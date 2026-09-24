@@ -135,7 +135,10 @@ def detect_focus_hours(prof_w: pd.DataFrame, prof_b: pd.DataFrame, d: config.Ana
 
 def analyze_station(store: Store, static: StaticGTFS, req: AnalysisRequest,
                     ridership_profile: pd.DataFrame | None = None, incidents: pd.DataFrame | None = None,
-                    weather_daily: pd.DataFrame | None = None, alerts: pd.DataFrame | None = None) -> InsightReport:
+                    weather_daily: pd.DataFrame | None = None, alerts: pd.DataFrame | None = None,
+                    coverage_intervals: list[tuple[float, float]] | None = None) -> InsightReport:
+    """``coverage_intervals``: (start_ts, end_ts) periods during which the feed was polled.
+    Defaults to the store's snapshot log; pass an empty list for a continuous collector."""
     req.resolve_windows()
     d = req.defaults
     target = resolve_target(static, req)
@@ -156,8 +159,10 @@ def analyze_station(store: Store, static: StaticGTFS, req: AnalysisRequest,
     in_window = (flagged["arrival_ts"] >= req.window_start.timestamp()) & (flagged["arrival_ts"] < req.window_end.timestamp())
     in_base = (flagged["arrival_ts"] >= req.baseline_start.timestamp()) & (flagged["arrival_ts"] < req.baseline_end.timestamp())
     fw_all, fb_all = flagged[in_window], flagged[in_base]
-    prof_w_all, prof_b_all = mt.hourly_profile(fw_all, sched, d), mt.hourly_profile(fb_all, sched, d)
-    prof_all = mt.hourly_profile(flagged, sched, d)
+    intervals = coverage_intervals if coverage_intervals is not None else store.coverage_intervals()
+    prof_w_all = mt.apply_coverage(mt.hourly_profile(fw_all, sched, d), intervals)
+    prof_b_all = mt.apply_coverage(mt.hourly_profile(fb_all, sched, d), intervals)
+    prof_all = mt.apply_coverage(mt.hourly_profile(flagged, sched, d), intervals)
 
     # ---- 3. focus hours ---------------------------------------------------- #
     hour_table = pd.DataFrame()
@@ -245,7 +250,10 @@ def analyze_station(store: Store, static: StaticGTFS, req: AnalysisRequest,
         if "day_type" in rp and (rp["day_type"] == "weekday").any():
             rp = rp[rp["day_type"] == "weekday"]
     impact_hours = focus_hours or ([int(h) for h in hour_pat.sort_values("problems", ascending=False).head(4)["hour"]] if not hour_pat.empty else None)
-    impact = sg.rider_impact(prof_w_all, prof_b_all, rp if rp is not None and not rp.empty else None, impact_hours, req.route_share_of_entries)
+    if fb_all.empty:
+        impact = sg.RiderImpact(0.0, 0.0, 0.0, 0.0, [], "no_baseline")
+    else:
+        impact = sg.rider_impact(prof_w_all, prof_b_all, rp if rp is not None and not rp.empty else None, impact_hours, req.route_share_of_entries)
     score, comps = sg.severity_score(comparisons, impact)
 
     hours_txt = ", ".join(f"{h:02d}:00-{h + 1:02d}:00" for h in sorted(focus_hours)[:4]) if focus_hours else "the affected hours"
@@ -271,9 +279,12 @@ def analyze_station(store: Store, static: StaticGTFS, req: AnalysisRequest,
         "upstream_arrivals": int(len(upstream_matched)),
         "alerts_in_window": int(len(alerts_df)) if alerts_df is not None else 0,
         "days_in_window": int(fw_all["service_date"].nunique()) if len(fw_all) else 0,
+        "polling_intervals": len(intervals),
     }
-    if impact.ridership_source != "hourly_ridership":
+    if impact.ridership_source == "placeholder_1000_per_hour":
         caveats.append("rider impact uses a placeholder of 1,000 entries/hour; load hourly ridership for a real estimate")
+    if intervals:
+        caveats.append(f"scheduled counts scaled by observed coverage ({len(intervals)} polling intervals); hours covered < 50% excluded from service delivered")
     if len(fw_all) and fw_all["confidence"].mean() < 0.7:
         caveats.append("many observed arrivals have low confidence (trips vanished from the feed); consider a shorter poll interval")
     if focus_mode == "none" and not req.hours:

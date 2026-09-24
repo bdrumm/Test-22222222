@@ -30,7 +30,7 @@ PROFILE_COLUMNS = [
     "service_date", "hour", "n_actual", "n_sched", "service_delivered", "lateness_median_sec",
     "lateness_mean_sec", "lateness_p90_sec", "late_share", "headway_mean_sec", "headway_cv", "sched_headway_sec",
     "bunching_share", "gap_share", "max_gap_sec", "expected_wait_sec", "sched_expected_wait_sec",
-    "apt_sec", "pred_drift_mean_sec", "problem_share",
+    "apt_sec", "pred_drift_mean_sec", "problem_share", "bucket_start_ts",
 ]
 
 
@@ -51,6 +51,8 @@ def flag_arrivals(arrivals: pd.DataFrame, sched_counts: pd.DataFrame | None = No
     """Add per-route headway, headway ratio, leader info and problem flags to matched arrivals."""
     a = arrivals.sort_values("arrival_ts").copy()
     a["hour"] = local_hour(a["arrival_ts"])
+    local = pd.to_datetime(a["arrival_ts"], unit="s", utc=True).dt.tz_convert(NY_TZ)
+    a["bucket_start_ts"] = local.dt.floor("h").map(lambda t: t.timestamp())
     if "service_date" not in a:
         a["service_date"] = pd.to_datetime(a["arrival_ts"], unit="s", utc=True).dt.tz_convert(NY_TZ).dt.date
     a["route_id"] = a["route_id"].astype(str)
@@ -105,6 +107,8 @@ def hourly_profile(flagged: pd.DataFrame, sched_counts: pd.DataFrame | None = No
     f = flagged
     if "pred_drift_sec" not in f:
         f = f.assign(pred_drift_sec=np.nan)
+    if "bucket_start_ts" not in f:
+        f = f.assign(bucket_start_ts=np.nan)
     keys = ["service_date", "hour"]
     prof = f.groupby(keys, sort=False).agg(
         n_actual=("arrival_ts", "size"),
@@ -118,6 +122,7 @@ def hourly_profile(flagged: pd.DataFrame, sched_counts: pd.DataFrame | None = No
         max_gap_sec=("headway_sec", "max"),
         pred_drift_mean_sec=("pred_drift_sec", "mean"),
         problem_share=("problem", "mean"),
+        bucket_start_ts=("bucket_start_ts", "min"),
     ).reset_index()
     prof = prof.merge(_route_bucket_stats(f), on=keys, how="left")
     if sched_counts is not None and not sched_counts.empty:
@@ -129,6 +134,31 @@ def hourly_profile(flagged: pd.DataFrame, sched_counts: pd.DataFrame | None = No
     prof["service_delivered"] = prof["n_actual"] / prof["n_sched"]
     prof["apt_sec"] = prof["expected_wait_sec"] - prof["sched_expected_wait_sec"]
     return prof[PROFILE_COLUMNS].sort_values(["service_date", "hour"]).reset_index(drop=True)
+
+
+def apply_coverage(prof: pd.DataFrame, intervals: list[tuple[float, float]] | None, min_fraction: float = 0.5) -> pd.DataFrame:
+    """Scale scheduled counts by the share of each hour that was actually observed.
+
+    Chunked collection (e.g. hourly jobs polling for 50 minutes) sees only part of
+    each hour; without this, service_delivered under-counts and every partial hour
+    looks like missing trains. Buckets covered less than ``min_fraction`` get NaN.
+    """
+    if prof.empty or not intervals:
+        return prof
+    iv = sorted((float(a), float(b)) for a, b in intervals if b > a)
+    frac = []
+    for start in prof["bucket_start_ts"]:
+        if start is None or not np.isfinite(start):
+            frac.append(1.0)
+            continue
+        end = start + 3600.0
+        cov = sum(max(0.0, min(end, b) - max(start, a)) for a, b in iv)
+        frac.append(min(1.0, cov / 3600.0))
+    out = prof.copy()
+    out["coverage_fraction"] = frac
+    eff = out["n_sched"] * out["coverage_fraction"]
+    out["service_delivered"] = np.where(out["coverage_fraction"] >= min_fraction, out["n_actual"] / eff.replace(0, np.nan), np.nan)
+    return out
 
 
 def summarize_profile(prof: pd.DataFrame) -> dict:
