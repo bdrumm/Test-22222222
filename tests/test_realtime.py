@@ -57,7 +57,8 @@ def test_live_forecast_flags_injected_delay(static):
     feed_key, _, data = synthetic.to_rt_snapshots(sim.arrivals, now, now, poll_interval=30)[0]
     trains = live_trains({feed_key: data}, static, now)
     assert trains and all(t.sched_matched for t in trains)
-    victim = next(t for t in trains if t.route_id == "6" and (t.stops_until("631N") or 0) >= 2)
+    assert any(not t.started for t in trains)   # scheduled trips listed before departure are recognised
+    victim = next(t for t in trains if t.route_id == "6" and t.started and (t.stops_until("631N") or 0) >= 2)
     msg = rt.parse_feed(data)
     for ent in msg.entity:
         if ent.HasField("trip_update") and ent.trip_update.trip.trip_id == victim.trip_id:
@@ -67,7 +68,9 @@ def test_live_forecast_flags_injected_delay(static):
     idx = alerts.index[~alerts["planned"]][-1]
     alerts.loc[idx, ["active_start", "active_end", "updated_at"]] = [now - 600, now + 1200, now]
     live = build_live({feed_key: msg.SerializeToString()}, alerts, static, resolved, {"gc-n": model}, now)
-    assert live["trains_total"] == len(trains) and live["summary"]["good"] + live["summary"]["degraded"] + live["summary"]["disrupted"] == len(live["routes"])
+    assert live["trains_total"] == sum(t.started for t in trains)
+    assert live["trains_scheduled_not_started"] == sum(not t.started for t in trains)
+    assert live["summary"]["good"] + live["summary"]["degraded"] + live["summary"]["disrupted"] == len(live["routes"])
     assert any("6" in a["routes"] for a in live["alerts"])
     st = live["stations"][0]
     kinds = {e["kind"] for e in st["effects"]}
