@@ -1,0 +1,7 @@
+[
+  {"month": "2026-08-01T00:00:00.000", "division": "A DIVISION", "line": "6", "day_type": "1", "reporting_category": "Signals", "subcategory": "Signal Related", "delays": "900"},
+  {"month": "2026-08-01T00:00:00.000", "division": "A DIVISION", "line": "6", "day_type": "1", "reporting_category": "Track", "subcategory": "Rail and Roadbed", "delays": "300"},
+  {"month": "2026-08-01T00:00:00.000", "division": "A DIVISION", "line": "6", "day_type": "1", "reporting_category": "Persons on Trackbed/Police/Medical", "subcategory": "Sick Customer", "delays": "400"},
+  {"month": "2026-08-01T00:00:00.000", "division": "B DIVISION", "line": "L", "day_type": "1", "reporting_category": "Signals", "subcategory": "Signal Related", "delays": "500"},
+  {"month": "2026-08-01T00:00:00.000", "division": "B DIVISION", "line": "L", "day_type": "1", "reporting_category": "Track", "subcategory": "Rail and Roadbed", "delays": "500"}
+]

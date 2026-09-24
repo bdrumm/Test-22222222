@@ -1,0 +1,38 @@
+{
+  "header": {"gtfs_realtime_version": "2.0", "incrementality": "FULL_DATASET", "timestamp": 1757337000},
+  "entity": [
+    {
+      "id": "lmm:alert:1001",
+      "alert": {
+        "active_period": [{"start": 1757336400, "end": 1757340000}],
+        "informed_entity": [{"agency_id": "MTASBWY", "route_id": "6"}],
+        "header_text": {"translation": [
+          {"text": "Northbound 6 trains are running with delays because of signal problems at 33 St.", "language": "en"},
+          {"text": "<p>Northbound [6] trains are running with delays...</p>", "language": "en-html"}]},
+        "description_text": {"translation": [{"text": "Expect delays. Allow additional travel time.", "language": "en"}]},
+        "transit_realtime.mercury_alert": {"created_at": 1757336520, "updated_at": 1757338000, "alert_type": "Delays",
+          "display_before_active": 0, "human_readable_active_period": {"translation": [{"text": "Until further notice", "language": "en"}]}}
+      }
+    },
+    {
+      "id": "lmm:alert:1002",
+      "alert": {
+        "active_period": [{"start": 1757300000, "end": 1757400000}],
+        "informed_entity": [{"agency_id": "MTASBWY", "route_id": "4"}, {"agency_id": "MTASBWY", "route_id": "5"}],
+        "header_text": {"translation": [{"text": "Planned work: 4 and 5 trains skip 86 St", "language": "en"}]},
+        "description_text": {"translation": [{"text": "For station work", "language": "en"}]},
+        "transit_realtime.mercury_alert": {"created_at": 1757000000, "updated_at": 1757000000, "alert_type": "Planned - Stops Skipped"}
+      }
+    },
+    {
+      "id": "lmm:alert:1003",
+      "alert": {
+        "active_period": [{"start": 1757338000}],
+        "informed_entity": [{"agency_id": "MTASBWY", "route_id": "L"}, {"agency_id": "MTASBWY", "stop_id": "L03"}],
+        "header_text": {"translation": [{"text": "L trains are delayed in both directions while we respond to NYPD activity at Bedford Av.", "language": "en"}]},
+        "description_text": {"translation": []},
+        "transit_realtime.mercury_alert": {"created_at": 1757338000, "updated_at": 1757338600, "alert_type": "Delays"}
+      }
+    }
+  ]
+}

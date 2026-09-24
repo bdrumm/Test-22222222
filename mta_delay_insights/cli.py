@@ -1,0 +1,259 @@
+"""Command line interface: ``mta-insights <command>``."""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+import tempfile
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+
+from . import config, synthetic
+from .analysis.engine import AnalysisRequest, analyze_station
+from .collect.collector import Collector
+from .sources import alerts as alerts_src
+from .sources import open_data, weather
+from .sources.gtfs_static import NY_TZ, StaticGTFS
+from .sources.registry import format_table
+from .storage.db import Store
+
+
+def _parse_dt(s: str | None) -> datetime | None:
+    if not s:
+        return None
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=NY_TZ)
+
+
+def _load_static(path: str | None) -> StaticGTFS:
+    if path and Path(path).exists():
+        return StaticGTFS.load(path)
+    print(f"static GTFS not found at {path!r}; downloading subway feed...", file=sys.stderr)
+    dest = path or "data/gtfs_subway.zip"
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    return StaticGTFS.download("subway", dest)
+
+
+# --------------------------------------------------------------------------- #
+def cmd_sources(args):
+    print(format_table())
+
+
+def cmd_static(args):
+    g = _load_static(args.gtfs)
+    if args.action == "summary":
+        print(json.dumps(g.summary(), indent=2))
+    elif args.action == "stations":
+        print(g.find_stations(args.query or "").to_string(index=False))
+    elif args.action == "platform":
+        sid = g.platform_for(args.station, args.direction)
+        print(f"platform {sid}: routes {g.routes_serving(sid)}")
+        for r in g.routes_serving(sid):
+            print(f"  {r}: upstream {g.upstream_stops(r, args.direction, sid, 6)} terminal {g.terminal_stop(r, args.direction)}")
+
+
+def _stops_for_collection(g: StaticGTFS, args) -> set[str] | None:
+    if args.all_stops:
+        return None
+    stops: set[str] = set()
+    if args.stops:
+        stops |= set(args.stops.split(","))
+    if args.station:
+        sid = g.platform_for(g.find_stations(args.station).iloc[0]["stop_id"], args.direction)
+        stops.add(sid)
+        routes = args.routes.split(",") if args.routes else g.routes_serving(sid)
+        for r in routes:
+            stops |= set(g.upstream_stops(r, args.direction, sid, args.upstream))
+            t = g.terminal_stop(r, args.direction)
+            if t:
+                stops.add(t)
+    return stops or None
+
+
+def cmd_collect(args):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    g = _load_static(args.gtfs)
+    stops = _stops_for_collection(g, args)
+    feeds = args.feeds.split(",") if args.feeds else sorted({config.feed_for_route(r) for r in (args.routes or "").split(",") if r} or ["1234567S"])
+    store = Store(args.db)
+    col = Collector(store, feeds, stops, store_predictions=args.store_predictions, poll_interval_sec=args.interval,
+                    alerts_fetcher=(lambda: alerts_src.fetch_alerts_json()) if args.alerts else None, raw_dir=args.raw_dir)
+    print(f"collecting feeds {feeds} every {args.interval}s; stops of interest: {len(stops) if stops else 'all'}", file=sys.stderr)
+    summaries = col.run(duration_sec=args.duration, max_polls=args.max_polls)
+    print(json.dumps({"polls": len(summaries), "arrivals": sum(s["arrivals"] for s in summaries),
+                      "errors": sum(s["errors"] for s in summaries)}, indent=2))
+
+
+def cmd_replay(args):
+    store = Store(args.db)
+    snaps = Collector.load_raw_dir(args.raw_dir)
+    feeds = sorted({s[0] for s in snaps})
+    col = Collector(store, feeds, None, poll_interval_sec=args.interval)
+    n = col.replay(snaps)
+    print(json.dumps({"snapshots": len(snaps), "arrivals": n}, indent=2))
+
+
+def cmd_context(args):
+    store = Store(args.db)
+    client = open_data.SocrataClient()
+    routes = args.routes.split(",") if args.routes else None
+    what = set(args.what.split(","))
+    if {"all", "incidents"} & what:
+        td = client.trains_delayed(routes, args.since)
+        store.put_frame("trains_delayed", td)
+        inc = client.delay_causing_incidents(routes, args.since)
+        store.put_frame("delay_incidents", inc)
+        print(f"trains_delayed rows={len(td)} incidents rows={len(inc)}")
+    if {"all", "journey"} & what:
+        cj = client.customer_journey(routes, args.since)
+        store.put_frame("customer_journey", cj)
+        print(f"customer_journey rows={len(cj)}")
+    if {"all", "ridership"} & what and args.complex_id:
+        h = client.hourly_ridership([args.complex_id], args.start, args.end)
+        store.put_frame("ridership_hourly", h)
+        store.put_frame("ridership_profile", open_data.ridership_profile(h))
+        print(f"ridership rows={len(h)}")
+    if {"all", "weather"} & what:
+        w = weather.fetch_hourly(args.start, args.end)
+        store.put_frame("weather_hourly", w)
+        store.put_frame("weather_daily", weather.daily_summary(w))
+        print(f"weather hours={len(w)}")
+
+
+def cmd_analyze(args):
+    g = _load_static(args.gtfs)
+    store = Store(args.db)
+    req = AnalysisRequest(station=args.station, direction=args.direction,
+                          routes=args.routes.split(",") if args.routes else None,
+                          window_start=_parse_dt(args.window_start), window_end=_parse_dt(args.window_end),
+                          baseline_start=_parse_dt(args.baseline_start), baseline_end=_parse_dt(args.baseline_end),
+                          hours=[int(h) for h in args.hours.split(",")] if args.hours else None,
+                          route_share_of_entries=args.route_share)
+    report = analyze_station(store, g, req)
+    _emit(report, args.out, args.json)
+
+
+def _emit(report, out_md: str | None, out_json: str | None):
+    md = report.to_markdown()
+    if out_md:
+        Path(out_md).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_md).write_text(md)
+        print(f"wrote {out_md}", file=sys.stderr)
+    if out_json:
+        Path(out_json).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_json).write_text(report.to_json())
+        print(f"wrote {out_json}", file=sys.stderr)
+    if not out_md:
+        print(md)
+
+
+def cmd_demo(args):
+    sc = synthetic.make_scenario(args.scenario, args.days, args.days)
+    tmp = Path(args.work_dir or tempfile.mkdtemp(prefix="mta_demo_"))
+    gtfs_dir = synthetic.build_mini_gtfs(tmp / "gtfs", sc.start - timedelta(days=1), sc.end + timedelta(days=1))
+    g = StaticGTFS.load(gtfs_dir)
+    sim = synthetic.simulate(g, sc)
+    store = Store(tmp / "demo.sqlite") if args.work_dir else Store(":memory:")
+    store.insert_arrivals(sim.arrivals)
+    store.upsert_alerts(sim.alerts, seen_ts=0)
+    store.put_frame("ridership_profile", sim.ridership_profile)
+    store.put_frame("trains_delayed", sim.incidents)
+    store.put_frame("weather_daily", sim.weather_daily)
+    req = AnalysisRequest(station="Grand Central", direction="N", routes=list(sc.routes),
+                          window_start=datetime.combine(sc.window_start, datetime.min.time(), NY_TZ),
+                          window_end=datetime.combine(sc.end, datetime.min.time(), NY_TZ),
+                          baseline_start=datetime.combine(sc.start, datetime.min.time(), NY_TZ),
+                          baseline_end=datetime.combine(sc.window_start, datetime.min.time(), NY_TZ),
+                          hours=[int(h) for h in args.hours.split(",")] if args.hours else None)
+    report = analyze_station(store, g, req)
+    print(f"scenario={sc.name} truth={json.dumps(sim.truth['issues'])}", file=sys.stderr)
+    _emit(report, args.out, args.json)
+
+
+# --------------------------------------------------------------------------- #
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="mta-insights", description="Diagnose train arrival problems at a station.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("sources", help="list all data feeds the framework uses").set_defaults(func=cmd_sources)
+
+    s = sub.add_parser("static", help="inspect the static GTFS schedule")
+    s.add_argument("action", choices=["summary", "stations", "platform"])
+    s.add_argument("--gtfs", default="data/gtfs_subway.zip")
+    s.add_argument("--query")
+    s.add_argument("--station")
+    s.add_argument("--direction", default="N")
+    s.set_defaults(func=cmd_static)
+
+    c = sub.add_parser("collect", help="poll GTFS-RT feeds and store observed arrivals")
+    c.add_argument("--db", default="data/mta.sqlite")
+    c.add_argument("--gtfs", default="data/gtfs_subway.zip")
+    c.add_argument("--feeds", help="comma list of feed keys (default: feeds for --routes, else 1234567S)")
+    c.add_argument("--station", help="station name; stops of interest = platform + upstream + terminal")
+    c.add_argument("--direction", default="N")
+    c.add_argument("--routes", help="comma list of routes")
+    c.add_argument("--upstream", type=int, default=6)
+    c.add_argument("--stops", help="explicit comma list of stop ids")
+    c.add_argument("--all-stops", action="store_true")
+    c.add_argument("--interval", type=float, default=30)
+    c.add_argument("--duration", type=float, help="seconds to run")
+    c.add_argument("--max-polls", type=int)
+    c.add_argument("--alerts", action="store_true", help="also poll the alerts feed")
+    c.add_argument("--store-predictions", action="store_true")
+    c.add_argument("--raw-dir", help="archive raw protobuf snapshots here")
+    c.set_defaults(func=cmd_collect)
+
+    r = sub.add_parser("replay", help="rebuild arrivals from archived raw snapshots")
+    r.add_argument("--raw-dir", required=True)
+    r.add_argument("--db", default="data/mta.sqlite")
+    r.add_argument("--interval", type=float, default=30)
+    r.set_defaults(func=cmd_replay)
+
+    x = sub.add_parser("context", help="pull Open Data / weather context into the store")
+    x.add_argument("--db", default="data/mta.sqlite")
+    x.add_argument("--what", default="all", help="all|incidents|journey|ridership|weather (comma list)")
+    x.add_argument("--routes")
+    x.add_argument("--since", help="YYYY-MM-DD for monthly datasets")
+    x.add_argument("--complex-id", help="station complex id for hourly ridership")
+    x.add_argument("--start", default=(datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d"))
+    x.add_argument("--end", default=datetime.now().strftime("%Y-%m-%d"))
+    x.set_defaults(func=cmd_context)
+
+    a = sub.add_parser("analyze", help="analyse arrivals at a station for a set of routes")
+    a.add_argument("--db", default="data/mta.sqlite")
+    a.add_argument("--gtfs", default="data/gtfs_subway.zip")
+    a.add_argument("--station", required=True)
+    a.add_argument("--direction", default="N")
+    a.add_argument("--routes")
+    a.add_argument("--window-start")
+    a.add_argument("--window-end")
+    a.add_argument("--baseline-start")
+    a.add_argument("--baseline-end")
+    a.add_argument("--hours", help="comma list of local hours to focus on")
+    a.add_argument("--route-share", type=float, default=0.5, help="share of station entries boarding the analysed routes/direction")
+    a.add_argument("--out", help="markdown report path")
+    a.add_argument("--json", help="json report path")
+    a.set_defaults(func=cmd_analyze)
+
+    d = sub.add_parser("demo", help="run a synthetic scenario end to end")
+    d.add_argument("--scenario", default="signal", choices=sorted(synthetic.SCENARIOS))
+    d.add_argument("--days", type=int, default=14)
+    d.add_argument("--hours")
+    d.add_argument("--work-dir")
+    d.add_argument("--out")
+    d.add_argument("--json")
+    d.set_defaults(func=cmd_demo)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    args.func(args)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
