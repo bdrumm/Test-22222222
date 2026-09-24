@@ -30,3 +30,4 @@ include = ["mta_delay_insights*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+pythonpath = ["."]
