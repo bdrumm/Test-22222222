@@ -95,10 +95,12 @@ OPEN_DATASETS: dict[str, dict[str, str]] = {
         "use": "Longest-running public major incidents series.",
     },
     "major_incidents_2025": {
+        # NOTE: the id below was wrong in Sept 2026 (it resolves to the MTA open-data plan
+        # catalog); the fetcher rejects it by schema. Replace with the real id when known.
         "id": "f462-ka72",
         "title": "MTA Subway Major Incidents: Beginning 2025",
         "grain": "month x line x day_type x category",
-        "use": "Continuation of the 2020-2024 major incidents series.",
+        "use": "Continuation of the major incidents series (id to be confirmed).",
     },
     "customer_journey_2015": {
         "id": "r7qk-6tcy",

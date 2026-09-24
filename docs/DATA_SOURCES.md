@@ -40,9 +40,9 @@ platform (interlining). Direction: `direction_id` 0 = North/uptown, 1 = South.
 |---|---|---|---|
 | trains_delayed | `9zbp-wz3y` | MTA Subway Trains Delayed: Beginning 2020 | month × line × day type × category × subcategory |
 | delay_causing_incidents | `g937-7k7c` | MTA Subway Delay-Causing Incidents: Beginning 2020 | month × line × category |
-| major_incidents_2020 | `j6d2-s8m2` | MTA Subway Major Incidents: 2020-2024 | month × line × category (50+ trains delayed) |
-| major_incidents_2025 | `f462-ka72` | MTA Subway Major Incidents: Beginning 2025 | |
-| major_incidents_2015 | `ereg-mcvp` | MTA Subway Major Incidents: Beginning 2015 | fallback series |
+| major_incidents_2015 | `ereg-mcvp` | MTA Subway Major Incidents: Beginning 2015 | month × line × category (50+ trains delayed); public and current, used first |
+| major_incidents_2020 | `j6d2-s8m2` | MTA Subway Major Incidents: Beginning 2020 | returned 403 (login required) in Sept 2026 |
+| major_incidents_2025 | `f462-ka72` | (wrong id: resolves to the MTA open-data plan catalog) | rejected by the schema check; replace when the real id is known |
 | customer_journey_2015 | `r7qk-6tcy` | Customer Journey-Focused Metrics: Beginning 2015 | month × line × period: APT, ATT, CJTP (public series) |
 | customer_journey_2020 | `4apg-4kt9` | Customer Journey-Focused Metrics: 2020-2024 | returned 403 (login required) in Sept 2026; kept as fallback |
 | customer_journey_2025 | `s4u6-t435` | Customer Journey-Focused Metrics: Beginning 2025 | |

@@ -42,6 +42,13 @@ northbound 6 trains in the morning peak on 70% of weekdays.
 A browsable app lives in `site/` and is published to GitHub Pages by the
 `pipeline` workflow: **https://bdrumm.github.io/Test-22222222/**
 
+One-time setup (the workflow token cannot do this): in the repository go to
+**Settings → Pages → Build and deployment** and set *Source* to **Deploy from a
+branch**, branch **gh-pages**, folder **/ (root)**, then save. (Choosing
+**GitHub Actions** as the source also works; the workflow publishes both ways.)
+Every run then refreshes the site; the "Verify published site" step in the run
+log reports the HTTP status of the live URL.
+
 | page | what it shows |
 |---|---|
 | Stations | one card per monitored platform: severity, verdict, focus hours, where / why, rider impact |

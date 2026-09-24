@@ -81,3 +81,16 @@ jobs:
         if: steps.pages.outcome == 'success'
         continue-on-error: true
         uses: actions/deploy-pages@v4
+      - name: Verify published site
+        continue-on-error: true
+        env:
+          URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: |
+          has_pages=$(curl -sS "https://api.github.com/repos/${{ github.repository }}" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("has_pages"))')
+          echo "has_pages=$has_pages"
+          sleep 45
+          code=$(curl -sS -o /dev/null -w "%{http_code}" "${URL}data/index.json" || echo "000")
+          echo "published site ${URL} -> HTTP ${code}"
+          if [ "$code" != "200" ]; then
+            echo "::warning::Site not served yet (HTTP ${code}). Enable Pages: Settings > Pages > Source 'Deploy from a branch' (gh-pages, /) or 'GitHub Actions'."
+          fi

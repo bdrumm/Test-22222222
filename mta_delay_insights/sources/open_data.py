@@ -106,7 +106,7 @@ class SocrataClient:
 
     def major_incidents(self, lines: Iterable[str] | None = None, since: str | None = None) -> pd.DataFrame:
         return normalize_major_incidents(self._fetch_series(
-            ("major_incidents_2025", "major_incidents_2020", "major_incidents_2015"), lines, since))
+            ("major_incidents_2015", "major_incidents_2020", "major_incidents_2025"), lines, since))
 
     def customer_journey(self, lines: Iterable[str] | None = None, since: str | None = None) -> pd.DataFrame:
         return normalize_customer_journey(self._fetch_series(
