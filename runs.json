@@ -53,5 +53,60 @@
 "times-sq-s": "611",
 "jay-st-n": "636"
 }
+},
+{
+"ts": 1790285803.7869527,
+"iso": "2026-09-24T17:36:43.786955-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace"
+],
+"polls": 9,
+"errors": 0,
+"arrivals": 109,
+"flushed": 72,
+"alerts": 843,
+"duration_sec": 242,
+"written": {
+"2026-09-24": 157
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 9,
+"first_ts": 1790285562.1424108,
+"last_ts": 1790285802.1438272,
+"arrivals": 29
+},
+{
+"feed": "ace",
+"polls": 9,
+"first_ts": 1790285562.1424108,
+"last_ts": 1790285802.1438272,
+"arrivals": 9
+}
+]
+},
+{
+"ts": 1790285810.995542,
+"iso": "2026-09-24T17:36:50.995543-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:5951",
+"delay_incidents:7805",
+"major_incidents:256",
+"stations:496",
+"ridership_hourly:3744",
+"weather_daily:61"
+],
+"failed": {
+"customer_journey": "customer_journey_2020(4apg-4kt9): 403 for https://data.ny.gov/resource/4apg-4kt9.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\n  \"error\" : true,\n  \"message\" : \"You must be logged in to access this resource\"\n}\n; customer_journey_2020(4apg-4kt9): 403 for https://data.ny.gov/resource/4apg-4kt9.json?%24limit=50000&%24offset=0: {\n  \"error\" : true,\n  \"message\" : \"You must be logged in to access this resource\"\n}\n; customer_journey_2025(s4u6-t435): 403 for https://data.ny.gov/resource/s4u6-t435.json?%24limit=50000&%24offset=0&%24where=month+%3E%3D+%272024-07-01%27: {\n  \"err"
+},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636"
+}
 }
 ]
