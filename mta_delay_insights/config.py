@@ -88,6 +88,12 @@ OPEN_DATASETS: dict[str, dict[str, str]] = {
         "grain": "month x line x day_type x category",
         "use": "Incidents delaying 50+ trains (signals, track, persons on trackbed...).",
     },
+    "major_incidents_2015": {
+        "id": "ereg-mcvp",
+        "title": "MTA Subway Major Incidents: Beginning 2015",
+        "grain": "month x line x day_type x category",
+        "use": "Longest-running public major incidents series.",
+    },
     "major_incidents_2025": {
         "id": "f462-ka72",
         "title": "MTA Subway Major Incidents: Beginning 2025",
