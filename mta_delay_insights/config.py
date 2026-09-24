@@ -94,6 +94,12 @@ OPEN_DATASETS: dict[str, dict[str, str]] = {
         "grain": "month x line x day_type x category",
         "use": "Continuation of the 2020-2024 major incidents series.",
     },
+    "customer_journey_2015": {
+        "id": "r7qk-6tcy",
+        "title": "MTA Subway Customer Journey-Focused Metrics: Beginning 2015",
+        "grain": "month x line x period (peak/offpeak)",
+        "use": "Public series of additional platform / train time and journey time performance per line.",
+    },
     "customer_journey_2020": {
         "id": "4apg-4kt9",
         "title": "MTA Subway Customer Journey-Focused Metrics: 2020-2024",

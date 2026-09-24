@@ -18,8 +18,13 @@ def _prep(df: pd.DataFrame | None, count_col_options: tuple[str, ...]) -> pd.Dat
     if df is None or df.empty:
         return None
     d = df.copy()
-    d["month"] = pd.to_datetime(d["month"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    month_col = next((c for c in ("month", "date", "period_start") if c in d), None)
+    if month_col is None or "line" not in d:
+        return None
+    d["month"] = pd.to_datetime(d[month_col], errors="coerce").dt.to_period("M").dt.to_timestamp()
     d = d.dropna(subset=["month"])
+    if d.empty:
+        return None
     d["line"] = d["line"].astype(str).str.strip()
     cat_col = "reporting_category" if "reporting_category" in d else "category"
     if cat_col not in d:
@@ -71,11 +76,14 @@ def line_insights(trains_delayed: pd.DataFrame | None, customer_journey: pd.Data
     sys_share3 = sys_share3 / max(sys_share3.sum(), 1)
 
     cj = None
-    if customer_journey is not None and not customer_journey.empty:
+    if customer_journey is not None and not customer_journey.empty and "month" in customer_journey and "line" in customer_journey:
         cj = customer_journey.copy()
         cj["month"] = pd.to_datetime(cj["month"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+        cj = cj.dropna(subset=["month"])
         cj["line"] = cj["line"].astype(str).str.strip()
         cj = cj[cj["month"] >= first]
+        if cj.empty:
+            cj = None
     mi = _prep(major_incidents, ("count", "incidents", "delays"))
     if mi is not None:
         mi = mi[mi["month"] >= first]

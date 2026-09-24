@@ -71,12 +71,14 @@ class SocrataClient:
         return normalize_incidents(self.fetch(config.OPEN_DATASETS["delay_causing_incidents"]["id"],
                                               where=_where(lines, since)))
 
-    def _fetch_series(self, keys: tuple[str, ...], lines: Iterable[str] | None, since: str | None) -> pd.DataFrame:
+    def _fetch_series(self, keys: tuple[str, ...], lines: Iterable[str] | None, since: str | None,
+                      required: tuple[str, ...] = ("month", "line")) -> pd.DataFrame:
         """Fetch and concatenate a dataset series (e.g. 2020-2024 + beginning 2025).
 
         Each dataset is tried with the month/line filter first and then unfiltered
-        (older series sometimes name the month column differently); if every
-        dataset fails the combined error is raised so the caller can log the cause.
+        (older series sometimes name the month column differently). A dataset whose
+        columns do not include ``required`` is rejected with its actual columns in the
+        error, so a wrong dataset id shows up in the run log instead of as empty output.
         """
         frames, errors = [], []
         for key in keys:
@@ -84,14 +86,20 @@ class SocrataClient:
             for where in (_where(lines, since), None):
                 try:
                     df = self.fetch(ds, where=where)
-                    if len(df):
-                        frames.append(df)
-                        break
-                    errors.append(f"{key}({ds}): empty" + (" with filter" if where else ""))
                 except requests.HTTPError as exc:
-                    errors.append(f"{key}({ds}): {exc}")
-                    if exc.response is not None and exc.response.status_code == 404:
-                        break  # no point retrying an unknown dataset id
+                    errors.append(f"{key}({ds}): {str(exc)[:160]}")
+                    if exc.response is not None and exc.response.status_code in (401, 403, 404):
+                        break  # unknown or restricted dataset: retrying without the filter will not help
+                    continue
+                if df.empty:
+                    errors.append(f"{key}({ds}): empty" + (" with filter" if where else ""))
+                    continue
+                missing = [c for c in required if c not in df.columns]
+                if missing:
+                    errors.append(f"{key}({ds}): missing {missing}; columns={list(df.columns)[:12]}")
+                    break
+                frames.append(df)
+                break
         if not frames:
             raise ValueError("; ".join(errors) or "no data")
         return pd.concat(frames, ignore_index=True)
@@ -100,7 +108,8 @@ class SocrataClient:
         return normalize_major_incidents(self._fetch_series(("major_incidents_2020", "major_incidents_2025"), lines, since))
 
     def customer_journey(self, lines: Iterable[str] | None = None, since: str | None = None) -> pd.DataFrame:
-        return normalize_customer_journey(self._fetch_series(("customer_journey_2020", "customer_journey_2025"), lines, since))
+        return normalize_customer_journey(self._fetch_series(
+            ("customer_journey_2015", "customer_journey_2020", "customer_journey_2025"), lines, since))
 
     def hourly_ridership(self, station_complex_ids: Iterable[str] | None, start: str, end: str) -> pd.DataFrame:
         clauses = [f"transit_timestamp >= '{start}T00:00:00'", f"transit_timestamp < '{end}T00:00:00'"]

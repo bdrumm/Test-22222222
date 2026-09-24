@@ -80,3 +80,11 @@ def test_current_alerts_active_flag():
     ])
     out = {a["alert_id"]: a["active_now"] for a in build_site.current_alerts(df, now)}
     assert out == {"a": True, "c": False}   # b ended more than 24 h ago and is dropped
+
+
+def test_line_insights_tolerates_schema_surprises():
+    sc = synthetic.make_scenario("signal", 7, 7)
+    inc = synthetic.incidents_table(sc)
+    weird = pd.DataFrame({"category": ["Signals"], "line": ["6"], "count": [3]})   # no month column
+    out = line_insights(inc, weird, weird, months=6)
+    assert "6" in out["lines"] and "journey" not in out["lines"]["6"] and "major_incidents" not in out["lines"]["6"]

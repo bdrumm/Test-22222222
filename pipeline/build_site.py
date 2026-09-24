@@ -141,7 +141,11 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
                               context.get("weather_daily"), now, coverage)
     for entry, d in reports:
         (out_data / "reports" / f"{entry['id']}.json").write_text(json.dumps(d, default=str))
-    lines = line_insights(context.get("trains_delayed"), context.get("customer_journey"), context.get("major_incidents"))
+    try:
+        lines = line_insights(context.get("trains_delayed"), context.get("customer_journey"), context.get("major_incidents"))
+    except Exception as exc:  # a schema surprise in one Open Data table must not block publishing
+        logging.warning("line insights failed: %s", exc)
+        lines = {"months": [], "lines": {}, "system": {}, "categories": [], "error": str(exc)[:300]}
     (out_data / "lines.json").write_text(json.dumps(lines, default=str))
     (out_data / "alerts.json").write_text(json.dumps({"generated_at": now.isoformat(), "alerts": current_alerts(alerts, now.timestamp())}, default=str))
     # Collection status: arrivals per day and run log.
