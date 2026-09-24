@@ -20,6 +20,7 @@ import pandas as pd
 from mta_delay_insights import __version__
 from mta_delay_insights.analysis.engine import AnalysisRequest, analyze_station
 from mta_delay_insights.analysis.line_insights import line_insights
+from mta_delay_insights.sources.alerts import alert_kind
 from mta_delay_insights.sources.gtfs_static import NY_TZ, StaticGTFS
 from mta_delay_insights.sources.registry import as_records
 from mta_delay_insights.storage.db import Store
@@ -84,15 +85,21 @@ def current_alerts(alerts: pd.DataFrame, now_ts: float, lookback_h: float = 24) 
         return []
     a = alerts.copy()
     a["end_ts"] = a["active_end"].fillna(a["updated_at"].fillna(a["active_start"]) + 3 * 3600)
-    a = a[a["end_ts"] >= now_ts - lookback_h * 3600].sort_values("active_start", ascending=False)
+    a = a[a["end_ts"] >= now_ts - lookback_h * 3600]
+    a["_kind"] = [alert_kind(t, hd) for t, hd in zip(a["alert_type"], a["header"])]
+    a["_active"] = (a["active_start"].fillna(0) <= now_ts) & (a["end_ts"] >= now_ts)
+    # Current unplanned delays first, then active planned changes, then everything else by recency.
+    a = a.sort_values(["_active", "_kind", "active_start"], ascending=[False, True, False],
+                      key=lambda c: c.map({"delay": 0, "planned": 1, "notice": 2}) if c.name == "_kind" else c)
     out = []
     for r in a.itertuples(index=False):
         start = _n(r.active_start) or 0.0
         out.append({"alert_id": r.alert_id, "alert_type": r.alert_type, "planned": bool(r.planned),
+                    "kind": alert_kind(r.alert_type, r.header),
                     "cause_category": r.cause_category, "active_start": _n(r.active_start), "active_end": _n(r.active_end),
                     "updated_at": _n(r.updated_at), "routes": list(r.routes), "header": r.header,
                     "active_now": bool(start <= now_ts <= float(r.end_ts))})
-    return out[:300]
+    return out[:400]
 
 
 def _n(v):

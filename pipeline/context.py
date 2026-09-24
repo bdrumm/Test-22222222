@@ -41,7 +41,7 @@ def main(argv=None) -> int:
             logging.info("%s rows=%d", name, len(df))
             return df
         except Exception as exc:  # keep going; one dataset failing must not block the rest
-            record["failed"][name] = str(exc)[:300]
+            record["failed"][name] = str(exc)[:600]
             logging.warning("%s failed: %s", name, exc)
             return None
 

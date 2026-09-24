@@ -19,6 +19,11 @@ def test_classify_cause():
     assert al.classify_cause("some text") == "unknown"
     assert al.is_planned("Planned - Part Suspended")
     assert not al.is_planned("Delays")
+    assert al.alert_kind("Boarding Change") == "notice" and al.alert_kind("Reduced Service") == "delay"
+    assert al.alert_kind("Delays") == "delay" and al.alert_kind("Special Schedule") == "planned"
+    assert al.classify_cause("[6] runs every 8 minutes") == "reduced_service"
+    assert al.classify_cause("all [2] trains at E 180 St board from the uptown platform") == "unknown"
+    assert al.classify_cause("delays after we conducted urgent track maintenance at Grand Central") == "track"
 
 
 def test_alerts_frame_from_fixture():

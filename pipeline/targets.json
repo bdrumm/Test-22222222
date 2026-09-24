@@ -1,6 +1,6 @@
 {
   "targets": [
-    {"id": "grand-central-n", "station": "Grand Central-42 St", "direction": "N", "routes": ["4", "5", "6"],
+    {"id": "grand-central-n", "station": "Grand Central-42 St", "direction": "N", "routes": ["4", "5", "6", "6X"],
      "label": "Grand Central-42 St, uptown 4/5/6"},
     {"id": "times-sq-s", "station": "Times Sq-42 St", "direction": "S", "routes": ["1", "2", "3"],
      "label": "Times Sq-42 St, downtown 1/2/3"},

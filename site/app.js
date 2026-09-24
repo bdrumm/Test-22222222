@@ -237,20 +237,20 @@ async function lines(idx, line) {
 async function alerts() {
   const data = await load("alerts.json");
   h("h1", null, "Service alerts", app);
-  h("p", "secondary", `Alerts seen by the collector in the last 24 hours (${data.alerts.length}); active now are listed first. Unplanned alerts are tagged with a cause category used by the attribution lenses.`, app);
+  h("p", "secondary", `Alerts seen by the collector in the last 24 hours (${data.alerts.length}); active now are listed first. Unplanned delay alerts are tagged with a cause category used by the attribution lenses; planned changes and informational notices are shown separately.`, app);
   if (!data.alerts.length) { h("div", "empty", "No alerts recorded yet.", app); return; }
   const filters = h("div", "filters", null, app);
-  const sel = h("select", null, null, filters); [["all", "All"], ["unplanned", "Unplanned only"], ["planned", "Planned only"]].forEach(([v, l]) => { const o = h("option", null, l, sel); o.value = v; });
+  const sel = h("select", null, null, filters); [["delay", "Unplanned delays"], ["planned", "Planned changes"], ["notice", "Notices"], ["all", "All"]].forEach(([v, l]) => { const o = h("option", null, l, sel); o.value = v; });
   const search = h("input", null, null, filters); search.type = "search"; search.placeholder = "route or text";
   const wrap = h("div", "table-wrap card", null, app);
   const draw = () => {
     wrap.replaceChildren(); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
     ["status", "routes", "type", "cause", "since", "header"].forEach(x => h("th", null, x, tr)); const tb = h("tbody", null, null, t);
     const q = search.value.trim().toLowerCase();
-    data.alerts.filter(a => sel.value === "all" || (sel.value === "planned") === a.planned).filter(a => !q || a.header.toLowerCase().includes(q) || a.routes.some(r => r.toLowerCase() === q))
+    data.alerts.filter(a => sel.value === "all" || (a.kind || (a.planned ? "planned" : "delay")) === sel.value).filter(a => !q || a.header.toLowerCase().includes(q) || a.routes.some(r => r.toLowerCase() === q))
       .sort((a, b) => (b.active_now - a.active_now) || ((b.active_start || 0) - (a.active_start || 0)))
       .forEach(a => { const row = h("tr", null, null, tb); const s = h("td", null, null, row); badge(a.active_now ? "active" : "ended", a.active_now ? (a.planned ? "s-moderate" : "s-high") : "s-na", s);
-        const rc = h("td", null, null, row); a.routes.forEach(r => routeBullet(r, rc)); h("td", null, a.alert_type || "–", row); h("td", null, a.planned ? "planned" : causeName(a.cause_category), row);
+        const rc = h("td", null, null, row); a.routes.forEach(r => routeBullet(r, rc)); h("td", null, a.alert_type || "–", row); h("td", null, a.kind === "notice" ? "notice" : (a.planned ? "planned" : causeName(a.cause_category)), row);
         h("td", "small", a.active_start ? new Date(a.active_start * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "–", row); h("td", null, a.header, row); });
   };
   sel.addEventListener("change", draw); search.addEventListener("input", draw); draw();

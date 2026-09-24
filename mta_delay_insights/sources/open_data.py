@@ -49,7 +49,8 @@ class SocrataClient:
             if order:
                 params["$order"] = order
             resp = self.session.get(self.url(dataset_id), params=params, headers=headers, timeout=self.timeout)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise requests.HTTPError(f"{resp.status_code} for {resp.url}: {resp.text[:200]}", response=resp)
             batch = resp.json()
             if not batch:
                 break
@@ -70,25 +71,36 @@ class SocrataClient:
         return normalize_incidents(self.fetch(config.OPEN_DATASETS["delay_causing_incidents"]["id"],
                                               where=_where(lines, since)))
 
+    def _fetch_series(self, keys: tuple[str, ...], lines: Iterable[str] | None, since: str | None) -> pd.DataFrame:
+        """Fetch and concatenate a dataset series (e.g. 2020-2024 + beginning 2025).
+
+        Each dataset is tried with the month/line filter first and then unfiltered
+        (older series sometimes name the month column differently); if every
+        dataset fails the combined error is raised so the caller can log the cause.
+        """
+        frames, errors = [], []
+        for key in keys:
+            ds = config.OPEN_DATASETS[key]["id"]
+            for where in (_where(lines, since), None):
+                try:
+                    df = self.fetch(ds, where=where)
+                    if len(df):
+                        frames.append(df)
+                        break
+                    errors.append(f"{key}({ds}): empty" + (" with filter" if where else ""))
+                except requests.HTTPError as exc:
+                    errors.append(f"{key}({ds}): {exc}")
+                    if exc.response is not None and exc.response.status_code == 404:
+                        break  # no point retrying an unknown dataset id
+        if not frames:
+            raise ValueError("; ".join(errors) or "no data")
+        return pd.concat(frames, ignore_index=True)
+
     def major_incidents(self, lines: Iterable[str] | None = None, since: str | None = None) -> pd.DataFrame:
-        frames = []
-        for key in ("major_incidents_2020", "major_incidents_2025"):
-            try:
-                frames.append(self.fetch(config.OPEN_DATASETS[key]["id"], where=_where(lines, since)))
-            except requests.HTTPError:
-                continue
-        df = pd.concat([f for f in frames if len(f)], ignore_index=True) if frames else pd.DataFrame()
-        return normalize_major_incidents(df)
+        return normalize_major_incidents(self._fetch_series(("major_incidents_2020", "major_incidents_2025"), lines, since))
 
     def customer_journey(self, lines: Iterable[str] | None = None, since: str | None = None) -> pd.DataFrame:
-        frames = []
-        for key in ("customer_journey_2020", "customer_journey_2025"):
-            try:
-                frames.append(self.fetch(config.OPEN_DATASETS[key]["id"], where=_where(lines, since)))
-            except requests.HTTPError:
-                continue
-        df = pd.concat([f for f in frames if len(f)], ignore_index=True) if frames else pd.DataFrame()
-        return normalize_customer_journey(df)
+        return normalize_customer_journey(self._fetch_series(("customer_journey_2020", "customer_journey_2025"), lines, since))
 
     def hourly_ridership(self, station_complex_ids: Iterable[str] | None, start: str, end: str) -> pd.DataFrame:
         clauses = [f"transit_timestamp >= '{start}T00:00:00'", f"transit_timestamp < '{end}T00:00:00'"]

@@ -32,19 +32,33 @@ CAUSE_PATTERNS: list[tuple[str, str]] = [
     ("fire_smoke", r"\bfire\b|smoke|\bfdny\b"),
     ("signal", r"signal(s|ling)? (problem|malfunction|failure|trouble|issue|work|maintenance)|signal(s)?\b"),
     ("switch", r"switch (problem|trouble|malfunction|failure)"),
-    ("track", r"rail condition|track (condition|problem|fire|maintenance|work|replacement|inspection)|broken rail|track"),
+    ("track", r"rail condition|track (condition|problem|fire|maintenance|work|replacement|inspection|defect)|broken rail|switch"),
     ("rolling_stock", r"mechanical (problem|issue)|door (problem|issue)|brakes?|disabled train|train with mechanical"),
     ("power", r"power (problem|loss|outage)|third rail|electrical|con ?ed(ison)?"),
     ("obstruction", r"debris|obstruction|object on the track|tree"),
     ("water_weather", r"flood|water condition|\bweather\b|\bsnow\b|\bice\b|\bheat\b|\bstorm\b|\bwind\b|hurricane|lightning"),
     ("crowding_dwell", r"crowd|overcrowd|customer volume|holding (the )?doors|door holding|heavy ridership"),
     ("crew", r"crew (availability|shortage)|operator availability|staffing"),
+    ("reduced_service", r"runs every \d+ minutes|reduced service|fewer trains"),
     ("planned_work", r"planned work|scheduled maintenance|capital work|construction|track work|station work|maintenance"),
     ("investigation", r"investigation"),
 ]
 
-PLANNED_TYPE_PREFIX = ("planned", "weekend service", "station notice", "elevator", "escalator",
-                       "buses replace trains", "no midday service", "no weekend service", "extra service")
+PLANNED_TYPE_PREFIX = ("planned", "weekend service", "buses replace trains", "no midday service",
+                       "no weekend service", "special schedule")
+# Informational alert types that are not delay conditions and must not feed attribution.
+NOTICE_TYPES = ("boarding change", "station notice", "extra service", "elevator", "escalator", "accessibility",
+                "service reminder", "shuttle bus")
+
+
+def alert_kind(alert_type: str | None, header: str = "") -> str:
+    """'planned' (advance service change), 'notice' (informational), or 'delay' (unplanned condition)."""
+    at = (alert_type or "").lower()
+    if at.startswith(PLANNED_TYPE_PREFIX) or re.search(r"planned work|scheduled maintenance", (header or "").lower()):
+        return "planned"
+    if at.startswith(NOTICE_TYPES):
+        return "notice"
+    return "delay"
 
 
 def classify_cause(text: str) -> str:
@@ -56,10 +70,7 @@ def classify_cause(text: str) -> str:
 
 
 def is_planned(alert_type: str | None, header: str = "") -> bool:
-    at = (alert_type or "").lower()
-    if at.startswith(PLANNED_TYPE_PREFIX):
-        return True
-    return bool(re.search(r"planned work|scheduled maintenance", (header or "").lower()))
+    return alert_kind(alert_type, header) == "planned"
 
 
 def _text(field: dict | None, lang: str = "en") -> str:

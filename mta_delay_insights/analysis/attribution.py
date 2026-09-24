@@ -39,6 +39,7 @@ import pandas as pd
 from scipy import stats
 
 from .. import config
+from ..sources.alerts import alert_kind
 from ..sources.gtfs_static import StaticGTFS
 from . import trends as tr
 from .significance import mann_whitney_p
@@ -158,6 +159,8 @@ def alerts_lens(flagged: pd.DataFrame, alerts: pd.DataFrame, route_ids: list[str
     planned_hit = np.zeros(len(flagged), dtype=bool)
     stop_set = set(stop_ids)
     for a in alerts.itertuples(index=False):
+        if alert_kind(a.alert_type, a.header) == "notice":
+            continue  # boarding changes, station notices etc. are not delay conditions
         if a.routes and not (set(a.routes) & set(route_ids)):
             continue
         if a.stops and stop_set and not (set(a.stops) & stop_set) and not a.routes:
@@ -468,6 +471,11 @@ def service_delivered_lens(profile: pd.DataFrame) -> list[Evidence]:
 
 
 MTA_CATEGORY_MAP = {
+    # Current Open Data reporting categories (Trains Delayed / Delay-Causing Incidents)
+    "police & medical": "police_medical", "operating conditions": "operating_conditions",
+    "external factors": "external_environment", "infrastructure & equipment": "infrastructure",
+    "crew availability": "crew", "planned row work": "planned_work",
+    # Older / more detailed category names
     "signals": "signal", "track": "track", "subway car": "rolling_stock", "rolling stock": "rolling_stock",
     "persons on trackbed/police/medical": "police_medical", "police": "police_medical", "medical": "police_medical",
     "planned row work": "planned_work", "planned work": "planned_work", "infrastructure & equipment": "infrastructure",

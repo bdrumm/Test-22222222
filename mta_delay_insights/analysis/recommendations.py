@@ -172,6 +172,11 @@ PLAYBOOK: dict[str, list[dict]] = {
              rationale="Fire/smoke alerts over-index; debris is the usual fuel.",
              expected_effect="Fewer smoke conditions and evacuations."),
     ],
+    "operating_conditions": [
+        dict(audience="operator", priority=2, action="Review operating conditions on {routes} in {hours}: crowding and dwell management at {station} and upstream, holding practice, and schedule run times",
+             rationale="The MTA attributes an outsized share of this line's delays to operating conditions (dwell, crowding, holds).",
+             expected_effect="Fewer discretionary holds and shorter dwells; smoother headways."),
+    ],
     "unknown": [
         dict(audience="monitoring", priority=3, action="Increase collection: record all stops (not only the target) and keep predictions to strengthen upstream/terminal lenses",
              rationale="The available evidence does not isolate a cause.",
@@ -189,6 +194,9 @@ METRIC_PLAYBOOK = [
                             rationale="A fifth of arrivals follow a large gap.",
                             expected_effect="Caps the longest waits, which dominate the APT metric.")),
 ]
+
+
+PLAYBOOK["reduced_service"] = PLAYBOOK["missing_service"]
 
 
 def build_recommendations(ranked_causes: list[dict], evidences: list[Evidence], context: dict,

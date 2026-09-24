@@ -58,11 +58,26 @@ jobs:
         run: pipeline/data_branch.sh commit
       - name: Build site
         run: python -m pipeline.build_site --out _site
-      - uses: actions/configure-pages@v5
+      # Publishing path 1: the gh-pages branch (works with Pages source "Deploy from a branch").
+      - name: Publish to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          enablement: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: mta-insights-bot
+          user_email: mta-insights-bot@users.noreply.github.com
+      # Publishing path 2: Pages via Actions (works once the Pages source is "GitHub Actions").
+      # The workflow token cannot enable Pages itself, so these steps are allowed to fail.
+      - uses: actions/configure-pages@v5
+        id: pages
+        continue-on-error: true
       - uses: actions/upload-pages-artifact@v3
+        if: steps.pages.outcome == 'success'
         with:
           path: _site
       - id: deploy
+        if: steps.pages.outcome == 'success'
+        continue-on-error: true
         uses: actions/deploy-pages@v4
