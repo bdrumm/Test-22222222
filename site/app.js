@@ -295,7 +295,9 @@ async function dataPage(idx) {
 
 
 // ---------------------------------------------------------------- live
-const hhmm = ts => ts ? new Date(ts * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "–";
+const NY = "America/New_York";
+const hhmm = ts => ts ? new Date(ts * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: NY }) : "–";
+const ageText = sec => sec < 90 ? "just now" : sec < 3600 ? `${(sec / 60).toFixed(0)} min ago` : sec < 86400 ? `${(sec / 3600).toFixed(1)} h ago` : `${(sec / 86400).toFixed(0)} days ago`;
 const minsFromNow = (ts, now) => ts ? `${Math.max(0, (ts - now) / 60).toFixed(0)} min` : "–";
 const lateTxt = s => s == null ? "–" : (Math.abs(s) < 60 ? "on time" : `${s > 0 ? "+" : "−"}${Math.abs(s / 60).toFixed(0)} min`);
 function statusChip(parent, status, label) { const c = h("span", `status-chip st-${status}`, null, parent); h("span", "dot", null, c); c.append(label); h("span", "st", status, c); return c; }
@@ -312,9 +314,9 @@ async function live(idx) {
     const head = h("div", "row between", null, root);
     h("h1", null, "Live status", head);
     const rf = h("div", "refresh small secondary", null, head);
-    h("span", "age", `as of ${hhmm(d.generated_ts)} · ${age < 90 ? "just now" : `${(age / 60).toFixed(0)} min ago`} · ${d.source}`, rf);
+    h("span", "age", `as of ${hhmm(d.generated_ts)} ET · ${ageText(age)} · ${d.source}`, rf);
     const btn = h("button", "icon-btn", "↻", rf); btn.title = "Refresh"; btn.addEventListener("click", draw);
-    if (age > 900) h("p", "small", `This snapshot is ${(age / 60).toFixed(0)} minutes old. The Pages site refreshes only while the hourly collector runs; run \`mta-insights serve\` for continuous updates.`, root).style.color = "var(--status-serious)";
+    if (age > 900) h("p", "small", `This snapshot is ${ageText(age).replace(" ago", "")} old. The Pages site refreshes only while the hourly collector runs; run mta-insights serve for continuous updates.`, root).style.color = "var(--status-serious)";
     const tiles = h("div", "tiles", null, root);
     tile(tiles, "Trains in service", d.trains_total, `${d.trains_matched} matched to schedule`);
     tile(tiles, "Routes good", d.summary.good); tile(tiles, "Routes degraded", d.summary.degraded); tile(tiles, "Routes disrupted", d.summary.disrupted);
@@ -327,7 +329,7 @@ async function live(idx) {
       const card = h("div", "card", null, grid);
       const hd = h("div", "row between", null, card);
       const t = h("div", null, null, hd); (s.routes || []).forEach(r => routeBullet(r, t)); h("strong", null, ` ${s.station_name || s.label}`, t);
-      statusChip(hd, s.status === "normal" ? "good" : s.status, s.status);
+      statusChip(hd, s.status === "normal" ? "good" : s.status, "");
       h("div", "small muted", `${s.direction === "N" ? "Uptown / northbound" : "Downtown / southbound"} · platform ${s.stop_id}`, card);
       const pr = h("div", "row small secondary", null, card); pr.style.margin = ".4rem 0";
       Object.entries(s.per_route || {}).forEach(([r, v]) => { const sp = h("span", null, null, pr); routeBullet(r, sp); sp.append(v.next_eta_ts ? ` next in ${minsFromNow(v.next_eta_ts, d.generated_ts)}` : " no train in the next hour"); if (v.sched_headway_sec) sp.append(` (every ${(v.sched_headway_sec / 60).toFixed(0)})`); });
@@ -346,7 +348,7 @@ async function live(idx) {
         if (hw.length >= 2) {
           const ref = Object.values(s.per_route).map(v => v.sched_headway_sec).filter(Boolean);
           const refMin = ref.length ? Math.min(...ref) / 60 : null;
-          barChart(card, { title: "Predicted headways at this platform", subtitle: "minutes between consecutive arrivals (model ETA); line = scheduled headway", categories: hw.map(a => `${a.route_id} ${hhmm(a.model_eta_ts)}`), series: [{ name: "headway", values: hw.map(a => a.headway_sec / 60) }], format: fmt.num1, height: 190, refLines: refMin ? [{ value: refMin, label: "scheduled" }] : [] });
+          barChart(card, { title: "Predicted headways at this platform", subtitle: "minutes between consecutive arrivals (model ETA, all routes); line = scheduled headway", categories: hw.map(a => hhmm(a.model_eta_ts).replace(" ", "")), series: [{ name: "headway", values: hw.map(a => a.headway_sec / 60) }], format: fmt.num1, height: 190, labelEvery: hw.length > 8 ? 2 : 1, refLines: refMin ? [{ value: refMin, label: "scheduled" }] : [] });
         }
       }
       const m = s.model || {};
