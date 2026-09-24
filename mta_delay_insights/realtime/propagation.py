@@ -222,6 +222,9 @@ def fit_model(store: Store, static: StaticGTFS, target: dict, now: float | None 
 # --------------------------------------------------------------------------- #
 # Forecast
 # --------------------------------------------------------------------------- #
+GAP_FLAG_HORIZON_SEC = 1800.0   # gaps are only called within 30 min: later trips may not be in the feed yet
+
+
 def forecast_station(target: dict, trains: list, static: StaticGTFS, model: PropagationModel | None,
                      now: float, alerts_now: pd.DataFrame | None = None, horizon_sec: float = 3600.0,
                      defaults: config.AnalysisDefaults = config.DEFAULTS) -> dict:
@@ -264,7 +267,7 @@ def forecast_station(target: dict, trains: list, static: StaticGTFS, model: Prop
             "sched_ts": sched, "feed_lateness_sec": (eta - sched) if sched else None,
             "model_lateness_sec": (model_eta - sched) if sched else None,
             "now_at_stop": t.next_stop_id, "now_at_stop_name": name(t.next_stop_id) if t.next_stop_id else None,
-            "now_lateness_sec": t.lateness_sec, "stops_away": k, "carry": carry,
+            "now_lateness_sec": t.lateness_sec if t.started else None, "started": t.started, "stops_away": k, "carry": carry if t.started else None,
             "calibration_n": n_cal, "alert_extra_sec": extra if extra else None,
         })
     arrivals.sort(key=lambda a: a["model_eta_ts"])
@@ -287,7 +290,8 @@ def forecast_station(target: dict, trains: list, static: StaticGTFS, model: Prop
             hw = a["model_eta_ts"] - prev
             a["headway_sec"] = hw if prev != now else None
             ratio = (hw / sched_hw[r]) if sched_hw.get(r) else None
-            a["gap"] = bool(ratio and ratio >= defaults.gap_ratio and prev != now)
+            within = a["model_eta_ts"] <= now + GAP_FLAG_HORIZON_SEC
+            a["gap"] = bool(ratio and ratio >= defaults.gap_ratio and prev != now and within)
             a["bunched"] = bool(ratio and ratio <= defaults.bunching_ratio and prev != now)
             if a["gap"]:
                 effects.append({"kind": "gap", "route_id": r, "severity": "high" if ratio >= 2.5 else "medium",

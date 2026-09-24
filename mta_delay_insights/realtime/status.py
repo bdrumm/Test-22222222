@@ -44,6 +44,7 @@ class LiveTrain:
     lateness_sec: float | None = None      # feed ETA at next stop minus scheduled arrival (if matched)
     sched_matched: bool = False
     service_date: date | None = None
+    started: bool = True                   # False for scheduled trips the feed lists before departure
 
     def eta_at(self, stop_id: str) -> float | None:
         for s, t in self.stops:
@@ -62,7 +63,7 @@ class LiveTrain:
         return {"trip_id": self.trip_id, "route_id": self.route_id, "direction": self.direction, "feed": self.feed,
                 "next_stop_id": self.next_stop_id, "next_stop_name": name(self.next_stop_id),
                 "next_eta_ts": self.next_eta_ts, "lateness_sec": self.lateness_sec, "sched_matched": self.sched_matched,
-                "stops_ahead": len(self.stops)}
+                "started": self.started, "stops_ahead": len(self.stops)}
 
 
 def _service_date(start_date: str | None, now: float) -> date:
@@ -99,6 +100,12 @@ def live_trains(feed_bytes: dict[str, bytes], static: StaticGTFS | None, now: fl
                 if sched is not None:
                     train.lateness_sec = float(train.next_eta_ts - sched)
                     train.sched_matched = True
+                    # A trip that still lists every scheduled stop and is not due for a while has not left
+                    # its terminal yet: the feed shows its timetable, not a position.
+                    tid = static.match_trip(trip_id, train.service_date)
+                    n_sched = len(static._trip_stop_index().get(tid, {})) if tid else 0
+                    if n_sched and len(stops) >= n_sched and train.next_eta_ts > now + 60:
+                        train.started = False
             trains.append(train)
     return trains
 
@@ -133,8 +140,13 @@ def active_alerts(alerts_df: pd.DataFrame | None, now: float) -> pd.DataFrame:
 
 
 def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: StaticGTFS, now: float,
-                 horizon_sec: float = 3600.0) -> list[dict]:
-    """Per route/direction summary with the largest predicted gap on the line."""
+                 horizon_sec: float = 1200.0) -> list[dict]:
+    """Per route/direction summary with the largest predicted gap on the line.
+
+    Gaps are measured only between ETAs within ``horizon_sec`` (default 20 min): the
+    feed publishes upcoming trips only shortly before departure, so headways further
+    out would be artificially long.
+    """
     cache: dict = {}
     out = []
     by_rd: dict[tuple[str, str], list[LiveTrain]] = {}
@@ -161,7 +173,8 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
                     n_bunch += 1
                 if b - a > best_gap:
                     best_gap, gap_stop, gap_when = b - a, s, b
-        lat = [t.lateness_sec for t in ts if t.lateness_sec is not None]
+        started = [t for t in ts if t.started]
+        lat = [t.lateness_sec for t in started if t.lateness_sec is not None]
         med_late = float(np.median(lat)) if lat else None
         p90_late = float(np.quantile(lat, 0.9)) if lat else None
         route_alerts = alerts_now[alerts_now["routes"].map(lambda rs: route in rs)] if not alerts_now.empty else alerts_now
@@ -176,8 +189,8 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
         else:
             status = "good"
         out.append({
-            "route_id": route, "direction": direction, "trains": len(ts),
-            "matched": sum(1 for t in ts if t.sched_matched),
+            "route_id": route, "direction": direction, "trains": len(started), "scheduled_not_started": len(ts) - len(started),
+            "matched": sum(1 for t in started if t.sched_matched),
             "median_lateness_sec": med_late, "p90_lateness_sec": p90_late,
             "sched_headway_sec": sched_hw, "max_gap_sec": best_gap or None,
             "max_gap_ratio": gap_ratio, "max_gap_stop": gap_stop, "max_gap_stop_name": static.stop_name(gap_stop) if gap_stop else None,
@@ -207,10 +220,11 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
     n_by_status = {"good": 0, "degraded": 0, "disrupted": 0}
     for r in routes:
         n_by_status[r["status"]] += 1
+    started = [t for t in trains if t.started]
     return {
         "generated_at": datetime.fromtimestamp(now, NY_TZ).isoformat(), "generated_ts": now, "source": source,
-        "feeds": sorted(feed_bytes.keys()), "trains_total": len(trains),
-        "trains_matched": sum(1 for t in trains if t.sched_matched),
+        "feeds": sorted(feed_bytes.keys()), "trains_total": len(started), "trains_scheduled_not_started": len(trains) - len(started),
+        "trains_matched": sum(1 for t in started if t.sched_matched),
         "summary": n_by_status, "routes": routes, "alerts": alerts_out, "stations": stations,
     }
 

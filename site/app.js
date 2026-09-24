@@ -318,7 +318,7 @@ async function live(idx) {
     const btn = h("button", "icon-btn", "↻", rf); btn.title = "Refresh"; btn.addEventListener("click", draw);
     if (age > 900) h("p", "small", `This snapshot is ${ageText(age).replace(" ago", "")} old. The Pages site refreshes only while the hourly collector runs; run mta-insights serve for continuous updates.`, root).style.color = "var(--status-serious)";
     const tiles = h("div", "tiles", null, root);
-    tile(tiles, "Trains in service", d.trains_total, `${d.trains_matched} matched to schedule`);
+    tile(tiles, "Trains in service", d.trains_total, `${d.trains_matched} matched to schedule${d.trains_scheduled_not_started ? ` · ${d.trains_scheduled_not_started} scheduled, not yet departed` : ""}`);
     tile(tiles, "Routes good", d.summary.good); tile(tiles, "Routes degraded", d.summary.degraded); tile(tiles, "Routes disrupted", d.summary.disrupted);
     tile(tiles, "Unplanned alerts", d.alerts.length);
 
@@ -342,7 +342,7 @@ async function live(idx) {
         const body = h("tbody", null, null, tb);
         s.arrivals.slice(0, 8).forEach(a => { const row = h("tr", a.gap ? "gap-row" : "", null, body); const c0 = h("td", null, null, row); routeBullet(a.route_id, c0);
           h("td", "num eta", hhmm(a.feed_eta_ts), row); h("td", "num eta", hhmm(a.model_eta_ts), row); h("td", "num eta small", `${hhmm(a.eta_lo_ts)}–${hhmm(a.eta_hi_ts)}`, row);
-          h("td", "num", lateTxt(a.model_lateness_sec), row); h("td", "small", a.now_at_stop_name || "–", row); h("td", "num", lateTxt(a.now_lateness_sec), row); });
+          h("td", "num", lateTxt(a.model_lateness_sec), row); h("td", "small", a.started === false ? "not departed" : (a.now_at_stop_name || "–"), row); h("td", "num", a.started === false ? "–" : lateTxt(a.now_lateness_sec), row); });
         // headway chart
         const hw = s.arrivals.filter(a => a.headway_sec != null);
         if (hw.length >= 2) {
