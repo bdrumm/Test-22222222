@@ -37,6 +37,45 @@ $ mta-insights demo --scenario signal
 The injected truth for that run was a signal failure between 28 St and 33 St on
 northbound 6 trains in the morning peak on 70% of weekdays.
 
+## Review site and live pipeline (GitHub Pages)
+
+A browsable app lives in `site/` and is published to GitHub Pages by the
+`pipeline` workflow: **https://bdrumm.github.io/Test-22222222/**
+
+| page | what it shows |
+|---|---|
+| Stations | one card per monitored platform: severity, verdict, focus hours, where / why, rider impact |
+| Station report | what changed (with CIs), problem rate and lateness by hour, day × hour heatmap, daily trend, ranked locations and causes with evidence, recommendations |
+| Lines | monthly trains delayed by reported cause per line (MTA Open Data), month-over-month / year-over-year change, cause mix vs system, customer journey metrics, major incidents |
+| Alerts | alerts seen in the last 24 h with cause tags |
+| Data | collection coverage, pipeline runs, source catalog |
+
+**How the data gets there.** `.github/workflows/pipeline.yml` runs hourly (and
+on push, briefly) on GitHub Actions, where the MTA and Open Data hosts are reachable:
+
+1. `pipeline/collect.py` polls the realtime feeds for the platforms in
+   `pipeline/targets.json` (plus their upstream stops and terminals) for ~50
+   minutes, derives observed arrivals and stores them as per-day CSVs on the
+   `data` branch, together with the alerts seen.
+2. `pipeline/context.py` pulls trains delayed, incidents, customer journey
+   metrics, the stations table, hourly ridership for the target complexes and
+   recent weather.
+3. `pipeline/build_site.py` loads everything, runs `analyze_station` for each
+   target (window = most recent half of the coverage, baseline = the rest),
+   builds line insights, and writes `site/` + JSON into `_site/`, which is
+   deployed to Pages.
+
+Reports say "collecting" until a platform has about two days of arrivals; the
+Lines and Alerts pages are populated from the first run. To monitor other
+platforms, edit `pipeline/targets.json`. To preview offline:
+
+```bash
+python -m pipeline.build_site --synthetic --out _site && python -m http.server -d _site 8000
+```
+
+The scheduled collector is a convenience for review; for production, run
+`mta-insights collect` continuously on a small VM and point `build_site` at its store.
+
 ## Data sources
 
 | kind | feed | what it contributes |
@@ -152,6 +191,8 @@ mta_delay_insights/
     engine.py             analyze_station(): orchestration
   synthetic.py            mini corridor + injected-cause scenarios + GTFS-RT re-encoding
   cli.py                  mta-insights sources | static | collect | replay | context | analyze | demo
+pipeline/                 GitHub Actions data pipeline: collect, context, build_site, data-branch helper
+site/                     static review app (vanilla JS + SVG charts) published to GitHub Pages
 tests/                    unit tests + end-to-end scenario tests
 docs/                     METHODOLOGY.md, DATA_SOURCES.md
 examples/                 programmatic use

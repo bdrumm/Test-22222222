@@ -41,6 +41,8 @@ class InsightReport:
     window_summary_all: dict = field(default_factory=dict)
     baseline_summary_all: dict = field(default_factory=dict)
     verdict: str = ""
+    daily_series: pd.DataFrame = field(default_factory=pd.DataFrame)
+    bucket_grid: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     # ---- serialisation ---------------------------------------------------- #
     def to_dict(self) -> dict:
@@ -54,6 +56,8 @@ class InsightReport:
             "comparisons": [c.as_dict() for c in self.comparisons],
             "comparisons_all_hours": [c.as_dict() for c in self.comparisons_all],
             "hour_table": self.hour_table,
+            "daily_series": self.daily_series,
+            "bucket_grid": self.bucket_grid,
             "trends": [t.as_dict() for t in self.trends],
             "hour_pattern": self.hour_pattern,
             "ranked_locations": self.ranked_locations,

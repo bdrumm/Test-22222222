@@ -127,3 +127,21 @@ class ArrivalTracker:
 
     def pending(self) -> int:
         return sum(len(v) for v in self.state.values())
+
+    def flush(self, now: float) -> pd.DataFrame:
+        """Emit tracked stops whose predicted time has passed (end of a collection run).
+
+        Chunked collection (e.g. hourly CI jobs) would otherwise lose the arrivals of
+        the last few minutes. Emitted rows carry ``source='flush'`` and reduced confidence.
+        """
+        emitted = []
+        for key in list(self.state):
+            for stop_id, ts in list(self.state[key].items()):
+                if ts.last_pred_ts <= now:
+                    row = self._emit(ts, now, source="flush")
+                    row["confidence"] = max(0.0, min(row["confidence"], 0.7))
+                    emitted.append(row)
+                    del self.state[key][stop_id]
+            if not self.state[key]:
+                del self.state[key]
+        return pd.DataFrame(emitted, columns=ARRIVAL_COLUMNS)

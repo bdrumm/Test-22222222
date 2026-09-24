@@ -90,6 +90,14 @@ class Collector:
             time.sleep(max(0.0, self.poll_interval_sec - (time.time() - t0)))
         return out
 
+    def flush(self, now: float | None = None) -> int:
+        """Persist arrivals still pending in the trackers (call at the end of a bounded run)."""
+        now = now or time.time()
+        n = 0
+        for tracker in self.trackers.values():
+            n += self.store.insert_arrivals(tracker.flush(now))
+        return n
+
     def replay(self, snapshots: Iterable[tuple[str, float, bytes]]) -> int:
         """Replay recorded (feed_key, ts, bytes) snapshots in order. Returns arrivals emitted."""
         n = 0

@@ -278,6 +278,22 @@ def analyze_station(store: Store, static: StaticGTFS, req: AnalysisRequest,
         caveats.append("many observed arrivals have low confidence (trips vanished from the feed); consider a shorter poll interval")
     if focus_mode == "none" and not req.hours:
         caveats.append("no hour of the day worsened significantly versus the baseline; results describe the whole day")
+    # Series for charts: daily (weighted by arrivals) and the day x hour grid.
+    daily = pd.DataFrame({"date": []})
+    if not prof_all.empty:
+        cols = {}
+        for m in ("apt_sec", "problem_share", "lateness_mean_sec", "late_share", "gap_share"):
+            cols[m] = tr.daily_series(prof_all, m, focus_hours or None)
+        daily = pd.DataFrame(cols)
+        n_by_day = prof_all.groupby("service_date")["n_actual"].sum()
+        daily["n_actual"] = n_by_day.reindex(daily.index).fillna(0).astype(int)
+        daily.index.name = "date"
+        daily = daily.reset_index()
+        daily["date"] = pd.to_datetime(daily["date"]).dt.strftime("%Y-%m-%d")
+        daily["in_window"] = daily["date"] >= req.window_start.astimezone(NY_TZ).strftime("%Y-%m-%d")
+    grid = prof_all[["service_date", "hour", "n_actual", "problem_share", "apt_sec", "lateness_mean_sec", "late_share"]].copy() if not prof_all.empty else pd.DataFrame()
+    if not grid.empty:
+        grid["service_date"] = pd.to_datetime(grid["service_date"]).dt.strftime("%Y-%m-%d")
     worse = [c.metric for c in comparisons if c.direction == "worse"]
     if worse:
         verdict = (f"Service in the {'focus hours' if focus_hours else 'window'} is significantly worse than the baseline on "
@@ -299,4 +315,5 @@ def analyze_station(store: Store, static: StaticGTFS, req: AnalysisRequest,
         focus_hours=sorted(focus_hours), focus_mode=focus_mode, hour_table=hour_table,
         comparisons_all=comparisons_all, ranked_locations=ranked_locations,
         window_summary_all=sum_w_all, baseline_summary_all=sum_b_all, verdict=verdict,
+        daily_series=daily, bucket_grid=grid,
     )

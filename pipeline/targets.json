@@ -1,0 +1,12 @@
+{
+  "targets": [
+    {"id": "grand-central-n", "station": "Grand Central-42 St", "direction": "N", "routes": ["4", "5", "6"],
+     "label": "Grand Central-42 St, uptown 4/5/6"},
+    {"id": "times-sq-s", "station": "Times Sq-42 St", "direction": "S", "routes": ["1", "2", "3"],
+     "label": "Times Sq-42 St, downtown 1/2/3"},
+    {"id": "jay-st-n", "station": "Jay St-MetroTech", "direction": "N", "routes": ["A", "C"],
+     "label": "Jay St-MetroTech, Manhattan-bound A/C"}
+  ],
+  "upstream_stops": 6,
+  "route_share_of_entries": 0.5
+}

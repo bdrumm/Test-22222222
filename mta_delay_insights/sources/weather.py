@@ -26,6 +26,17 @@ def fetch_hourly(start_date: str, end_date: str, lat: float = config.NYC_LAT, lo
     return weather_frame(resp.json())
 
 
+def fetch_recent_hourly(past_days: int = 60, lat: float = config.NYC_LAT, lon: float = config.NYC_LON,
+                        timeout: int | None = None) -> pd.DataFrame:
+    """Recent hourly weather from the forecast endpoint (the archive lags ~5 days)."""
+    params = {"latitude": lat, "longitude": lon, "past_days": min(int(past_days), 92), "forecast_days": 1,
+              "hourly": ",".join(HOURLY_VARS), "timezone": "America/New_York"}
+    resp = requests.get(config.OPEN_METEO_FORECAST, params=params, timeout=timeout or config.DEFAULTS.request_timeout_sec)
+    resp.raise_for_status()
+    df = weather_frame(resp.json())
+    return df[df["ts"] <= pd.Timestamp.now()]
+
+
 def weather_frame(payload: dict) -> pd.DataFrame:
     h = payload.get("hourly", {})
     if not h:
