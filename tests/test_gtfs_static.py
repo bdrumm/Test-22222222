@@ -11,6 +11,9 @@ def test_time_helpers():
     assert direction_from_trip_id("089150_6..S01R") == "S"
     assert rt_trip_suffix("ASP26GEN-6091-Weekday-00_007800_6..N01R") == "007800_6..N01R"
     assert rt_trip_suffix("007800_6..N01R") == "007800_6..N01R"
+    from mta_delay_insights.sources.gtfs_static import rt_trip_stem
+    assert rt_trip_stem("AFA25GEN-L050-Weekday-00_020300_L..N01R") == "020300_L..N" == rt_trip_stem("020300_L..N")
+    assert rt_trip_stem("019400_G..S") == "019400_G..S"
     assert origin_time_seconds("007800_6..N01R") == 78 * 60
 
 

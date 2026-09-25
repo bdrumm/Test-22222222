@@ -85,12 +85,18 @@ export function parseFeed(bytes) {
 
 // ---------------------------------------------------------------- board computation
 export const tripSuffix = id => { const p = id.split("_"); return p.length >= 3 ? p.slice(-2).join("_") : id; };
+// the suffix without its path code: some feeds (L, some G and 7 trips) publish ids like 020300_L..N
+export const tripStem = id => { const m = /^(\d+_[^.]+\.\.?[NS])/.exec(tripSuffix(id)); return m ? m[1] : tripSuffix(id); };
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 
 function matchSched(sched, tripId, route, eta) {
-  const suf = tripSuffix(tripId); let best = null;
-  for (const [s, r, ts] of sched) { if (s !== suf || r !== route) continue; if (Math.abs(ts - eta) < 3 * 3600 && (best == null || Math.abs(ts - eta) < Math.abs(best - eta))) best = ts; }
-  return best;
+  const suf = tripSuffix(tripId), stem = tripStem(tripId); let best = null, bestStem = null;
+  for (const [s, r, ts] of sched) {
+    if (r !== route || Math.abs(ts - eta) >= 3 * 3600) continue;
+    if (s === suf) { if (best == null || Math.abs(ts - eta) < Math.abs(best - eta)) best = ts; }
+    else if (tripStem(s) === stem) { if (bestStem == null || Math.abs(ts - eta) < Math.abs(bestStem - eta)) bestStem = ts; }
+  }
+  return best ?? bestStem;
 }
 function schedHeadway(sched, route, now) {
   const ts = sched.filter(([, r, t]) => r === route && t >= now - 3600 && t <= now + 3600).map(x => x[2]);
@@ -134,9 +140,12 @@ export function computeBoard(schedule, feeds, now) {
       const sched = matchSched(tgt.sched, tu.trip.trip_id, route, eta);
       const veh = vehicles.get(key);
       const line = schedule.lines[`${route}_${tgt.direction}`];
-      // NYCT publishes a timestamped vehicle for every train in service; an unassigned trip is still in the yard
-      const started = !!(veh && veh.timestamp) || tu.trip.is_assigned === true || (tu.trip.is_assigned == null && i > 0);
-      const pos = veh && veh.status ? describePosition(veh, line, tgt.stop_id, sched, now, C) : null;
+      // NYCT publishes a vehicle with a status for every train in service; a trip still in the yard has
+      // no status (its vehicle timestamp is the scheduled departure) and is not assigned
+      const hasPos = !!(veh && veh.stop_id && veh.timestamp && veh.timestamp <= now + 60);
+      if (hasPos && !veh.status) veh.status = "IN_TRANSIT_TO";   // the GTFS-Realtime default when current_status is absent
+      const started = hasPos || tu.trip.is_assigned === true;
+      const pos = hasPos ? describePosition(veh, line, tgt.stop_id, sched, now, C) : null;
       const lateness = sched != null ? eta - sched : null;
       let corroboration = "position_unknown", effective = lateness;
       if (pos && pos.position_lateness_sec != null && lateness != null) { corroboration = pos.position_lateness_sec - lateness > 60 ? "feed_optimistic" : "agree"; effective = Math.max(lateness, pos.position_lateness_sec); }

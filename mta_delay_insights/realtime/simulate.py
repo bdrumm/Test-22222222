@@ -17,11 +17,13 @@ more minutes" is visible on every downstream platform.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from dataclasses import dataclass
 
 import numpy as np
 
-from ..sources.gtfs_static import StaticGTFS
+from ..sources.gtfs_static import NY_TZ, StaticGTFS
 from .status import LiveTrain
 
 SCENARIOS = ("baseline", "hold_persists", "clears_now")
@@ -152,11 +154,19 @@ def station_scenarios(sims: list[dict], stop_id: str, now: float, n: int = 4) ->
     if not per_route:
         return None
     worst = max((r for r in per_route if r.get("hold_effect")), key=lambda r: r["hold_effect"].get("max_headway_sec") or 0, default=None)
-    return {"disturbed": any(r["disturbed"] for r in per_route), "routes": per_route,
-            "headline": (f"If the hold on the {worst['route']} persists {worst['hold_effect']['hold_extra_sec'] / 60:.0f} more minutes, the next {worst['route']} trains here arrive "
-                         f"{'/'.join(f'{d / 60:.0f}' for d in worst['hold_effect']['extra_sec'][:3])} min later"
-                         + (f" and the gap grows to {worst['hold_effect']['max_headway_sec'] / 60:.0f} min" if worst['hold_effect'].get('max_headway_sec') else ""))
-            if worst else None}
+    headline = None
+    if worst:
+        he = worst["hold_effect"]
+        lead = f"If the hold on the {worst['route']} persists {he['hold_extra_sec'] / 60:.0f} more minutes, "
+        if he["extra_sec"]:
+            headline = lead + f"the next {worst['route']} trains here arrive {'/'.join(f'{d / 60:.0f}' for d in he['extra_sec'][:3])} min later"
+            if he.get("max_headway_sec"):
+                headline += f" and the gap grows to {he['max_headway_sec'] / 60:.0f} min"
+        elif worst["hold_persists"]:
+            headline = lead + f"the next {worst['route']} here is not due before {datetime.fromtimestamp(worst['hold_persists'][0]['eta_ts'], NY_TZ).strftime('%-I:%M %p')}"
+        else:
+            headline = lead + f"no {worst['route']} train reaches this platform within the hour"
+    return {"disturbed": any(r["disturbed"] for r in per_route), "routes": per_route, "headline": headline}
 
 
 def _station_scenario(entry: dict, stop_id: str, now: float, n: int) -> dict | None:

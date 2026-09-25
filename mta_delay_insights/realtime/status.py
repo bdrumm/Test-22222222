@@ -100,10 +100,15 @@ STALL_SLACK_SEC = 120.0  # in transit this much longer than the scheduled run = 
 
 def _fuse_position(train: "LiveTrain", veh: dict, static: StaticGTFS | None, now: float) -> None:
     """Attach the vehicle position and derive holding / stalled flags and position-implied lateness."""
-    train.pos_status = veh.get("current_status")
-    train.pos_stop_id = veh.get("stop_id") or None
+    status, stop = veh.get("current_status"), veh.get("stop_id")
     ts = veh.get("vehicle_ts")
-    train.pos_ts = float(ts) if ts is not None and not pd.isna(ts) else None
+    ts = float(ts) if ts is not None and not pd.isna(ts) else None
+    # NYCT also publishes a vehicle for trips that have not started (no status, timestamp = scheduled departure)
+    if not isinstance(stop, str) or (ts is not None and ts > now + 60):
+        return
+    if not isinstance(status, str):
+        status = "IN_TRANSIT_TO"          # the GTFS-Realtime default when current_status is absent
+    train.pos_status, train.pos_stop_id, train.pos_ts = status, stop, ts
     if train.pos_ts is not None:
         train.since_update_sec = max(0.0, now - train.pos_ts)
     if static is None or not train.pos_stop_id or train.service_date is None:
@@ -292,6 +297,17 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
     return out
 
 
+def _scrub_nan(obj):
+    """NaN is not valid JSON: browsers reject the whole snapshot. Replace it with null everywhere."""
+    if isinstance(obj, float):
+        return None if obj != obj else obj
+    if isinstance(obj, dict):
+        return {k: _scrub_nan(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_scrub_nan(v) for v in obj]
+    return obj
+
+
 def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, static: StaticGTFS,
                targets: list[dict], models: dict[str, PropagationModel] | None, now: float | None = None,
                source: str = "live", journeys: list | None = None, journey_models: dict | None = None,
@@ -383,7 +399,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
     for r in routes:
         n_by_status[r["status"]] += 1
     started = [t for t in trains if t.started]
-    return {
+    return _scrub_nan({
         "generated_at": datetime.fromtimestamp(now, NY_TZ).isoformat(), "generated_ts": now, "source": source,
         "feeds": sorted(feed_bytes.keys()), "trains_total": len(started), "trains_scheduled_not_started": len(trains) - len(started),
         "trains_matched": sum(1 for t in started if t.sched_matched),
@@ -400,7 +416,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
         "positions": {"n_with_position": sum(1 for t in trains if t.pos_status and t.started),
                       "holding": sum(1 for t in trains if t.holding and t.started), "stalled": sum(1 for t in trains if t.stalled and t.started),
                       "feed_optimistic": sum(1 for t in trains if t.corroboration == "feed_optimistic" and t.started)},
-    }
+    })
 
 
 def _f(v):

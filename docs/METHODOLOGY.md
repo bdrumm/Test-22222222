@@ -29,7 +29,10 @@ Each observed arrival is matched to the static GTFS schedule:
 
 1. **trip-id match**: the realtime id `007800_6..N01R` is the suffix of the
    static id `ASP26GEN-…_007800_6..N01R`;
-2. otherwise the **nearest scheduled arrival** of the same route at the same
+2. **stem match** when the realtime id carries no path code (the L feed and
+   some G and 7 trips publish `020300_L..N`): origin time + route + direction
+   (`020300_L..N`) against the static ids' stems;
+3. otherwise the **nearest scheduled arrival** of the same route at the same
    stop within a tolerance (default 15 minutes).
 
 The match yields `lateness_sec` and the scheduled headway *of that trip*

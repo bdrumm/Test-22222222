@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .. import config
-from ..sources.gtfs_static import NY_TZ, StaticGTFS, rt_trip_suffix
+from ..sources.gtfs_static import NY_TZ, StaticGTFS, rt_trip_stem, rt_trip_suffix
 
 MATCH_COLUMNS = ["sched_arrival_ts", "sched_trip_id", "sched_headway_sec", "lateness_sec", "match_method"]
 
@@ -41,12 +41,13 @@ def match_arrivals(arrivals: pd.DataFrame, static: StaticGTFS, tolerance_sec: in
     arr = arrivals.copy()
     arr["service_date"] = [service_date_of(t, s) for t, s in zip(arr["arrival_ts"], arr.get("start_date", [None] * len(arr)))]
     arr["_suffix"] = arr["trip_id"].map(rt_trip_suffix)
+    arr["_stem"] = arr["trip_id"].map(rt_trip_stem)
     pieces = []
     for (sd, stop_id), grp in arr.groupby(["service_date", "stop_id"], sort=False):
         sched = static.scheduled_stop_events(stop_id, sd, route_ids=sorted(grp["route_id"].dropna().unique()))
         pieces.append(_match_group(grp, sched, tol))
     out = pd.concat(pieces).sort_values("arrival_ts")
-    return out.drop(columns=["_suffix"]).reset_index(drop=True)
+    return out.drop(columns=["_suffix", "_stem"]).reset_index(drop=True)
 
 
 def _match_group(grp: pd.DataFrame, sched: pd.DataFrame, tol: int) -> pd.DataFrame:
@@ -70,6 +71,16 @@ def _match_group(grp: pd.DataFrame, sched: pd.DataFrame, tol: int) -> pd.DataFra
         g.loc[hit, "sched_trip_id"] = g.loc[hit, "_suffix"].map(by_suffix["trip_id"])
         g.loc[hit, "sched_headway_sec"] = g.loc[hit, "_suffix"].map(by_suffix["sched_headway_sec"]).astype(float)
         g.loc[hit, "match_method"] = "trip_id"
+    # 1b) realtime ids without a path code (the L, some G and 7 trips): match on origin time + route + direction
+    sched["_stem"] = sched["trip_id"].map(rt_trip_stem)
+    by_stem = sched.drop_duplicates("_stem").set_index("_stem")
+    hit2 = ~hit & g["_stem"].isin(by_stem.index)
+    if hit2.any():
+        g.loc[hit2, "sched_arrival_ts"] = g.loc[hit2, "_stem"].map(by_stem["arrival_ts"]).astype(float)
+        g.loc[hit2, "sched_trip_id"] = g.loc[hit2, "_stem"].map(by_stem["trip_id"])
+        g.loc[hit2, "sched_headway_sec"] = g.loc[hit2, "_stem"].map(by_stem["sched_headway_sec"]).astype(float)
+        g.loc[hit2, "match_method"] = "trip_stem"
+        hit = hit | hit2
     # 2) nearest by route
     rest = g[~hit]
     if len(rest):

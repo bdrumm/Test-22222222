@@ -10,6 +10,8 @@ Beyond plain table access this module answers:
 """
 from __future__ import annotations
 
+import re
+
 import io
 import zipfile
 from dataclasses import dataclass
@@ -64,6 +66,17 @@ def rt_trip_suffix(trip_id: str) -> str:
     if len(parts) >= 3:
         return "_".join(parts[-2:])
     return trip_id
+
+
+_STEM_RE = re.compile(r"^(\d+_[^.]+\.\.?[NS])")
+
+
+def rt_trip_stem(trip_id: str) -> str:
+    """The suffix without its path code (``020300_L..N01R`` -> ``020300_L..N``). Some feeds (the L, some
+    G and 7 trips) publish realtime ids without the path code, so matching falls back to the stem."""
+    suffix = rt_trip_suffix(trip_id)
+    m = _STEM_RE.match(suffix)
+    return m.group(1) if m else suffix
 
 
 def origin_time_seconds(trip_id: str) -> int | None:
@@ -159,8 +172,10 @@ class StaticGTFS:
         self._parent = self.stops.set_index("stop_id")["parent_station"].to_dict()
         # realtime trip-id suffix -> [(static trip_id, service_id)] for O(1) matching
         self._by_suffix: dict[str, list[tuple[str, str]]] = {}
+        self._by_stem: dict[str, list[tuple[str, str]]] = {}
         for tid, sid in zip(self.trips["trip_id"], self.trips["service_id"]):
             self._by_suffix.setdefault(rt_trip_suffix(tid), []).append((tid, sid))
+            self._by_stem.setdefault(rt_trip_stem(tid), []).append((tid, sid))
         self._st_by_trip: dict[str, dict[str, int]] | None = None
         self._service_cache: dict[date, set[str]] = {}
 
@@ -289,6 +304,9 @@ class StaticGTFS:
             active = self.active_services(service_date)
             self._service_cache[service_date] = active
         for tid, sid in self._by_suffix.get(suffix, []):
+            if sid in active:
+                return tid
+        for tid, sid in self._by_stem.get(rt_trip_stem(rt_trip_id), []):   # realtime id without a path code
             if sid in active:
                 return tid
         return None
