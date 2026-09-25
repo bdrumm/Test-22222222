@@ -134,7 +134,8 @@ export function computeBoard(schedule, feeds, now) {
       const sched = matchSched(tgt.sched, tu.trip.trip_id, route, eta);
       const veh = vehicles.get(key);
       const line = schedule.lines[`${route}_${tgt.direction}`];
-      const started = !!(veh && veh.timestamp) || i > 0;
+      // NYCT publishes a timestamped vehicle for every train in service; an unassigned trip is still in the yard
+      const started = !!(veh && veh.timestamp) || tu.trip.is_assigned === true || (tu.trip.is_assigned == null && i > 0);
       const pos = veh && veh.status ? describePosition(veh, line, tgt.stop_id, sched, now, C) : null;
       const lateness = sched != null ? eta - sched : null;
       let corroboration = "position_unknown", effective = lateness;
