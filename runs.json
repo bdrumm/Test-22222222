@@ -433,5 +433,59 @@
 "times-sq-s": "611",
 "jay-st-n": "636"
 }
+},
+{
+"ts": 1790299236.2251685,
+"iso": "2026-09-24T21:20:36.225171-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace"
+],
+"polls": 101,
+"errors": 0,
+"arrivals": 481,
+"flushed": 61,
+"alerts": 857,
+"duration_sec": 3001,
+"written": {
+"2026-09-24": 976
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 101,
+"first_ts": 1790296235.3607008,
+"last_ts": 1790299235.373011,
+"arrivals": 319
+},
+{
+"feed": "ace",
+"polls": 101,
+"first_ts": 1790296235.3607008,
+"last_ts": 1790299235.373011,
+"arrivals": 104
+}
+]
+},
+{
+"ts": 1790299243.8455887,
+"iso": "2026-09-24T21:20:43.845589-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:5951",
+"delay_incidents:7805",
+"major_incidents:1187",
+"customer_journey:1200",
+"stations:496",
+"ridership_hourly:3672",
+"weather_daily:61"
+],
+"failed": {},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636"
+}
 }
 ]
