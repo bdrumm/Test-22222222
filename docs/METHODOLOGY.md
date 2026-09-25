@@ -512,7 +512,12 @@ nearest scheduled trip of the same route within 15 minutes (shown with a
 derive the schedule at any stop from the canonical running times, and draws
 every started train of the line: its reported position as a dot (between
 stops when in transit), the feed's projected trajectory, and holds, stalls
-and feed-optimistic corrections. The trip planner's live section chains each configured journey from the
+and feed-optimistic corrections. The Mercury service-alerts document allows cross-origin requests as well; the
+Live page's board fetches it every two minutes and applies the same
+planned / notice / delay classification as `sources/alerts.py`, showing the
+unplanned delay alerts active now.
+
+The trip planner's live section chains each configured journey from the
 feeds alone: the next train of the leg's routes at the origin (started trains
 only), its own ETA at the leg's destination, the transfer walk, then the next
 train at the transfer stop; legs whose train is holding or stalled and

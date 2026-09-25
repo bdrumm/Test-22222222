@@ -241,6 +241,34 @@ export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
     n_feed_optimistic: trains.filter(t => t.corroboration === "feed_optimistic").length };
 }
 
+// ---------------------------------------------------------------- service alerts (Mercury JSON), same rules as sources/alerts.py
+const MERCURY_KEY = "transit_realtime.mercury_alert";
+const PLANNED_TYPE_PREFIX = ["planned", "weekend service", "buses replace trains", "no midday service", "no weekend service", "special schedule"];
+const NOTICE_TYPES = ["boarding change", "station notice", "extra service", "elevator", "escalator", "accessibility", "service reminder", "shuttle bus"];
+const tText = (field, lang = "en") => { const trs = (field && field.translation) || []; const t = trs.find(x => x.language === lang) || trs[0]; return t ? (t.text || "") : ""; };
+export const alertKind = (type, header) => { const at = (type || "").toLowerCase(); if (PLANNED_TYPE_PREFIX.some(p => at.startsWith(p)) || /planned work|scheduled maintenance/.test((header || "").toLowerCase())) return "planned"; if (NOTICE_TYPES.some(p => at.startsWith(p))) return "notice"; return "delay"; };
+
+/** Alerts active now (or open-ended and updated within 3 h): [{id, type, kind, header, routes, start, end}] */
+export function parseAlerts(doc, now) {
+  const out = [];
+  for (const ent of (doc && doc.entity) || []) {
+    const a = ent.alert; if (!a) continue;
+    const merc = a[MERCURY_KEY] || {}; const header = tText(a.header_text); const type = merc.alert_type || null;
+    const routes = [...new Set((a.informed_entity || []).map(ie => ie.route_id).filter(Boolean))].sort();
+    const updated = merc.updated_at != null ? Number(merc.updated_at) : null;
+    const periods = (a.active_period && a.active_period.length) ? a.active_period : [{}];
+    for (const p of periods) {
+      const start = p.start != null ? Number(p.start) : null, end = p.end != null ? Number(p.end) : null;
+      const endEff = end != null ? end : (updated != null ? updated + 3 * 3600 : (start != null ? start + 3 * 3600 : null));
+      if ((start != null && start > now) || (endEff != null && endEff < now)) continue;
+      out.push({ id: ent.id, type, kind: alertKind(type, header), header, routes, start, end, updated });
+    }
+  }
+  // unplanned delays first, then planned, then notices; newest first within a kind
+  const rank = { delay: 0, planned: 1, notice: 2 };
+  return out.sort((x, y) => rank[x.kind] - rank[y.kind] || (y.start || 0) - (x.start || 0));
+}
+
 /** Feeds needed for the configured journeys. */
 export const journeyFeeds = schedule => [...new Set((schedule.journeys || []).flatMap(j => j.legs.flatMap(l => l.routes.map(r => (schedule.route_feeds || {})[r]))).filter(Boolean))];
 
@@ -302,7 +330,7 @@ export function planJourneys(schedule, feeds, now, maxOptions = 4) {
 /** Poll the feeds every intervalMs and hand computed boards to onUpdate(board, schedule, feeds).
  *  feedKeys limits which feeds are polled (default: the feeds the monitored platforms need). */
 export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, fetchImpl = (u, o) => fetch(u, o), feedKeys = null }) {
-  let timer = null, schedule = null, running = false, busy = false;
+  let timer = null, schedule = null, running = false, busy = false, ticks = 0, alerts = null, alertsError = null;
   async function tick() {
     if (busy) return; busy = true;
     try {
@@ -318,6 +346,12 @@ export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, 
         info.push({ key, feed_ts: fd.timestamp, trips: fd.trips.length, vehicles: fd.vehicles.length, ms: Date.now() - t0 });
       }));
       const board = computeBoard(schedule, feeds, now); board.feeds = info.sort((a, b) => a.key.localeCompare(b.key)); board.schedule_generated_at = schedule.generated_at; board.demo = !!schedule.demo_now;
+      if (schedule.alerts_url && !schedule.demo_now && (ticks % 4 === 0 || alerts == null)) {   // the alerts document is large: every 2 minutes
+        try { const r = await fetchImpl(schedule.alerts_url, { cache: "no-store" }); if (r.ok) { alerts = parseAlerts(await r.json(), now); alertsError = null; } else alertsError = `HTTP ${r.status}`; }
+        catch (e) { alertsError = String(e.message || e); }
+      }
+      ticks++;
+      board.alerts = alerts; board.alerts_error = alertsError;
       await onUpdate(board, schedule, feeds);
     } catch (e) { if (onError) onError(e); }
     finally { busy = false; }

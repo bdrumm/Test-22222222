@@ -517,6 +517,13 @@ function renderClientBoard(box, board, schedule) {
       posFlags(h("td", "small", null, row), a.position, a.corroboration, a);
     });
   }
+  if (board.alerts && board.alerts.length) {
+    const al = h("div", "card", null, box);
+    const delays = board.alerts.filter(x => x.kind === "delay");
+    h("div", "row between", null, al).append(Object.assign(h("strong", null, `Service alerts now: ${delays.length} unplanned, ${board.alerts.length - delays.length} planned or notices`), {}));
+    delays.slice(0, 8).forEach(x => { const row = h("div", "rec", null, al); const rc = h("div", null, null, row); x.routes.forEach(r => routeBullet(r, rc)); const bd = h("div", null, null, row); h("div", "small", x.header, bd); h("div", "why", `${x.type || ""}${x.start ? ` · since ${hhmm(x.start)}` : ""}`, bd); });
+    if (!delays.length) h("div", "small secondary", "No unplanned delay alert is active.", al);
+  } else if (board.alerts_error) h("div", "tiny muted", `Service alerts could not be fetched in the browser (${board.alerts_error}); the snapshot below lists them.`, box);
   h("p", "tiny muted", `Computed in this browser from the GTFS-Realtime trip updates and vehicle positions (schedule extract from ${(schedule.generated_at || "").slice(0, 16).replace("T", " ")}, service date ${schedule.service_date}). "vs schedule" compares the feed's ETA with the timetable; "feed optimistic" means the train's reported position proves it later than its ETA implies (the arrow shows the corrected lateness); "holding" = stopped ≥ ${((C.hold_sec || 150) / 60).toFixed(1)} min, "stalled" = in transit ${((C.stall_slack_sec || 120) / 60).toFixed(0)} min longer than the scheduled run. The "if hold persists" column adds ${((C.hold_extra_sec || 600) / 60).toFixed(0)} min to held trains and keeps followers of the same route ≥ ${C.min_headway_sec || 90} s behind their leader.`, box);
 }
 

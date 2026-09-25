@@ -114,3 +114,28 @@ def test_js_planner_chains_legs_from_the_feed(static, tmp_path):
     assert j["options"] == sorted(j["options"], key=lambda o: o["arrive_ts"])
     if any(l["trip_id"] == held for o in j["options"] for l in o["legs"]):
         assert any(l["holding"] for o in j["options"] for l in o["legs"] if l["trip_id"] == held)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_js_alert_parser_matches_python(tmp_path):
+    from mta_delay_insights.sources import alerts as alerts_src
+    sample = ROOT / "tests" / "fixtures" / "subway_alerts_sample.json"
+    doc = json.loads(sample.read_text())
+    df = alerts_src.alerts_frame(doc)
+    now = float(df["active_start"].dropna().median()) if df["active_start"].notna().any() else 0.0
+    active = alerts_src.alerts_active_at(df, now)
+    py_kinds = {}
+    for r in active.itertuples(index=False):
+        py_kinds[alerts_src.alert_kind(r.alert_type, r.header)] = py_kinds.get(alerts_src.alert_kind(r.alert_type, r.header), 0) + 1
+    mod = tmp_path / "rt-client.mjs"; shutil.copy(ROOT / "site" / "rt-client.js", mod)
+    (tmp_path / "h.mjs").write_text(f"""
+import {{ parseAlerts }} from "{mod.as_uri()}";
+import {{ readFileSync }} from "node:fs";
+const out = parseAlerts(JSON.parse(readFileSync({json.dumps(str(sample))}, "utf8")), {now});
+const kinds = {{}}; for (const a of out) kinds[a.kind] = (kinds[a.kind] || 0) + 1;
+console.log(JSON.stringify({{ n: out.length, kinds, first: out[0] }}));
+""")
+    res = json.loads(subprocess.run(["node", str(tmp_path / "h.mjs")], capture_output=True, text=True, check=True).stdout)
+    assert res["n"] == len(active) and res["kinds"] == py_kinds
+    assert res["first"]["kind"] == "delay" or not py_kinds.get("delay")
+    assert res["first"]["routes"] and res["first"]["header"]

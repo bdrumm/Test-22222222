@@ -220,7 +220,9 @@ browser (`site/rt-client.js`, no dependencies), and computes the board for
 every monitored platform: next arrivals, lateness against today's timetable
 (shipped by the build as `data/client_schedule.json`), positions, holds,
 stalls, feed-optimistic corrections, gaps and bunching, and the "if the hold
-persists" ETAs with the same rules the Python side uses. The pipeline snapshot
+persists" ETAs with the same rules the Python side uses, plus the active
+service alerts (the alerts document allows browser requests too, polled every
+two minutes). The pipeline snapshot
 below it still carries the model forecasts and downstream effects. The same
 toggle on the Line view draws every train of the line from the feeds every
 30 seconds: reported positions as dots on the Marey chart (green moving, amber
