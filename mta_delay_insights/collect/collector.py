@@ -13,7 +13,7 @@ from ..sources import alerts as alerts_src
 from ..sources import gtfs_realtime as rt
 from ..storage.db import Store
 from .arrivals import ArrivalTracker
-from .dwells import DwellTracker
+from .dwells import DwellTracker, SegmentTracker, SEGMENT_RUN_COLUMNS
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,8 @@ class Collector:
         self.raw_dir = Path(raw_dir) if raw_dir else None
         self.trackers = {f: ArrivalTracker(self.stops_of_interest, poll_interval_sec, sample_stops=self.sample_stops) for f in self.feeds}
         self.dwell_trackers = {f: DwellTracker(self.stops_of_interest) for f in self.feeds}
+        self.segment_trackers = {f: SegmentTracker() for f in self.feeds}
+        self.segment_rows: list[dict] = []
         self.polls = 0
         self.last_feed_bytes: dict[str, bytes] = {}
         self.last_alerts: dict | None = None
@@ -59,6 +61,10 @@ class Collector:
         if self.track_dwells:
             dt = self.dwell_trackers.setdefault(feed_key, DwellTracker(self.stops_of_interest))
             self.store.insert_dwells(dt.update(vp, snapshot_ts))
+            sg = self.segment_trackers.setdefault(feed_key, SegmentTracker())
+            runs = sg.update(vp, snapshot_ts)
+            if not runs.empty:
+                self.segment_rows.extend(runs.to_dict(orient="records"))
         feed_ts = float(msg.header.timestamp) if msg.header.HasField("timestamp") else None
         self.store.insert_snapshot(feed_key, snapshot_ts, feed_ts, int(tu["trip_id"].nunique()), len(vp), len(arrivals))
         if self.raw_dir:
@@ -111,6 +117,12 @@ class Collector:
             if duration_sec and time.time() - start >= duration_sec:
                 break
             time.sleep(max(0.0, self.poll_interval_sec - (time.time() - t0)))
+        return out
+
+    def take_segment_runs(self) -> pd.DataFrame:
+        """Realized inter-station runs seen so far (and forget them)."""
+        out = pd.DataFrame(self.segment_rows, columns=SEGMENT_RUN_COLUMNS)
+        self.segment_rows = []
         return out
 
     def flush(self, now: float | None = None) -> int:

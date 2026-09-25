@@ -28,7 +28,7 @@ from .. import config
 NY_TZ = ZoneInfo("America/New_York")
 
 REQUIRED_FILES = ["stops.txt", "routes.txt", "trips.txt", "stop_times.txt"]
-OPTIONAL_FILES = ["calendar.txt", "calendar_dates.txt", "transfers.txt", "feed_info.txt"]
+OPTIONAL_FILES = ["calendar.txt", "calendar_dates.txt", "transfers.txt", "feed_info.txt", "shapes.txt"]
 
 
 def gtfs_time_to_seconds(value: str) -> int:
@@ -68,6 +68,19 @@ def rt_trip_suffix(trip_id: str) -> str:
     return trip_id
 
 
+def haversine_m(a: tuple, b: tuple) -> float:
+    """Great-circle distance in metres between (lat, lon) pairs."""
+    try:
+        la1, lo1, la2, lo2 = map(float, (a[0], a[1], b[0], b[1]))
+    except (TypeError, ValueError):
+        return float("nan")
+    if any(v != v for v in (la1, lo1, la2, lo2)):
+        return float("nan")
+    p1, p2 = np.radians(la1), np.radians(la2); dphi = p2 - p1; dl = np.radians(lo2 - lo1)
+    h = np.sin(dphi / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
+    return float(2 * 6_371_000.0 * np.arcsin(np.sqrt(h)))
+
+
 _STEM_RE = re.compile(r"^(\d+_[^.]+\.\.?[NS])")
 
 
@@ -97,6 +110,7 @@ class StaticGTFS:
     calendar: pd.DataFrame
     calendar_dates: pd.DataFrame
     transfers: pd.DataFrame | None = None
+    shapes: pd.DataFrame | None = None
     feed_info: pd.DataFrame | None = None
 
     # ------------------------------------------------------------------ #
@@ -161,7 +175,7 @@ class StaticGTFS:
             "saturday", "sunday", "start_date", "end_date"]))
         cald = t.get("calendar_dates.txt", pd.DataFrame(columns=["service_id", "date", "exception_type"]))
         obj = cls(stops=stops, routes=routes, trips=trips, stop_times=st, calendar=cal,
-                  calendar_dates=cald, transfers=t.get("transfers.txt"), feed_info=t.get("feed_info.txt"))
+                  calendar_dates=cald, transfers=t.get("transfers.txt"), feed_info=t.get("feed_info.txt"), shapes=t.get("shapes.txt"))
         obj._build_indexes()
         return obj
 
@@ -179,6 +193,8 @@ class StaticGTFS:
         self._st_by_trip: dict[str, dict[str, int]] | None = None
         self._service_cache: dict[date, set[str]] = {}
         self._nearest_cache: dict[tuple, tuple[list[str], np.ndarray]] = {}
+        self._seg_cache: dict[tuple, list] = {}
+        self._run_cache: dict[tuple, list] = {}
 
     def _trip_stop_index(self) -> dict[str, dict[str, int]]:
         if self._st_by_trip is None:
@@ -356,6 +372,99 @@ class StaticGTFS:
         top = counts[counts == counts.max()].index
         best = max(top, key=len)
         return list(best)
+
+    def _pattern_trips(self, route_id: str, direction: str, seq: list[str], limit: int = 60) -> list[str]:
+        """Trip ids of the route/direction whose stop pattern is exactly the canonical sequence."""
+        trips = self.trips[self.trips["route_id"] == route_id]
+        trips = trips[trips["trip_id"].map(direction_from_trip_id) == direction.upper()]
+        idx = self._trip_stop_index()
+        want = tuple(seq)
+        out = []
+        for tid in trips["trip_id"]:
+            st = idx.get(tid)
+            if st and len(st) == len(want) and tuple(sorted(st, key=st.get)) == want:
+                out.append(tid)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def canonical_run_sec(self, route_id: str, direction: str) -> list[float | None]:
+        """Median scheduled running time between consecutive canonical stops (len = stops - 1)."""
+        key = (route_id, direction.upper())
+        if key in self._run_cache:
+            return self._run_cache[key]
+        seq = self.canonical_stop_sequence(route_id, direction)
+        out: list[float | None] = []
+        if len(seq) >= 2:
+            idx = self._trip_stop_index()
+            tids = self._pattern_trips(route_id, direction, seq)
+            for a, b in zip(seq, seq[1:]):
+                vals = [idx[t][b] - idx[t][a] for t in tids if idx[t][b] > idx[t][a]]
+                out.append(float(np.median(vals)) if vals else None)
+        self._run_cache[key] = out
+        return out
+
+    def segment_lengths(self, route_id: str, direction: str) -> list[float | None]:
+        """Track distance in metres between consecutive canonical stops, from shapes.txt when the feed has it
+        (stops projected onto the trip's shape), else the great-circle distance between the stops."""
+        key = (route_id, direction.upper())
+        if key in self._seg_cache:
+            return self._seg_cache[key]
+        seq = self.canonical_stop_sequence(route_id, direction)
+        coords = self.stops.set_index("stop_id")[["stop_lat", "stop_lon"]] if "stop_lat" in self.stops else None
+        out: list[float | None] = []
+        if len(seq) >= 2 and coords is not None:
+            pts = [tuple(coords.loc[s]) if s in coords.index else (np.nan, np.nan) for s in seq]
+            gc = [haversine_m(pts[i], pts[i + 1]) for i in range(len(seq) - 1)]
+            along = self._along_shape(route_id, direction, seq, pts)
+            for i in range(len(seq) - 1):
+                d = None
+                if along is not None and along[i] is not None and along[i + 1] is not None and along[i + 1] > along[i]:
+                    d = along[i + 1] - along[i]
+                    if gc[i] and d < gc[i] * 0.9:     # a projection glitch: the track cannot be shorter than the crow flies
+                        d = None
+                out.append(float(d) if d is not None else (float(gc[i]) if gc[i] == gc[i] else None))
+        self._seg_cache[key] = out
+        return out
+
+    def _along_shape(self, route_id: str, direction: str, seq: list[str], pts: list) -> list | None:
+        if self.shapes is None or self.shapes.empty or "shape_id" not in self.trips.columns:
+            return None
+        tids = self._pattern_trips(route_id, direction, seq, limit=20)
+        if not tids:
+            return None
+        sid = self.trips[self.trips["trip_id"].isin(tids)]["shape_id"].dropna().mode()
+        if sid.empty:
+            return None
+        sh = self.shapes[self.shapes["shape_id"] == sid.iloc[0]].copy()
+        if sh.empty:
+            return None
+        sh["shape_pt_sequence"] = pd.to_numeric(sh["shape_pt_sequence"], errors="coerce")
+        sh = sh.sort_values("shape_pt_sequence")
+        lat = pd.to_numeric(sh["shape_pt_lat"], errors="coerce").to_numpy(); lon = pd.to_numeric(sh["shape_pt_lon"], errors="coerce").to_numpy()
+        if len(lat) < 2:
+            return None
+        # local planar metres around the shape's centroid
+        lat0 = float(np.nanmean(lat)); kx = 111_320.0 * np.cos(np.radians(lat0)); ky = 110_540.0
+        x = (lon - float(np.nanmean(lon))) * kx; y = (lat - lat0) * ky
+        seg = np.hypot(np.diff(x), np.diff(y)); cum = np.concatenate([[0.0], np.cumsum(seg)])
+        out = []
+        for plat, plon in pts:
+            if plat != plat:
+                out.append(None); continue
+            px = (plon - float(np.nanmean(lon))) * kx; py = (plat - lat0) * ky
+            ax, ay, bx, by = x[:-1], y[:-1], x[1:], y[1:]
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            t = np.where(L2 > 0, ((px - ax) * dx + (py - ay) * dy) / np.where(L2 > 0, L2, 1), 0.0)
+            t = np.clip(t, 0.0, 1.0)
+            qx, qy = ax + t * dx, ay + t * dy
+            d2 = (px - qx) ** 2 + (py - qy) ** 2
+            i = int(np.argmin(d2))
+            if d2[i] > 300.0 ** 2:      # more than 300 m from the shape: not this track
+                out.append(None); continue
+            out.append(float(cum[i] + t[i] * seg[i]))
+        return out
 
     def upstream_stops(self, route_id: str, direction: str, stop_id: str, n: int = 6) -> list[str]:
         """Up to ``n`` stops immediately preceding ``stop_id`` on the canonical pattern

@@ -131,7 +131,8 @@ def main(argv=None) -> int:
     from mta_delay_insights.collect.dwells import HOLD_SEC
     all_dwells = store.dwells()
     n_holds = lib.save_holds(data_dir, all_dwells[all_dwells["dwell_sec"] >= HOLD_SEC]) if not all_dwells.empty else {}
-    logging.info("eta samples: %s, dwells: %s, holds: %s", n_samples, n_dwells, n_holds)
+    n_runs = lib.save_segment_runs(data_dir, col.take_segment_runs())
+    logging.info("eta samples: %s, dwells: %s, holds: %s, segment runs: %s", n_samples, n_dwells, n_holds, n_runs)
     n_alerts = lib.save_alerts(data_dir, alerts, time.time())
     n_eval = 0
     if args.live_every > 0 and state["proj"]:

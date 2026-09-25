@@ -588,6 +588,36 @@ Waits at either terminal of a route are left out (counted separately as
 terminal waits); other relay points still appear, so the stop table is read
 against the line's topology.
 
+## 9m. Segment run times and speeds
+
+The NYCT vehicle entity has no `position` (latitude, longitude, bearing,
+speed) at all; checked on live feeds, every vehicle carries only
+`current_status`, `stop_id`, sometimes `current_stop_sequence`, and a
+`timestamp` that marks when the current state began. Hence:
+
+* A train's location between stations is inferred, not measured: elapsed
+  time since the state began over the scheduled running time of the segment
+  (capped short of the next stop until the feed confirms the arrival).
+* The state timestamps are exact, so a transit state followed by the stop
+  gives the segment's realized run time to the second. The `SegmentTracker`
+  (collector) and the browser's observation history both emit
+  `(from_stop, to_stop, depart_ts, arrive_ts, run_sec)` on that transition;
+  the collector requires the earlier stop to have been observed, the browser
+  falls back to the line's previous stop (flagged as assumed).
+* Track distances between consecutive canonical stops come from
+  `shapes.txt`: the stops are projected onto the shape of the trips with the
+  canonical pattern and the along-track distance differenced; the
+  great-circle distance is the fallback (and a floor: a projection shorter
+  than the crow flies is rejected). Scheduled running times per segment are
+  the median over trips of the canonical pattern.
+* `analysis/segments.py` summarises `segment_runs/` (last 14 days) per
+  (route, direction, from, to): count, median and p90 run, scheduled run,
+  their ratio, distance, realized and scheduled speed, and medians by hour
+  (three runs minimum); segments with a ratio ≥ 1.2 are listed as slow. The
+  Travel diagram's km/h layer shows the realized speed arriving at each stop
+  for the current hour (scheduled speeds until runs exist), and the path
+  insights name the slowest measured segment.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

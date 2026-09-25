@@ -72,6 +72,7 @@ def test_client_schedule_export(static, tmp_path):
     assert tgt["sched"] == sorted(tgt["sched"], key=lambda x: x[2]) and {x[1] for x in tgt["sched"]} == {"6", "4"}
     ln = cs["lines"]["6_N"]
     assert ln["stops"] and len(ln["run_sec"]) == len(ln["stops"]) - 1 and all(r is None or r > 0 for r in ln["run_sec"])
+    assert len(ln["dist_m"]) == len(ln["stops"]) - 1 and all(d and 200 < d < 3000 for d in ln["dist_m"]), "segment lengths from the stop coordinates"
     assert (tmp_path / "client_schedule.json").exists()
     cl = json.loads((tmp_path / "client_lines.json").read_text())
     ls = cl["lines"]["6_N"]

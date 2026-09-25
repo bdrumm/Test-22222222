@@ -192,6 +192,38 @@ export function computeBoard(schedule, feeds, now) {
 const runBetween = (line, a, b) => { let run = 0; for (let q = a; q < b; q++) { if (line.run_sec[q] == null) return null; run += line.run_sec[q]; } return run; };
 const vehKey = trip => `${trip.start_date || ""}|${trip.trip_id}`;
 
+// Vehicle observations across polls (page lifetime): the feed timestamp is the moment a state began, so seeing
+// "in transit to X" (departure) and later "stopped at X" (arrival) times the segment exactly.
+const trainHistory = new Map();
+export function observeVehicle(key, veh, now, line = null) {
+  if (!veh || !veh.stop_id || !veh.timestamp || veh.timestamp > now + 60) return null;
+  const status = veh.status || "IN_TRANSIT_TO";
+  const prev = trainHistory.get(key);
+  let lastRun = prev ? prev.lastRun : null, lastStopped = prev ? prev.lastStopped : null;
+  if (prev && status === "STOPPED_AT" && prev.status !== "STOPPED_AT" && prev.stop_id === veh.stop_id && veh.timestamp > prev.ts) {
+    // the departure stop: the last stop we saw it stopped at, else the line's previous stop (the timestamps are exact either way)
+    let from = prev.lastStopped && prev.lastStopped !== veh.stop_id ? prev.lastStopped : null, assumed = false;
+    if (!from && line) { const j = line.stops.indexOf(veh.stop_id); if (j > 0) { from = line.stops[j - 1]; assumed = true; } }
+    if (from) lastRun = { from_stop: from, to_stop: veh.stop_id, depart_ts: prev.ts, arrive_ts: veh.timestamp, run_sec: veh.timestamp - prev.ts, assumed_from: assumed };
+  }
+  if (status === "STOPPED_AT") lastStopped = veh.stop_id; else if (prev && prev.status === "STOPPED_AT" && prev.stop_id !== veh.stop_id) lastStopped = prev.stop_id;
+  trainHistory.set(key, { status, stop_id: veh.stop_id, ts: veh.timestamp, lastStopped, lastRun });
+  return lastRun;
+}
+/** Geometry of the segment a train is on: distance, scheduled run and speed, dead-reckoned metres covered. */
+export function segmentInfo(line, pos, since) {
+  if (!line || !pos || pos.stop_idx == null) return null;
+  const j = pos.stop_idx;
+  if (pos.status === "STOPPED_AT" || j <= 0) return null;
+  const dist = (line.dist_m || [])[j - 1], run = line.run_sec[j - 1];
+  if (!dist) return null;
+  const frac = run ? Math.min(0.96, (since || 0) / run) : null;
+  return { from_idx: j - 1, to_idx: j, dist_m: dist, sched_run_sec: run || null, sched_speed_kmh: run ? dist / run * 3.6 : null, elapsed_sec: since || 0, covered_m: frac == null ? null : dist * frac,
+    avg_speed_so_far_kmh: since > 0 && frac != null ? Math.min(dist, dist * frac) / since * 3.6 : null };
+}
+const runSpeed = (line, lastRun) => { if (!lastRun || !line) return null; const a = line.stops.indexOf(lastRun.from_stop), b = line.stops.indexOf(lastRun.to_stop); if (a < 0 || b !== a + 1) return { ...lastRun }; const d = (line.dist_m || [])[a];
+  return { ...lastRun, from_idx: a, to_idx: b, dist_m: d || null, speed_kmh: d ? d / lastRun.run_sec * 3.6 : null, sched_run_sec: line.run_sec[a] || null, sched_speed_kmh: d && line.run_sec[a] ? d / line.run_sec[a] * 3.6 : null }; };
+
 /** Every started train of one line right now: feed projection, reported position, lateness, holds and stalls.
  *  lineSched is the entry of client_lines.json for the same key ([stem, last canonical stop idx, scheduled ts] per trip). */
 export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
@@ -209,6 +241,7 @@ export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
     const veh = vehicles.get(vehKey(tu.trip));
     const hasPos = !!(veh && veh.stop_id && veh.timestamp && veh.timestamp <= now + 60);
     if (hasPos && !veh.status) veh.status = "IN_TRANSIT_TO";
+    const lastRun = hasPos ? observeVehicle(vehKey(tu.trip), veh, now, line) : null;
     if (!(hasPos || tu.trip.is_assigned === true)) continue;
     const [j, eta] = points[0];
     // schedule at the next stop from the trip's scheduled time at its last canonical stop
@@ -234,7 +267,8 @@ export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
       if (plate != null && lateness != null) { corroboration = plate - lateness > 60 ? "feed_optimistic" : "agree"; effective = Math.max(lateness, plate); }
     }
     trains.push({ trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, points, next_idx: j, next_name: line.names[j], eta_ts: eta, sched_ts: sched, sched_method: schedMethod, lateness_sec: lateness,
-      effective_lateness_sec: effective, position: pos, corroboration, track_changed: !!(tu.stops[0].actual_track && tu.stops[0].sched_track && tu.stops[0].actual_track !== tu.stops[0].sched_track) });
+      effective_lateness_sec: effective, position: pos, corroboration, track_changed: !!(tu.stops[0].actual_track && tu.stops[0].sched_track && tu.stops[0].actual_track !== tu.stops[0].sched_track),
+      segment: pos ? segmentInfo(line, pos, pos.since_sec) : null, last_run: runSpeed(line, lastRun) });
   }
   trains.sort((a, b) => b.next_idx - a.next_idx || a.eta_ts - b.eta_ts);
   return { route, direction, now, stops: line.stops.map((s, i) => ({ stop_id: s, name: line.names[i] })), trains,
@@ -376,18 +410,21 @@ export function enumeratePaths(schedule, index, oId, dId, maxOptions = 8) {
   return out.sort((a, b) => a.sched_sec - b.sched_sec).slice(0, maxOptions);
 }
 
-/** Stations reachable from station oId directly or with one transfer: Map(stationId -> "direct" | "transfer"). */
+/** Stations reachable from station oId directly or with one transfer:
+ *  Map(stationId -> {how: "direct"|"transfer", direct: [routes], via: [{r1, r2s: [routes], station}]}). */
 export function reachableStations(schedule, index, oId) {
   const { stations, stationOf } = index; const o = stations.get(oId); const out = new Map(); if (!o) return out;
-  const mark = (sid, how) => { const st = stationOf(sid); if (st === oId) return; if (how === "direct" || !out.has(st)) out.set(st, how); };
+  const entry = st => { let e = out.get(st); if (!e) { e = { how: "transfer", direct: [], via: new Map() }; out.set(st, e); } return e; };
   for (const m1 of o.members) {
     const L1 = schedule.lines[m1.key];
     for (let x = m1.idx + 1; x < L1.stops.length; x++) {
-      mark(L1.stops[x], "direct");
-      for (const opt of (schedule.transfers || {})[L1.stops[x]] || []) { if (opt.line.split("_")[0] === m1.route) continue; const L2 = schedule.lines[opt.line]; const x2 = L2 ? L2.stops.indexOf(opt.stop) : -1; if (x2 < 0) continue;
-        for (let y = x2 + 1; y < L2.stops.length; y++) mark(L2.stops[y], "transfer"); }
+      const st = stationOf(L1.stops[x]); if (st !== oId) { const e = entry(st); e.how = "direct"; if (!e.direct.includes(m1.route)) e.direct.push(m1.route); }
+      const xName = stations.get(st) ? stations.get(st).name : L1.stops[x];
+      for (const opt of (schedule.transfers || {})[L1.stops[x]] || []) { const r2 = opt.line.split("_")[0]; if (r2 === m1.route) continue; const L2 = schedule.lines[opt.line]; const x2 = L2 ? L2.stops.indexOf(opt.stop) : -1; if (x2 < 0) continue;
+        for (let y = x2 + 1; y < L2.stops.length; y++) { const st2 = stationOf(L2.stops[y]); if (st2 === oId || st2 === st) continue; const e = entry(st2); const k = `${m1.route}|${st}`; let v = e.via.get(k); if (!v) { v = { r1: m1.route, r2s: [], station: xName }; e.via.set(k, v); } if (!v.r2s.includes(r2)) v.r2s.push(r2); } }
     }
   }
+  for (const e of out.values()) { e.via = [...e.via.values()].filter(v => !e.direct.includes(v.r1)); e.direct.sort(); }
   return out;
 }
 

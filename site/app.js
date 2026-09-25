@@ -1120,6 +1120,35 @@ const stateColor = s => s === "holding" || s === "stalled" ? "var(--status-criti
 const mmss = s => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const setTile = (t, value, delta) => { t.querySelector(".value").textContent = value; let d = t.querySelector(".delta"); if (!d) d = h("div", "delta", null, t); d.textContent = delta || ""; };
 const bullets = (routes, parent) => routes.forEach(r => routeBullet(r, parent));
+const kmh = v => v == null ? "" : `${v.toFixed(0)} km/h`;
+// what we can say about a train's speed: the last completed segment (exact, from feed timestamps) or the scheduled average on the current one
+const speedText = t => { if (t.last_run && t.last_run.speed_kmh) return `last segment ${kmh(t.last_run.speed_kmh)}${t.last_run.sched_speed_kmh ? ` (sched ${kmh(t.last_run.sched_speed_kmh)})` : ""}`; if (t.segment && t.segment.sched_speed_kmh) return `~${kmh(t.segment.sched_speed_kmh)} sched · ${(t.segment.dist_m / 1000).toFixed(1)} km segment`; return ""; };
+
+// searchable dropdown: items [{id, label, search}], render(item, li) draws the row, onPick(item) on selection
+function combobox(parent, { placeholder, items, value, render, onPick, width = "280px" }) {
+  const wrap = h("div", "combo", null, parent); wrap.style.width = width;
+  const input = h("input", "combo-input", null, wrap); input.type = "text"; input.placeholder = placeholder || ""; input.autocomplete = "off"; input.setAttribute("role", "combobox"); input.setAttribute("aria-expanded", "false");
+  const list = h("ul", "combo-list", null, wrap); list.hidden = true; list.setAttribute("role", "listbox");
+  let active = -1, shown = [];
+  const current = () => items.find(it => it.id === value);
+  const show = q => { const s = (q || "").trim().toLowerCase(); shown = items.filter(it => !s || it.search.includes(s)).slice(0, 60); list.replaceChildren();
+    shown.forEach(it => { const li = h("li", it.id === value ? "sel" : "", null, list); li.setAttribute("role", "option"); render(it, li); li.addEventListener("mousedown", ev => { ev.preventDefault(); pick(it); }); });
+    if (!shown.length) h("li", "muted", "no station matches", list); list.hidden = false; input.setAttribute("aria-expanded", "true"); active = -1; };
+  const hide = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); const cur = current(); input.value = cur ? cur.label : ""; };
+  const pick = it => { value = it.id; hide(); onPick(it); };
+  input.addEventListener("focus", () => { show(""); input.select(); });
+  input.addEventListener("input", () => show(input.value));
+  input.addEventListener("blur", () => setTimeout(hide, 150));
+  input.addEventListener("keydown", ev => {
+    if (ev.key === "Escape") { hide(); return; }
+    if (list.hidden) { if (ev.key === "ArrowDown") show(input.value); return; }
+    if (ev.key === "Enter") { ev.preventDefault(); if (active >= 0 && shown[active]) pick(shown[active]); else if (shown.length === 1) pick(shown[0]); return; }
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    ev.preventDefault(); active = ev.key === "ArrowDown" ? Math.min(shown.length - 1, active + 1) : Math.max(0, active - 1);
+    [...list.children].forEach((li, i) => li.classList.toggle("active", i === active)); if (list.children[active]) list.children[active].scrollIntoView({ block: "nearest" }); });
+  const cur = current(); if (cur) input.value = cur.label;
+  return { input, wrap };
+}
 
 async function travelPage(idx, arg) {
   const root = app; root.replaceChildren();
@@ -1128,7 +1157,8 @@ async function travelPage(idx, arg) {
   const statusEl = h("div", "small secondary", "loading…", head);
   let schedule;
   try { schedule = await load("client_schedule.json"); } catch (e) { h("div", "empty", "Travel mode needs data/client_schedule.json, which the site build publishes.", root); return; }
-  const [clines, holds, trust, clim, live] = await Promise.all([load("client_lines.json").catch(() => null), load("holds.json").catch(() => null), load("eta_trust.json").catch(() => null), load("climatology.json").catch(() => null), load("live.json").catch(() => null)]);
+  const [clines, holds, trust, clim, live, segs] = await Promise.all([load("client_lines.json").catch(() => null), load("holds.json").catch(() => null), load("eta_trust.json").catch(() => null), load("climatology.json").catch(() => null), load("live.json").catch(() => null), load("segments.json").catch(() => null)]);
+  const segKey = (k, stop) => (segs && segs.by_key || {})[`${k}|${stop}`] || null;
   const lineSched = (clines && clines.lines) || {};
   const index = stationIndex(schedule);
   const stationsSorted = [...index.stations.values()].sort((a, b) => a.name.localeCompare(b.name) || a.routes.join().localeCompare(b.routes.join()));
@@ -1143,23 +1173,26 @@ async function travelPage(idx, arg) {
     if (!oId || !index.stations.has(oId)) oId = stationsSorted[0].id;
   }
   const reach = reachableStations(schedule, index, oId);
-  if (!dId || !reach.has(dId)) { dId = saved && reach.has(saved.dId) ? saved.dId : ([...reach.entries()].find(([, how]) => how === "direct") || [...reach.keys()].map(k => [k]))[0]; }
+  if (!dId || !reach.has(dId)) { dId = saved && reach.has(saved.dId) ? saved.dId : ([...reach.entries()].find(([, e]) => e.how === "direct") || [...reach.keys()].map(k => [k]))[0]; }
   try { localStorage.setItem("travel2", JSON.stringify({ oId, dId })); } catch {}
   const go = (o, d, p) => { location.hash = `#/travel/${encodeURIComponent(o)}/${d ? encodeURIComponent(d) : ""}${p ? "/" + encodeURIComponent(p) : ""}`; };
   const origin = index.stations.get(oId), dest = dId ? index.stations.get(dId) : null;
-  // controls
+  // controls: searchable station pickers; destinations say how they are reached from the origin
   const filters = h("div", "filters", null, root);
-  h("label", "small secondary", "From", filters); const selO = h("select", null, null, filters);
-  stationsSorted.forEach(s => { const o = h("option", null, stLabel(s), selO); o.value = s.id; }); selO.value = oId;
-  selO.addEventListener("change", () => go(selO.value, "", ""));
-  h("label", "small secondary", "To", filters); const selD = h("select", null, null, filters);
-  const gDirect = h("optgroup", null, null, selD); gDirect.label = "Direct"; const gXfer = h("optgroup", null, null, selD); gXfer.label = "With one transfer";
-  stationsSorted.forEach(s => { const how = reach.get(s.id); if (!how) return; const o = h("option", null, stLabel(s), how === "direct" ? gDirect : gXfer); o.value = s.id; });
-  if (dId) selD.value = dId;
-  selD.addEventListener("change", () => go(oId, selD.value, ""));
+  const stationRow = (s, li, how) => { const top = h("div", null, null, li); h("strong", null, s.name, top); top.append(" "); s.routes.forEach(r => routeBullet(r, top)); if (how) h("div", "how", how, li); };
+  const howText = e => { if (!e) return ""; if (e.direct.length) return `direct on the ${e.direct.join("/")}${e.via.length ? ` · or via ${e.via.slice(0, 2).map(v => `${v.r1} → ${v.r2s.join("/")} at ${v.station}`).join(", ")}${e.via.length > 2 ? ", …" : ""}` : ""}`;
+    return `via ${e.via.slice(0, 3).map(v => `${v.r1} → ${v.r2s.join("/")} at ${v.station}`).join(" · ")}${e.via.length > 3 ? ` · +${e.via.length - 3} more` : ""}`; };
+  h("label", "small secondary", "From", filters);
+  combobox(filters, { placeholder: "type a station…", value: oId, items: stationsSorted.map(s => ({ id: s.id, label: stLabel(s), search: `${s.name} ${s.routes.join(" ")}`.toLowerCase(), s })),
+    render: (it, li) => stationRow(it.s, li, `${it.s.routes.length} line${it.s.routes.length > 1 ? "s" : ""}`), onPick: it => { if (it.id !== oId) go(it.id, "", ""); } });
+  h("label", "small secondary", "To", filters);
+  const destItems = stationsSorted.filter(s => reach.has(s.id)).map(s => { const e = reach.get(s.id); return { id: s.id, label: stLabel(s), how: e.how, search: `${s.name} ${s.routes.join(" ")} ${e.how === "direct" ? "direct" : "transfer"} ${e.via.map(v => `${v.r1} ${v.r2s.join(" ")} ${v.station}`).join(" ")}`.toLowerCase(), s, e }; })
+    .sort((a, b) => (a.how === b.how ? 0 : a.how === "direct" ? -1 : 1) || a.s.name.localeCompare(b.s.name));
+  combobox(filters, { placeholder: "type a destination…", value: dId, items: destItems, width: "360px",
+    render: (it, li) => { stationRow(it.s, li, howText(it.e)); if (it.how !== "direct") li.classList.add("xfer"); }, onPick: it => { if (it.id !== dId) go(oId, it.id, ""); } });
   const swap = h("button", "icon-btn", "⇄ reverse", filters); swap.title = "Swap origin and destination";
   swap.addEventListener("click", () => { if (dId) go(dId, oId, ""); });
-  h("span", "small secondary", `${reach.size} stations reachable from ${origin.name}: ${[...reach.values()].filter(x => x === "direct").length} directly`, filters);
+  h("span", "small secondary", `${reach.size} stations reachable from ${origin.name}: ${[...reach.values()].filter(x => x.how === "direct").length} directly, ${[...reach.values()].filter(x => x.how !== "direct").length} with one change`, filters);
   if (!dest) { h("div", "empty", "Choose a destination.", root); return; }
   const paths = enumeratePaths(schedule, index, oId, dId, 8);
   if (!paths.length) { h("div", "empty", `No path with at most one transfer from ${origin.name} to ${dest.name} in the exported lines.`, root); return; }
@@ -1233,19 +1266,23 @@ async function travelPage(idx, arg) {
     const th = h("div", "row between", null, card); const tt = h("div", null, null, th);
     p.legs.forEach((l, li) => { if (li) tt.append(" → "); bullets(l.routes, tt); }); h("strong", null, ` ${origin.name} → ${dest.name}${p.transfer ? ` via ${p.transfer.station}` : ""}`, tt);
     const layerBox = h("div", "layers", null, th);
-    const layerOn = { typical: true, holds: !!(holds && holds.n) };
+    const layerOn = { typical: true, holds: !!(holds && holds.n), speed: true };
     const tracks = p.legs.map((l, li) => { const k = l.keys[0], line = schedule.lines[k], [fi, ti] = l.idx[k];
       const stops = line.stops.map((s, i) => ({ stop_id: s, name: line.names[i] })); const typical = stops.map((s, i) => { const v = typicalAt(k, i); return v == null ? null : Math.max(0, v); }); const hpd = stops.map(s => (holdMap.get(s.stop_id) || {}).per_day ?? null);
+      // realized speed arriving at each stop (this hour when there are enough runs, else overall), against the scheduled average
+      const speed = stops.map((s, i) => { const sg = segKey(k, s.stop_id); if (!sg || !sg.dist_m) return null; const hr = sg.by_hour_run_sec && sg.by_hour_run_sec[parts.hour]; const run = hr || sg.median_run_sec; return run ? sg.dist_m / run * 3.6 : null; });
+      const schedSpeed = stops.map((s, i) => i > 0 && line.dist_m && line.dist_m[i - 1] && line.run_sec[i - 1] ? line.dist_m[i - 1] / line.run_sec[i - 1] * 3.6 : null);
       return { key: k, keys: l.keys, stops, fromIdx: fi, toIdx: ti, startIdx: Math.max(0, fi - (li === 0 ? 5 : 4)), endIdx: ti, route: l.routes[0], routesLabel: l.routes.join("/"), color: ROUTE_COLORS[l.routes[0]] || null,
-        layersAll: [{ id: "typical", name: "typical +s", values: typical, max: Math.max(30, ...typical.map(v => v || 0)), color: "var(--series-1)", format: v => `+${v.toFixed(0)}` }, { id: "holds", name: "holds/day", values: hpd, max: Math.max(1, ...hpd.map(v => v || 0)), color: "var(--status-warning)", format: v => v.toFixed(1) }] }; });
+        layersAll: [{ id: "typical", name: "typical +s", values: typical, max: Math.max(30, ...typical.map(v => v || 0)), color: "var(--series-1)", format: v => `+${v.toFixed(0)}` }, { id: "holds", name: "holds/day", values: hpd, max: Math.max(1, ...hpd.map(v => v || 0)), color: "var(--status-warning)", format: v => v.toFixed(1) },
+          { id: "speed", name: "km/h", values: speed.some(v => v != null) ? speed : schedSpeed, max: Math.max(40, ...schedSpeed.map(v => v || 0)), color: speed.some(v => v != null) ? "var(--series-3)" : "var(--de-emphasis)", format: v => v.toFixed(0) }] }; });
     state.tracks = tracks;
     const targets = new Set((idx.targets || []).map(t => t.stop_id));
     const draw = () => { if (state.diagram) state.diagram.root.remove();
       tracks.forEach(t => { t.layers = t.layersAll.filter(L => layerOn[L.id]); });
       state.diagram = trackDiagram(card, { tracks, targets, link: p.transfer ? { from: [0, tracks[0].toIdx], to: [1, tracks[1].fromIdx], label: `walk ${minTxt(p.transfer.walk_sec)}` } : null });
       legend.remove(); card.append(legend); tickDiagram(); };
-    [["typical", "typical +s"], ["holds", "holds/day"]].forEach(([id, name]) => { const lab = h("label", null, null, layerBox); const cb = h("input", null, null, lab); cb.type = "checkbox"; cb.checked = layerOn[id]; lab.append(` ${name}`); cb.addEventListener("change", () => { layerOn[id] = cb.checked; draw(); }); });
-    const legend = h("div", "tiny muted", "Left to right in the direction of travel. Markers carry the line and glide between 30-second polls along the scheduled running time: green moving, amber stopped, red holding or stalled, grey no position; the ringed markers are the trains of the recommended itinerary (black ring: your first train, purple: the connection). ◎ monitored platform. Bars under the stops: typical time lost arriving there at this hour and holds per day.", card);
+    [["typical", "typical +s"], ["holds", "holds/day"], ["speed", segs && segs.n ? "km/h (measured)" : "km/h (scheduled)"]].forEach(([id, name]) => { const lab = h("label", null, null, layerBox); const cb = h("input", null, null, lab); cb.type = "checkbox"; cb.checked = layerOn[id]; lab.append(` ${name}`); cb.addEventListener("change", () => { layerOn[id] = cb.checked; draw(); }); });
+    const legend = h("div", "tiny muted", `Left to right in the direction of travel. Markers carry the line and glide between 30-second polls along the scheduled running time: green moving, amber stopped, red holding or stalled, grey no position; the ringed markers are the trains of the recommended itinerary (black ring: your first train, purple: the connection). ◎ monitored platform. Bars under the stops: typical time lost arriving there at this hour, holds per day, and the speed on the segment arriving there (${segs && segs.n ? "measured from feed timestamps and track distances, this hour where there are enough runs" : "scheduled average from track distances; measured speeds appear once the collector has logged runs"}). The feeds carry no GPS: a train's speed on its current segment is only known once it arrives, so the label shows its last completed segment.`, card);
     draw();
     const tblCard = h("div", "card", null, detail); const tblHead = h("div", "row between", null, tblCard); h("strong", null, "Your next itineraries on this path", tblHead); state.tblAge = h("span", "small secondary", "", tblHead); state.tblBody = h("div", null, null, tblCard);
     const ins = h("div", "card", null, detail); h("strong", null, "What our data says about this path", ins); const ul = h("ul", "small secondary", null, ins);
@@ -1254,6 +1291,9 @@ async function travelPage(idx, arg) {
       if (worst[0] && worst[0][0] > 0) h("li", null, `${l.routes.join("/")}: at this hour trains lose the most time arriving at ${line.names[worst[0][1]]} (+${worst[0][0].toFixed(0)} s per train); the stretch typically ${l.typical_sec >= 0 ? "loses" : "gains"} ${Math.abs(l.typical_sec).toFixed(0)} s in total.`, ul);
       const hw = []; for (let i = fi; i <= ti; i++) { const hx = holdMap.get(line.stops[i]); if (hx) hw.push([hx.per_day, i, hx]); } hw.sort((a, b) => b[0] - a[0]);
       if (hw[0]) h("li", null, `${l.routes.join("/")}: trains get held most at ${line.names[hw[0][1]]} (${hw[0][2].per_day.toFixed(1)} holds/day, median ${(hw[0][2].median_sec / 60).toFixed(1)} min${hw[0][2].worst_hours && hw[0][2].worst_hours.length ? `, mostly around ${hw[0][2].worst_hours.map(x => `${String(x).padStart(2, "0")}:00`).join(", ")}` : ""}).`, ul);
+      const slow = []; for (let i = fi + 1; i <= ti; i++) { const sg = segKey(k, line.stops[i]); if (sg && sg.ratio && sg.consecutive) slow.push(sg); } slow.sort((a, b) => b.ratio - a.ratio);
+      if (slow[0] && slow[0].ratio >= 1.15) h("li", null, `${l.routes[0]}: the slowest measured segment is ${slow[0].from_name} → ${slow[0].to_name}, ${kmh(slow[0].speed_kmh)} against a scheduled ${kmh(slow[0].sched_speed_kmh)} (${((slow[0].ratio - 1) * 100).toFixed(0)}% longer than planned over ${slow[0].n} runs).`, ul);
+      else if (slow.length) h("li", null, `${l.routes[0]}: measured running times on this stretch are within ${((Math.max(...slow.map(x => x.ratio)) - 1) * 100).toFixed(0)}% of schedule (${slow.reduce((a, x) => a + x.n, 0)} runs).`, ul);
       l.alerts.slice(0, 2).forEach(al => h("li", null, `Alert on the ${(al.routes || []).join("/")}: ${al.header}`, ul));
       const sim = live && (live.simulation || []).find(e => `${e.route}_${e.direction}` === k); if (sim && sim.scenarios.baseline.worst_gap) { const wg = sim.scenarios.baseline.worst_gap; const nm = (sim.scenarios.baseline.stops.find(s => s.stop_id === wg.stop_id) || {}).name || wg.stop_id; h("li", null, `${l.routes[0]}: the forward simulation projects the largest gap at ${nm} (${(wg.gap_sec / 60).toFixed(0)} min around ${hhmm(wg.at_ts)})${sim.disturbed && sim.scenarios.hold_persists ? `; if the current hold persists 10 more minutes ${sim.scenarios.hold_persists.n_knock_on} trains are held back` : ""}.`, ul); }
       for (let i = fi; i <= ti; i++) { const st = live && (live.stations || []).find(s => s.stop_id === line.stops[i]); if (st) { (st.effects || []).slice(0, 1).forEach(e => h("li", null, `${line.names[i]} (monitored): ${e.text}`, ul)); if (st.scenarios && st.scenarios.headline) h("li", null, `${st.scenarios.headline}.`, ul); } } });
@@ -1278,7 +1318,7 @@ async function travelPage(idx, arg) {
     state.tracks.forEach((track, li) => { for (const k of track.keys) { const lb = state.boards[k]; if (!lb) continue; const route = k.split("_")[0];
       for (const t of lb.trains) { const p = progressOnTrack(t, k, track, age); if (!p) continue; const late = t.effective_lateness_sec ?? t.lateness_sec; const mine = best && best.legs[li] && best.legs[li].trip_id === t.trip_id;
         out.push({ id: t.trip_id, track: li, idx: p.idx, state: p.state, route, color: stateColor(p.state), emphasis: mine ? (li === 0 ? "origin" : "connection") : null,
-          label: `${(t.train_id || t.trip_id).trim().replace(/\s+/g, " ").slice(0, 16)}${mine ? (li === 0 ? " · yours" : " · connection") : ""}`, sub: `${late == null ? "" : lateTxt(late)}${p.state === "holding" ? ` · held ${mmss(p.since)}` : p.state === "stalled" ? ` · stalled ${mmss(p.since)}` : ""}` }); } } });
+          label: `${(t.train_id || t.trip_id).trim().replace(/\s+/g, " ").slice(0, 16)}${mine ? (li === 0 ? " · yours" : " · connection") : ""}`, sub: `${late == null ? "" : lateTxt(late)}${p.state === "holding" ? ` · held ${mmss(p.since)}` : p.state === "stalled" ? ` · stalled ${mmss(p.since)}` : ""}${t.last_run && t.last_run.speed_kmh ? ` · ${kmh(t.last_run.speed_kmh)}` : t.segment && t.segment.sched_speed_kmh && p.state === "moving" ? ` · ~${kmh(t.segment.sched_speed_kmh)}` : ""}` }); } } });
     state.diagram.update(out);
   }
   function tickTiles() {
@@ -1302,7 +1342,7 @@ async function travelPage(idx, arg) {
       cols.forEach(x => h("th", /^(boards|arrive|total|vs|leave)/.test(x) ? "num" : "", x, tr)); const body = h("tbody", null, null, tb);
       its.forEach((it, i) => { const row = h("tr", i === 0 ? "worse" : "", null, body); h("td", "num", mmss(Math.max(0, it.board_ts - now)), row);
         it.legs.forEach((l, li) => { if (li === 1) { const cc = h("td", "small", null, row); cc.append(`walk ${minTxt(it.walk_sec)}, wait ${minTxt(it.wait_at_transfer_sec - it.walk_sec)}`); if (it.connection_margin_sec != null && it.connection_margin_sec < 120) { const c = h("span", "status-chip st-degraded", null, cc); c.style.marginLeft = ".3rem"; h("span", "dot", null, c); c.append("tight"); } }
-          const c = h("td", "small", null, row); routeBullet(l.route, c); c.append(` ${(l.train_id || l.trip_id).trim()}`); c.append(" "); if (l.position) { const sp = h("span", "tiny muted", posText(l.position), c); sp.style.display = "block"; } posFlags(c, l.position, l.corroboration, { track_changed: l.track_changed });
+          const c = h("td", "small", null, row); routeBullet(l.route, c); c.append(` ${(l.train_id || l.trip_id).trim()}`); c.append(" "); if (l.position) { const sp = h("span", "tiny muted", `${posText(l.position)}${speedText(l) ? ` · ${speedText(l)}` : ""}`, c); sp.style.display = "block"; } posFlags(c, l.position, l.corroboration, { track_changed: l.track_changed });
           h("td", "num eta", hhmm(l.board_ts), row); h("td", "num eta", hhmm(l.arrive_ts), row); });
         h("td", "num", minTxt(it.total_sec), row); h("td", "num", it.ride_vs_sched_sec == null ? "–" : `${it.ride_vs_sched_sec >= 0 ? "+" : "−"}${Math.abs(it.ride_vs_sched_sec / 60).toFixed(0)} min`, row); });
       h("div", "tiny muted", "Times are the feed's ETAs for each train at your stops; lateness and flags come from the train's reported position. The first row is the recommended itinerary; a connection is tight when the margin after the walk is under two minutes.", state.tblBody);

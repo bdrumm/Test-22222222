@@ -67,7 +67,11 @@ def export_client_schedule(static: StaticGTFS, resolved: list[dict], journeys: l
                 for t_id, g in ev.sort_values("stop_sequence").groupby("trip_id", sort=False):
                     last = g.iloc[-1]
                     sched.append([rt_trip_stem(t_id), int(idx[last["stop_id"]]), int(last["arrival_ts"])])
-            lines[f"{r}_{d}"] = {"stops": seq, "names": [static.stop_name(s) for s in seq], "run_sec": run}
+            try:
+                dist = [None if x is None else round(x) for x in static.segment_lengths(r, d)]
+            except Exception:
+                dist = []
+            lines[f"{r}_{d}"] = {"stops": seq, "names": [static.stop_name(s) for s in seq], "run_sec": run, "dist_m": dist}
             line_sched[f"{r}_{d}"] = sorted(sched, key=lambda x: x[2])
     transfers = station_transfers(static, lines)
     all_routes = {x for v in config.SUBWAY_FEED_ROUTES.values() for x in v}

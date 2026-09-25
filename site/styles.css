@@ -213,3 +213,16 @@ table.tiny td, table.tiny th { font-size: .8rem; padding: .2rem .4rem; }
 .pathbar { position: relative; display: flex; height: 12px; margin: .4rem 0 .25rem; border-radius: 6px; overflow: hidden; background: var(--page); }
 .pathbar > span { display: block; height: 100%; }
 .pathbar .livemark { position: absolute; top: -2px; width: 3px; height: 16px; background: var(--text-primary); border-radius: 1px; }
+
+/* searchable station picker */
+.combo { position: relative; display: inline-block; max-width: 100%; }
+.combo-input { width: 100%; box-sizing: border-box; padding: .38rem .55rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); color: var(--text-primary); font: inherit; }
+.combo-input:focus { outline: 2px solid color-mix(in oklab, var(--series-1) 45%, transparent); }
+.combo-list { position: absolute; z-index: 30; top: calc(100% + 3px); left: 0; width: max(100%, 380px); max-width: 92vw; max-height: 340px; overflow: auto; margin: 0; padding: .25rem; list-style: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
+.combo-list li { padding: .4rem .5rem; border-radius: 6px; cursor: pointer; line-height: 1.35; }
+.combo-list li.active, .combo-list li:hover { background: var(--page); }
+.combo-list li.sel strong { text-decoration: underline; }
+.combo-list li.xfer strong { color: var(--text-secondary); }
+.combo-list .how { font-size: .76rem; color: var(--text-secondary); }
+.combo-list .route { transform: scale(.85); transform-origin: left center; }
+@media (max-width: 720px) { .combo { width: 100% !important; } }

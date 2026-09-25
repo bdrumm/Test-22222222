@@ -28,6 +28,10 @@ const board = computeBoard(schedule, feeds, now);
 board.line = lineBoard(schedule, lines["6_N"] || [], feeds, "6", "N", now);
 board.plan = planJourneys(schedule, feeds, now); board.journey_feeds = journeyFeeds(schedule);
 const L6 = schedule.lines["6_N"]; const fi = L6.stops.indexOf("635N"), ti = L6.stops.indexOf("631N");
+// a second poll 150 s later in which one in-transit train has arrived: its segment run is timed from the feed timestamps
+{ const fd = feeds[Object.keys(feeds)[0]]; const moving = fd.vehicles.find(v => v.status === "IN_TRANSIT_TO" && v.trip.route_id === "6" && L6.stops.indexOf(v.stop_id) > 0);
+  if (moving) { const t0 = moving.timestamp; moving.status = "STOPPED_AT"; moving.timestamp = t0 + 150; const lb2 = lineBoard(schedule, lines["6_N"] || [], feeds, "6", "N", now + 150);
+    const tr = lb2.trains.find(t => t.trip_id === moving.trip.trip_id); board.speed = { trip: moving.trip.trip_id, run_sec: t0 + 150 - t0, last_run: tr && tr.last_run, first_poll_segment: (board.line.trains.find(t => t.trip_id === moving.trip.trip_id) || {}).segment }; moving.status = "IN_TRANSIT_TO"; moving.timestamp = t0; } }
 board.travel = { trips: segmentTrips(board.line, L6, fi, ti, now), progress0: board.line.trains.map(t => trainProgress(t, 0, L6)), progress60: board.line.trains.map(t => trainProgress(t, 60, L6)) };
 const index = stationIndex(schedule); const usq = index.stationOf("635N"), s59 = index.stationOf("629N"), gc = index.stationOf("631N");
 const paths = enumeratePaths(schedule, index, usq, s59, 8);
@@ -176,7 +180,8 @@ def test_js_station_graph_paths_and_itineraries(static, tmp_path):
     res, now, feeds, held = _run_board(static, tmp_path, hold_sec=400)
     P = res["board"]["paths"]
     assert P["n_stations"] >= 10 and P["usq"] != P["s59"]
-    assert P["reach"][P["s59"]] == "direct" and P["reach"][P["gc"]] == "direct"
+    assert P["reach"][P["s59"]]["how"] == "direct" and P["reach"][P["gc"]]["how"] == "direct" and "6" in P["reach"][P["s59"]]["direct"]
+    assert all(isinstance(e["via"], list) for e in P["reach"].values())
     paths = P["paths"]; assert paths and paths == sorted(paths, key=lambda p: p["sched_sec"])
     direct = [p for p in paths if p["transfer"] is None]
     assert direct and set(direct[0]["legs"][0]["routes"]) >= {"4", "6"}, "the 4 and the 6 serve the same stops: merged into one direct option"
@@ -185,3 +190,14 @@ def test_js_station_graph_paths_and_itineraries(static, tmp_path):
     its = direct[0]["its"]; assert its and len(its[0]["legs"]) == 1 and its[0]["board_ts"] >= now - 60 and its[0]["arrive_ts"] > its[0]["board_ts"]
     assert its[0]["sched_ride_sec"] == direct[0]["sched_sec"] and its == sorted(its, key=lambda x: x["arrive_ts"])
     assert P["hw6"] and 120 <= P["hw6"] <= 1200 and P["hw46"] and P["hw46"] < P["hw6"], "two routes at a stop: shorter combined headway"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_js_speed_from_state_transitions(static, tmp_path):
+    res, now, feeds, held = _run_board(static, tmp_path)
+    sp = res["board"].get("speed")
+    assert sp, "the synthetic snapshot should have a train in transit"
+    seg = sp["first_poll_segment"]
+    assert seg and seg["dist_m"] > 200 and seg["sched_run_sec"] and 10 < seg["sched_speed_kmh"] < 80 and seg["covered_m"] <= seg["dist_m"]
+    lr = sp["last_run"]
+    assert lr and lr["run_sec"] == 150 and lr["dist_m"] and abs(lr["speed_kmh"] - lr["dist_m"] / 150 * 3.6) < 1e-6 and lr["sched_speed_kmh"]

@@ -244,6 +244,25 @@ gaps, monitored-platform effects, the disruption base rate); and a Marey
 chart of the path over the next 45 minutes with the recommended itinerary
 drawn through the traffic.
 
+### Train position and speed between stations
+
+The subway feeds carry no GPS and no speed: a vehicle reports only its state
+(stopped at, in transit to, or incoming at a stop), the stop, and the moment
+it entered that state. Two things follow from that. A train's progress on its
+current segment is dead-reckoned from the elapsed time over the scheduled
+running time (the markers above), and its speed on that segment is only known
+once it arrives. But the state timestamps are exact: "in transit to X" is
+stamped at departure and "stopped at X" at arrival, so seeing the two gives
+the segment's run time at feed precision. With track distances between
+consecutive stops projected from the static GTFS shapes (great-circle
+distance where a feed has no shapes) that is a realized speed per segment.
+The browser times every segment it watches a train complete (the label shows
+the last one), and the collector logs every completed segment on the network
+(`segment_runs/` on the data branch). The build turns them into a speed
+profile per segment (median realized run against the scheduled run, by hour,
+`data/segments.json`), which the Travel diagram draws as a km/h layer and
+uses to name the slowest measured segment on a path.
+
 ### 30-second live mode in the browser
 
 The MTA feed endpoint allows cross-origin requests, so the published site can

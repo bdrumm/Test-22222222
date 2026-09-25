@@ -246,6 +246,16 @@ def load_holds(data_dir: Path, days: int | None = None) -> pd.DataFrame:
     return _load_daily(data_dir, "holds", days)
 
 
+def save_segment_runs(data_dir: Path, df: pd.DataFrame) -> dict[str, int]:
+    """Realized inter-station running times from vehicle state transitions (network-wide)."""
+    from mta_delay_insights.collect.dwells import SEGMENT_RUN_COLUMNS
+    return _save_daily(data_dir, "segment_runs", df, SEGMENT_RUN_COLUMNS, "depart_ts", ["trip_key", "to_stop"])
+
+
+def load_segment_runs(data_dir: Path, days: int | None = None) -> pd.DataFrame:
+    return _load_daily(data_dir, "segment_runs", days)
+
+
 def save_forecast_eval(data_dir: Path, df: pd.DataFrame) -> dict[str, int]:
     from mta_delay_insights.realtime.evaluate import FORECAST_EVAL_COLUMNS
     return _save_daily(data_dir, "forecast_eval", df, FORECAST_EVAL_COLUMNS, "made_ts", ["made_ts", "trip_id", "stop_id"])
