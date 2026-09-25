@@ -202,6 +202,11 @@ Live forecasts and the trip planner use the model as soon as it is ready
 (`model_source: "learned"`), blending with the feed by inverse variance when
 the feed feature is unavailable.
 
+Backfilled history is not only for the model: rows at the monitored platforms
+and journey stops are loaded into the analysis store too (with full-day
+coverage), so station reports, journeys and transfer analyses have weeks of
+baseline from the first run instead of waiting days for our own collection.
+
 The training set is fed by three streams: the hourly collection at every stop
 of every feed (`collect.all_stops` in `pipeline/targets.json`, files under
 `arrivals_all/` with a rolling retention), ETA samples recorded when a train

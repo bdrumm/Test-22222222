@@ -68,6 +68,17 @@ async function home(idx) {
   tile(tiles, "Observed arrivals", fmt.compact(idx.status.arrivals_total));
   tile(tiles, "Days with data", idx.status.days_with_data);
   tile(tiles, "Alerts active now", idx.alerts_active);
+  const lm = idx.learned_model || {};
+  const t2 = h("div", "tiles", null, app); t2.style.marginTop = ".6rem";
+  const tm = tile(t2, "Arrival model", lm.status === "ok" ? `${(lm.mae_model || 0).toFixed(0)} s MAE` : "training", lm.status === "ok" ? `vs schedule ${(lm.mae_schedule || 0).toFixed(0)} s${lm.mae_feed != null ? ` · feed ${lm.mae_feed.toFixed(0)} s` : ""} · ${fmt.compact(lm.n_train || 0)} rows` : `${fmt.compact(lm.n_rows || 0)} rows so far`);
+  link("#/model", "Model card →", tm, "small");
+  const cl = idx.climatology || {};
+  const tc = tile(t2, "Disruptions (archive)", cl.n_events ? `${(cl.n_events / cl.weeks).toFixed(0)} / week` : "–", cl.top_routes && cl.top_routes.length ? `most: ${cl.top_routes.slice(0, 3).map(([r, v]) => `${r} ${v}`).join(", ")}` : "alert archive not pulled yet");
+  link("#/disruptions", "Climatology →", tc, "small");
+  const tl = tile(t2, "Line views", String((idx.lines_view || []).length), "routes with a live Marey chart");
+  link("#/line", "Line view →", tl, "small");
+  const tt = tile(t2, "ETA samples", fmt.compact(idx.eta_trust_n || 0), "feed predictions benchmarked");
+  link("#/model", "Trust by horizon →", tt, "small");
   const grid = h("div", "grid", null, app); grid.style.marginTop = "1rem";
   for (const t of idx.targets) {
     const card = h("div", "card", null, grid);
@@ -389,7 +400,7 @@ async function dataPage(idx) {
   const wrap = h("div", "table-wrap card", null, app); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
   ["when", "kind", "polls", "arrivals", "errors", "notes"].forEach(x => h("th", null, x, tr)); const tb = h("tbody", null, null, t);
   (st.runs || []).slice().reverse().slice(0, 30).forEach(r => { const row = h("tr", null, null, tb); h("td", "small", dateTime(r.iso), row); h("td", null, r.kind, row); h("td", "num", r.polls ?? "–", row); h("td", "num", r.arrivals ?? "–", row); h("td", "num", r.errors ?? "–", row);
-    h("td", "small", r.kind === "context" ? `ok: ${(r.ok || []).join(", ")}${Object.keys(r.failed || {}).length ? " · failed: " + Object.keys(r.failed).join(", ") : ""}` : (r.feeds || []).join(", "), row); });
+    h("td", "small", r.kind === "context" ? `ok: ${(r.ok || []).join(", ")}${Object.keys(r.failed || {}).length ? " · failed: " + Object.keys(r.failed).join(", ") : ""}` : r.kind === "backfill" ? `fetched ${(r.fetched || []).map(f => `${f.day} (${fmt.compact(f.rows)})`).join(", ") || "nothing new"}${Object.keys(r.failed || {}).length ? " · failed: " + Object.keys(r.failed).join(", ") : ""}` : (r.feeds || []).join(", "), row); });
   h("h2", null, "Sources", app);
   const sw = h("div", "table-wrap card", null, app); const s = h("table", null, null, sw); const str = h("tr", null, null, h("thead", null, null, s)); ["key", "kind", "title", "contributes"].forEach(x => h("th", null, x, str));
   const sb = h("tbody", null, null, s); idx.sources.forEach(x => { const row = h("tr", null, null, sb); const c = h("td", "mono small", null, row); link(x.url, x.key, c); h("td", null, x.kind, row); h("td", null, x.title, row); h("td", "small", x.contributes, row); });
@@ -461,7 +472,8 @@ async function live(idx) {
         ["route", "feed ETA", "model ETA", "range", "vs schedule", "now at", "late now"].forEach((x, i) => h("th", i >= 1 && i <= 4 ? "num" : "", x, tr));
         const body = h("tbody", null, null, tb);
         s.arrivals.slice(0, 8).forEach(a => { const row = h("tr", a.gap ? "gap-row" : "", null, body); const c0 = h("td", null, null, row); routeBullet(a.route_id, c0);
-          h("td", "num eta", hhmm(a.feed_eta_ts), row); h("td", "num eta", hhmm(a.model_eta_ts), row); h("td", "num eta small", `${hhmm(a.eta_lo_ts)}–${hhmm(a.eta_hi_ts)}`, row);
+          h("td", "num eta", hhmm(a.feed_eta_ts), row); const mc = h("td", "num eta", hhmm(a.model_eta_ts), row); if (a.model_source === "learned") { const b = h("span", "tiny muted", " learned", mc); b.title = "learned arrival model"; } if (a.track_changed) { const b = h("span", "tiny muted", " ⇄track", mc); b.title = "running on a different track than scheduled"; }
+          h("td", "num eta small", `${hhmm(a.eta_lo_ts)}–${hhmm(a.eta_hi_ts)}`, row);
           h("td", "num", lateTxt(a.model_lateness_sec), row); h("td", "small", a.started === false ? "not departed" : (a.now_at_stop_name || "–"), row); h("td", "num", a.started === false ? "–" : lateTxt(a.now_lateness_sec), row); });
         // headway chart
         const hw = s.arrivals.filter(a => a.headway_sec != null);

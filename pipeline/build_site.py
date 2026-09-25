@@ -359,6 +359,12 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []
+    for day in (context.get("_backfill_manifest") or {}).get("days", []):
+        try:
+            d0 = datetime.fromisoformat(day).replace(tzinfo=NY_TZ)
+            coverage.append((d0.timestamp(), d0.timestamp() + 86400))
+        except ValueError:
+            continue
     reports = analyze_targets(store, static, targets, context.get("ridership_profile"), context.get("trains_delayed"),
                               context.get("weather_daily"), now, coverage)
     for entry, d in reports:
@@ -418,6 +424,22 @@ def build_from_data(args) -> dict:
     targets = lib.load_targets(args.targets)
     static = lib.load_static(args.gtfs)
     store = Store(":memory:")
+    stops_of_interest, _, _ = lib.stops_and_feeds(static, targets)
+    network = lib.load_network_arrivals(data_dir, days=NETWORK_TRAIN_DAYS)
+    backfill_days: list[str] = []
+    mpath = data_dir / "arrivals_all" / "backfill_manifest.json"
+    if mpath.exists():
+        try:
+            mf = json.loads(mpath.read_text()); backfill_days = [d for d, v in mf.get("days", {}).items() if v.get("rows")]
+        except Exception:
+            pass
+    # Network-wide history at the stops of interest feeds the station reports, journeys and transfers
+    # straight away (weeks of baseline from the backfill); our own rows replace archive rows on conflict.
+    if network is not None and not network.empty:
+        extra = network[network["stop_id"].isin(stops_of_interest)]
+        if not extra.empty:
+            store.insert_arrivals(extra)
+            logging.info("network history at stops of interest: %d rows", len(extra))
     arrivals = lib.load_arrivals(data_dir)
     store.insert_arrivals(arrivals)
     alerts = lib.load_alerts(data_dir)
@@ -428,15 +450,10 @@ def build_from_data(args) -> dict:
     context["events"] = lib.load_events(data_dir)
     context["alerts_archive"] = lib.load_alerts_archive(data_dir)
     context["nws_alerts"] = lib.load_context(data_dir, "nws_alerts")
-    context["_network_arrivals"] = lib.load_network_arrivals(data_dir, days=NETWORK_TRAIN_DAYS)
+    context["_network_arrivals"] = network
     context["_eta_samples"] = lib.load_eta_samples(data_dir, days=45)
     context["_dwells"] = lib.load_dwells(data_dir, days=45)
-    mpath = data_dir / "arrivals_all" / "backfill_manifest.json"
-    if mpath.exists():
-        try:
-            mf = json.loads(mpath.read_text()); context["_backfill_manifest"] = {"n_days": sum(1 for v in mf.get("days", {}).values() if v.get("rows"))}
-        except Exception:
-            pass
+    context["_backfill_manifest"] = {"n_days": len(backfill_days), "days": backfill_days}
     feed_bytes = {}
     context["_feed_bytes"] = feed_bytes
     if not args.no_feeds:
