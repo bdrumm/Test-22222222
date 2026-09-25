@@ -347,8 +347,8 @@ export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, 
       }));
       const board = computeBoard(schedule, feeds, now); board.feeds = info.sort((a, b) => a.key.localeCompare(b.key)); board.schedule_generated_at = schedule.generated_at; board.demo = !!schedule.demo_now;
       if (schedule.alerts_url && !schedule.demo_now && (ticks % 4 === 0 || alerts == null)) {   // the alerts document is large: every 2 minutes
-        try { const r = await fetchImpl(schedule.alerts_url, { cache: "no-store" }); if (r.ok) { alerts = parseAlerts(await r.json(), now); alertsError = null; } else alertsError = `HTTP ${r.status}`; }
-        catch (e) { alertsError = String(e.message || e); }
+        try { const r = await fetchImpl(schedule.alerts_url, { cache: "no-store" }); if (r.ok) { alerts = parseAlerts(await r.json(), now); alertsError = null; } else { alertsError = `HTTP ${r.status}`; alerts = alerts || []; } }
+        catch (e) { alertsError = String(e.message || e); alerts = alerts || []; }   // retry on the regular cadence, not every tick
       }
       ticks++;
       board.alerts = alerts; board.alerts_error = alertsError;
