@@ -401,7 +401,8 @@ async function dataPage(idx) {
     const t2 = h("div", "tiles", null, app); t2.style.marginTop = ".6rem";
     tile(t2, "Network-wide arrivals", fmt.compact(ds.network_arrivals || 0), `${ds.network_days || 0} days · ${Object.entries(ds.network_sources || {}).map(([k, v]) => `${k} ${fmt.compact(v)}`).join(", ") || "own collection + subwaydata.nyc"}`);
     tile(t2, "ETA samples", fmt.compact(ds.eta_samples || 0), "feed predictions at 1–12 stops ahead");
-    tile(t2, "Dwell estimates", fmt.compact(ds.dwells || 0), "from vehicle positions");
+    tile(t2, "Dwell estimates", fmt.compact(ds.dwells || 0), `from vehicle positions · ${fmt.compact(ds.holds || 0)} holds network-wide`);
+    tile(t2, "Scored live forecasts", fmt.compact(ds.forecast_eval || 0), "predicted arrivals matched to what happened");
     tile(t2, "Alert archive rows", fmt.compact(ds.alerts_archive_rows || 0), `${fmt.compact(ds.events_rows || 0)} event/news rows`);
   }
   const days = Object.keys(st.arrivals_per_day || {}).sort();

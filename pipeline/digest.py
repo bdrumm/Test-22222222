@@ -75,6 +75,23 @@ def build_digest(out_data: Path, now: datetime) -> dict:
                + (f" and {ev['mae_feed']:.0f} s for the MTA countdown ETA ({(1 - ev['mae_model_on_feed_rows'] / ev['mae_feed']):.0%} better)" if ev.get("mae_feed") else "")
                + f"; 80% range covers {ev.get('coverage_p10_p90', 0):.0%} of outcomes; trained on {card.get('n_train', 0):,} rows")
         lines += ["## Prediction model", f"- {txt}", ""]; items.append({"kind": "model", "text": txt})
+    hs = _load(out_data, "holds")
+    if hs.get("n"):
+        lg = hs.get("long") or {}
+        top = hs.get("by_stop", [])[:3]
+        txt = (f"{hs['per_day']:.0f} holds per day (trains stopped ≥ {hs['hold_sec'] / 60:.1f} min at a station, terminals included) over {hs['days']} days; most held minutes at "
+               + ", ".join(f"{x['name']} ({x['routes'] and '/'.join(x['routes'])})" for x in top))
+        if lg.get("n"):
+            txt += (f". Of {lg['n']} long holds (≥ {hs['long_sec'] / 60:.0f} min), {lg['share_with_alert']:.0%} had an unplanned alert for the line"
+                    + (f", posted a median {lg['median_latency_sec'] / 60:.0f} min after the hold began" if lg.get("median_latency_sec") is not None else ""))
+        lines += ["## Holds", f"- {txt}", ""]; items.append({"kind": "holds", "text": txt})
+    fe = _load(out_data, "forecast_eval")
+    if fe.get("n"):
+        o = fe.get("overall", {})
+        txt = (f"Live forecasts scored against {fe['n']:,} observed arrivals ({fe.get('n_snapshots', 0)} snapshots, {fe.get('days', 0)} days): "
+               f"MTA feed {_m(o.get('feed', {}).get('mae_sec'))} mean error, model {_m(o.get('model', {}).get('mae_sec'))}, simulation {_m(o.get('sim', {}).get('mae_sec'))}"
+               + (f"; the model was closer than the feed {o['model_beats_feed_share']:.0%} of the time" if o.get("model_beats_feed_share") is not None else ""))
+        lines += ["## Live forecast accuracy", f"- {txt}", ""]; items.append({"kind": "forecast_eval", "text": txt})
     lines += ["---", f"Generated {now.isoformat(timespec='minutes')} from the published analyses; details on each page of the app."]
     md = "\n".join(lines)
     (out_data / "digest.md").write_text(md)
