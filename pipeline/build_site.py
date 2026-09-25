@@ -191,7 +191,7 @@ def _cap_arrivals(arr: pd.DataFrame, cap: int, seed: int = 1) -> pd.DataFrame:
     share = cap / len(arr)
     keep = set(rng.choice(keys, size=int(len(keys) * share), replace=False))
     return arr[arr["trip_key"].isin(keep)]
-LINE_VIEW_ROUTES = ["1", "2", "3", "4", "5", "6", "7", "A", "C", "E", "B", "D", "F", "M", "G", "J", "Z", "L", "N", "Q", "R", "W", "SI"]
+from mta_delay_insights.realtime.client_export import LINE_VIEW_ROUTES  # noqa: E402
 
 
 def build_line_views(store: Store, static: StaticGTFS, context: dict, live: dict | None, out_data: Path, now: datetime) -> list[dict]:
@@ -297,7 +297,7 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         (out_data / "models" / "arrival.card.json").write_text(json.dumps({"status": "error", "error": str(exc)[:300]}))
     live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context, learned, store)
     try:
-        from .client_export import export_client_schedule
+        from mta_delay_insights.realtime.client_export import export_client_schedule
         _, feeds_all, _ = lib.stops_and_feeds(static, targets)
         feed_urls, demo_now = None, None
         if mode == "synthetic" and feed_bytes:

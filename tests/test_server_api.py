@@ -1,5 +1,7 @@
 import http.server
 import json
+
+from pipeline import lib
 import threading
 import urllib.request
 from functools import partial
@@ -50,3 +52,19 @@ def test_api_endpoints(tmp_path):
                 assert e.code == 404 and "error" in json.loads(e.read())
     finally:
         httpd.shutdown(); httpd.server_close()
+
+
+def test_serve_state_exports_the_client_schedule_daily(static, tmp_path):
+    from datetime import timedelta
+    from mta_delay_insights.realtime.server import LiveState
+    from mta_delay_insights.sources.gtfs_static import service_midnight
+    from tests.conftest import START
+    targets = {"targets": [{"id": "gc", "station": "Grand Central", "direction": "N", "routes": ["6", "4"]}], "upstream_stops": 3}
+    _, feeds, resolved = lib.stops_and_feeds(static, targets)
+    st = LiveState(static, resolved, feeds, None, collect=False, site_dir=tmp_path)
+    now = service_midnight(START + timedelta(days=2)).timestamp() + 9 * 3600
+    assert st.refresh_client_schedule(now) and (tmp_path / "data" / "client_schedule.json").exists() and (tmp_path / "data" / "client_lines.json").exists()
+    assert not st.refresh_client_schedule(now + 3600), "same service date: no rewrite"
+    assert st.refresh_client_schedule(now + 86400), "next service date: rewritten"
+    cs = json.loads((tmp_path / "data" / "client_schedule.json").read_text())
+    assert cs["targets"]["gc"]["stop_id"] == "631N" and cs["target_feeds"] == ["1234567S"]

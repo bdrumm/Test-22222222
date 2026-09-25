@@ -100,9 +100,10 @@ run the server yourself: `docker compose up -d --build` (or the systemd unit
 in `deploy/`). `mta-insights serve` is then a collector *and* a server: every
 poll of every feed is ingested into a persistent SQLite store, the
 propagation, journey and learned arrival models are refitted from that store
-every 30 minutes, and `/api/live`, `/api/plan?journey=`, `/api/routes`,
-`/api/station?id=`, `/api/incidents` and `/api/health` expose the snapshot.
-See [deploy/README.md](deploy/README.md).
+every 30 minutes, the browser-side live mode's timetable extract is rewritten
+for each new service date, and `/api/live`, `/api/plan?journey=`,
+`/api/routes`, `/api/station?id=`, `/api/incidents`, `/api/forecast_eval` and
+`/api/health` expose the snapshot. See [deploy/README.md](deploy/README.md).
 
 ## Data sources
 

@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 class LiveState:
     def __init__(self, static: StaticGTFS, targets: list[dict], feeds: list[str],
-                 store: Store | None = None, refit_every_sec: float = 1800.0, journeys: list | None = None,
+                 store: Store | None = None, refit_every_sec: float = 1800.0, journeys: list | None = None, site_dir: str | Path | None = None,
                  collect: bool = True, sample_stops: set[str] | None = None, poll_interval_sec: float = 30.0,
                  learned_path: str | Path | None = None):
         self.static, self.targets, self.feeds = static, targets, feeds
@@ -57,8 +57,33 @@ class LiveState:
         self.projections: list[dict] = []
         self.forecast_eval = None
         self._last_eval = 0.0
+        # the browser-side live mode needs today's timetable extract next to the site
+        self.site_dir = Path(site_dir) if site_dir else None
+        self._sched_date = None
+
+    def refresh_client_schedule(self, now: float) -> bool:
+        """(Re)write data/client_schedule.json and client_lines.json when the service date changes."""
+        if self.site_dir is None:
+            return False
+        from datetime import datetime, timedelta
+        from ..sources.gtfs_static import NY_TZ
+        from .client_export import export_client_schedule
+        dt = datetime.fromtimestamp(now, NY_TZ)
+        sd = (dt - timedelta(hours=3)).date()
+        if sd == self._sched_date:
+            return False
+        out = self.site_dir / "data"
+        out.mkdir(parents=True, exist_ok=True)
+        export_client_schedule(self.static, self.targets, self.journeys, out, dt, self.feeds)
+        self._sched_date = sd
+        log.info("client schedule exported for %s", sd)
+        return True
 
     def refit(self, now: float) -> None:
+        try:
+            self.refresh_client_schedule(now)
+        except Exception as exc:
+            log.warning("client schedule export failed: %s", exc)
         if self.store is None:
             return
         for t in self.targets:
@@ -228,7 +253,7 @@ def serve(site_dir: str | Path, static: StaticGTFS, targets: list[dict], feeds: 
           port: int = 8000, interval: float = 30.0, collect: bool = True, sample_stops: set[str] | None = None,
           learned_path: str | Path | None = None) -> None:
     state = LiveState(static, targets, feeds, store, journeys=journeys, collect=collect, sample_stops=sample_stops,
-                      poll_interval_sec=interval, learned_path=learned_path)
+                      poll_interval_sec=interval, learned_path=learned_path, site_dir=site_dir)
     stop = threading.Event()
     th = threading.Thread(target=state.loop, args=(interval, stop), daemon=True)
     th.start()
