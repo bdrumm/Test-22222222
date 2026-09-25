@@ -378,9 +378,12 @@ def to_rt_snapshots(arrivals: pd.DataFrame, start_ts: float, end_ts: float, poll
             if fut.empty:
                 continue
             stops = []
+            prev_pred = -np.inf
             for r in fut.itertuples(index=False):
                 horizon = r.arrival_ts - t
                 pred = r.arrival_ts + rng.normal(0, max(5.0, horizon * 0.08))
+                pred = max(pred, prev_pred + 45.0)          # predictions keep the stop order, like a real feed
+                prev_pred = pred
                 stops.append((r.stop_id, pred, pred + DWELL_SEC))
             trips.append({"trip_id": g.iloc[0]["trip_id"], "route_id": g.iloc[0]["route_id"],
                           "start_date": g.iloc[0]["start_date"], "stops": stops})

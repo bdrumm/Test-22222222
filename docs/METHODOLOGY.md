@@ -242,6 +242,58 @@ branch) has one row per observed ride with these features, so gradient-boosted
 or sequence models can be trained offline and dropped in through
 `JourneyModel.from_dict`.
 
+## 9b. Cross-line effects at transfer stations and full-route analysis
+
+`analysis/transfers.py` treats every leg boundary of a configured journey as a
+transfer (feeder platform and routes → connecting platform and routes, walk
+time) and answers three questions from the collected history:
+
+**Connections.** For each feeder arrival, *ready* = arrival + walk; the
+observed connection is the first connecting-route arrival at or after *ready*
+(wait = its arrival − ready). The *planned* connection is the first scheduled
+connecting trip after the feeder's *scheduled* arrival + walk; the rider
+"missed" it when that trip's observed arrival is before *ready* (matched by
+trip id). Feeder arrivals whose connection falls outside the same polling
+interval are dropped as censored. Summaries: median / p90 wait vs the
+scheduled wait, missed-connection rate, planned-train-never-observed rate, all
+by hour and by feeder lateness bucket (on time < 2 min, 2–5, 5+). The **cost
+of a late feeder** is the bootstrap difference in excess wait (observed −
+scheduled) for feeders ≥ 3 min late vs on time, with Mann-Whitney p and
+Cliff's delta, plus the missed-rate lift and a per-minute slope.
+
+**Co-movement.** Mean lateness of each line in 15-minute bins at the station;
+Spearman correlation (and at lags −30…+30 min: the lag with the strongest
+correlation says which line leads), and the *joint disruption lift*: how much
+more often both lines are ≥ 4 min late in the same bin than if independent.
+High co-movement points to shared causes (incidents at the station, crowding,
+holds for connections); independence means one line's problems are its own.
+
+**Shared-track interaction.** For each stop that both routes serve, a route-A
+train's lateness change from the previous stop is compared between trips
+whose projected arrival (scheduled + lateness at the previous stop) was within
+3 min behind a route-B train and free-running trips (bootstrap CI,
+Mann-Whitney). Because merge conflicts concentrate in peaks, the test is also
+run per period (AM peak, midday, PM peak, evening, weekend) and a clear
+peak-only effect is reported with its period. The time lost when the leader
+is itself ≥ 3 min late is reported separately; the expected loss per trip sums
+extra × conflict rate over the significant stops.
+
+**Where the time goes.** For each journey, mean excess over schedule by hour
+for every component: origin wait (expected wait E[h²]/2E[h] from observed
+headways minus the same from the schedule), each ride (actual − scheduled run
+time from the journey training rows), each transfer (observed − scheduled
+connection wait). Shares use the positive components; the transfer share is
+the *cross-line share*. A conditional view gives the downstream cost of a
+late feeder: extra transfer wait plus extra excess on the next ride, for
+feeders ≥ 3 min late vs on time.
+
+Findings are ranked high / medium / low / info. The Routes page shows them
+with the stacked hourly decomposition, connection waits by hour against the
+schedule, the feeder-lateness table, co-movement and the interaction table;
+the trip planner shows the top findings for the journey being planned and
+flags tight connections (< 90 s margin) and trains whose feed stop list omits
+the destination (reroutes / skip-stop service).
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4
@@ -256,7 +308,12 @@ late inbound train, the gap it creates and the active alert's effect. The
 journey model is tested by fitting on the same simulated history (the
 signal-failure scenario must yield a positive alert coefficient) and planning
 from a synthetic snapshot: options must be catchable, ordered by arrival, and
-chain through the transfer with the configured walk time.
+chain through the transfer with the configured walk time. The cross-line
+module is validated on the same corridor: the merge scenario (a 6 held when it
+would arrive within 150 s behind a 4) must show a significant interaction at
+the merge stop and a higher connection cost for late feeders; the weather
+scenario (both lines slowed by rain) must show co-movement while the
+single-line signal scenario must not.
 
 ## 11. Known limitations
 

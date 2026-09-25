@@ -171,3 +171,10 @@ select, input[type=search] { font: inherit; padding: .3rem .5rem; border-radius:
 .eta { font-variant-numeric: tabular-nums; }
 tr.gap-row td { background: color-mix(in oklab, var(--status-warning) 12%, transparent); }
 .refresh { display: inline-flex; gap: .5rem; align-items: center; }
+
+ul.findings { list-style: none; padding: 0; margin: 0; }
+ul.findings li { padding: .45rem 0; border-bottom: 1px solid var(--border); line-height: 1.45; }
+ul.findings li:last-child { border-bottom: 0; }
+ul.findings .sev { display: inline-block; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; padding: .1rem .4rem; border-radius: 4px; background: var(--surface-2); color: var(--text-secondary); margin-right: .3rem; }
+ul.findings li.sev-high .sev { color: var(--status-critical); border: 1px solid var(--status-critical); background: transparent; }
+ul.findings li.sev-medium .sev { color: var(--status-warning); border: 1px solid var(--status-warning); background: transparent; }

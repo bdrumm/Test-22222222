@@ -122,7 +122,7 @@ export function barChart(container, { title, subtitle, categories, series, stack
 // Multi-series line chart with crosshair tooltip. x: string[] labels; series: [{name, values, color?}]
 export function lineChart(container, { title, subtitle, x, series, format = fmt.num, height = 220, bands = [], labelEvery, yMin }) {
   const f = new Frame(container, { title, subtitle, series, kind: "line", height });
-  const m = { l: 48, r: 14, t: 10, b: 30 }, W = f.width - m.l - m.r, H = height - m.t - m.b;
+  const m = { l: 48, r: series.length <= 4 ? 52 : 14, t: 10, b: 30 }, W = f.width - m.l - m.r, H = height - m.t - m.b;
   const all = series.flatMap(s => s.values).filter(v => v != null && Number.isFinite(v));
   const lo = yMin != null ? yMin : Math.min(0, ...all), ticks = niceTicks(Math.max(...all, 0) - lo), yMax = lo + (ticks[ticks.length - 1] || 1);
   const n = x.length, xp = i => m.l + (n > 1 ? (i / (n - 1)) * W : W / 2), yp = v => m.t + H - ((v - lo) / (yMax - lo)) * H;

@@ -384,6 +384,8 @@ def _leg_candidates(leg: LegSpec, trains: list, now: float, earliest_board: floa
         j = t.stops_until(leg.to_stop)
         if eta_to is not None and j is not None and i is not None and j <= i:
             eta_to = None
+        if eta_to is not None and eta_to <= eta_from + 30:   # feed ETAs out of order: don't trust the ride time
+            eta_to = None
         out.append((t, eta_from, eta_to))
     out.sort(key=lambda x: x[1])
     return out
@@ -404,21 +406,27 @@ def plan_journey(spec: JourneySpec, model: JourneyModel | None, trains: list, st
         lo_total, hi_total = 0.0, 0.0
         for li, leg in enumerate(spec.legs):
             lm = model.legs[li] if li < len(model.legs) else LegModel(leg.from_stop, leg.to_stop, list(leg.routes))
+            margin = next_if_missed = None
             if li > 0:
                 earliest = board_ts + leg.transfer_min * 60
                 cands = _leg_candidates(leg, trains, now, earliest, horizon_sec + 1800)
                 if cands:
                     t_cur, dep, arr = cands[0]
                     wait = dep - earliest
+                    margin = dep - earliest
+                    if len(cands) > 1:
+                        next_if_missed = cands[1][1] - earliest
                     src = "feed"
                 else:
-                    w = lm.wait.get(t_cur.route_id if t_cur.route_id in lm.wait else (leg.routes[0]), {}).get(str(hour))
+                    w = lm.wait.get(leg.routes[0], {}).get(str(hour))
                     wait = (w or {}).get("expected", 300.0)
                     dep, arr, src = earliest + wait, None, "typical"
                     t_cur = None
                 transfer = leg.transfer_min * 60
             else:
                 dep, arr, src, wait, transfer = dep0, arr0, "feed", dep0 - now, 0.0
+            if src == "feed" and arr is None:
+                src = "model"
             route = t_cur.route_id if t_cur else leg.routes[0]
             feats = features_at(dep, route, (t_cur.lateness_sec if t_cur and t_cur.started else 0.0), alerts_df, weather_daily, events_df)
             sched = lm.sched_ride.get(route, {}).get(str(hour)) or lm.sched_ride.get(route, {}).get(str((hour + 1) % 24)) or _fallback_sched(static, leg, route, dep)
@@ -430,7 +438,18 @@ def plan_journey(spec: JourneySpec, model: JourneyModel | None, trains: list, st
             else:
                 ride = ride_feed or ride_model or 600.0
             p10, p90 = lm.spread(route, period)
+            dest_in_feed = bool(t_cur is not None and t_cur.eta_at(leg.to_stop) is not None)
+            warning = None
+            if t_cur is not None and not dest_in_feed:
+                i_from = t_cur.stops_until(leg.from_stop)
+                if i_from is not None and i_from < len(t_cur.stops) - 1:
+                    warning = (f"the feed does not list {leg.to_name or leg.to_stop} among this {route} train's remaining stops "
+                               f"(reroute, skip-stop or short turn?); ride time uses the schedule")
+                elif i_from is not None:
+                    warning = f"{leg.from_name or leg.from_stop} is the last stop the feed lists for this {route} train (it may terminate there); ride time uses the schedule"
             legs_out.append({"leg": li, "route_id": route, "trip_id": t_cur.trip_id if t_cur else None, "from": leg.from_stop, "to": leg.to_stop,
+                             "dest_in_feed": dest_in_feed, "warning": warning, "connection_margin_sec": margin, "next_if_missed_sec": next_if_missed,
+                             "connection_risk": (None if margin is None else ("tight" if margin < 90 else "ok")),
                              "from_name": leg.from_name, "to_name": leg.to_name, "board_ts": dep, "arrive_ts": dep + ride,
                              "wait_sec": wait, "transfer_sec": transfer, "ride_sec": ride, "ride_feed_sec": ride_feed, "ride_model_sec": ride_model,
                              "sched_ride_sec": sched, "excess_pred_sec": excess, "ride_source": src, "ride_lo_sec": ride + p10, "ride_hi_sec": ride + p90,
@@ -440,8 +459,11 @@ def plan_journey(spec: JourneySpec, model: JourneyModel | None, trains: list, st
             lo_total += p10; hi_total += p90
             board_ts = dep + ride
         total = board_ts - now
+        risks = [l for l in legs_out if l["connection_risk"] == "tight"]
+        warnings = [l["warning"] for l in legs_out if l["warning"]]
         options.append({"depart_ts": dep0, "arrive_ts": board_ts, "total_sec": total, "total_lo_sec": total + lo_total, "total_hi_sec": total + hi_total,
                         "wait_sec": dep0 - now, "legs": legs_out, "routes": [l["route_id"] for l in legs_out],
+                        "tight_connection": bool(risks), "warnings": warnings,
                         "summary": f"Leave in {max(0, (dep0 - now)) / 60:.0f} min on the {legs_out[0]['route_id']}: arrive {_hhmm(board_ts)} "
                                    f"({total / 60:.0f} min, range {(total + lo_total) / 60:.0f}-{(total + hi_total) / 60:.0f})"})
     options.sort(key=lambda o: o["arrive_ts"])

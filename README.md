@@ -52,6 +52,7 @@ log reports the HTTP status of the live URL.
 | page | what it shows |
 |---|---|
 | Plan a trip | trip-time planner for the configured journeys (e.g. 4 Av-9 St → 14 St-8 Av): leave-now arrival time with a range, every catchable option in the next hour with wait / walk / ride breakdown, typical time at this hour vs right now, and a time-distance (stringline) chart of the trains on the corridor with the recommended itinerary drawn on it |
+| Routes | cross-line effects and full-route analysis for each configured journey: where the time goes by hour (origin wait, each ride, each transfer), connection waits vs schedule and missed-connection rates at each transfer station, the cost of a late feeder train, whether the two lines' lateness moves together (and which leads), and shared-track interaction (time lost behind another line's train) |
 | Live | holistic status now: every route/direction with trains in service, lateness, the largest gap forming and where, active unplanned alerts; for each monitored platform the next arrivals with feed ETA, look-back-calibrated ETA and range, predicted headways, and the *downstream effects* (gaps forming, late trains inbound with their expected lateness here, alert effects) |
 | Stations | one card per monitored platform: severity, verdict, focus hours, where / why, rider impact |
 | Station report | what changed (with CIs), problem rate and lateness by hour, day × hour heatmap, daily trend, ranked locations and causes with evidence, recommendations |
@@ -190,6 +191,14 @@ corridor. Models are published as `data/models/journey_<id>.json`; the full
 training table (one row per observed ride with all features) is exported to
 the `data` branch as `context/journeys_training.csv.gz` so you can train your
 own model on it.
+
+**Cross-line effects.** Every transfer in a journey is analysed
+(`mta_delay_insights/analysis/transfers.py`, published as `data/routes.json`):
+connection waits and missed connections, what a late feeder costs at the
+transfer and on the next ride, lateness co-movement between the lines at the
+station, and shared-track interaction where routes share stops. The planner
+flags tight connections and trains whose feed stop list omits the destination.
+See [docs/METHODOLOGY.md](docs/METHODOLOGY.md#9b-cross-line-effects-at-transfer-stations-and-full-route-analysis).
 
 External signals come from `mta_delay_insights/sources/events.py`: NYC
 permitted events (Open Data), venue events near major stations (Ticketmaster,

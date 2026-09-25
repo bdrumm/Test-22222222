@@ -23,6 +23,7 @@ from mta_delay_insights.analysis.line_insights import line_insights
 from mta_delay_insights.sources.alerts import alert_kind
 from mta_delay_insights.realtime import build_live, fit_model
 from mta_delay_insights.realtime.journey import JourneyModel, fit_journey, resolve_journeys
+from mta_delay_insights.analysis.transfers import analyze_routes
 from mta_delay_insights.sources.gtfs_static import NY_TZ, StaticGTFS
 from mta_delay_insights.sources.registry import as_records
 from mta_delay_insights.storage.db import Store
@@ -30,6 +31,9 @@ from mta_delay_insights.storage.db import Store
 from . import lib
 
 MIN_BASELINE_HOURS = 36
+
+
+ROUTE_WINDOW_DAYS = 14
 
 
 def _windows(arrivals: pd.DataFrame, now: datetime) -> tuple[datetime, datetime, datetime, datetime, dict]:
@@ -200,6 +204,17 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     for jid, m in jmodels.items():
         (out_data / "models" / f"journey_{jid}.json").write_text(json.dumps(m.to_dict(), default=str))
     live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context)
+    routes_out = {"routes": [], "transfers": []}
+    if specs:
+        try:
+            arr_min = store.arrivals()["arrival_ts"].min() if not store.arrivals().empty else now.timestamp()
+            r_start = max(float(arr_min), now.timestamp() - ROUTE_WINDOW_DAYS * 86400)
+            routes_out = analyze_routes(store, static, specs, r_start, now.timestamp(),
+                                        coverage=coverage_from_runs(runs) if mode == "live" else None)
+        except Exception as exc:
+            logging.warning("route analysis failed: %s", exc)
+            routes_out = {"routes": [], "transfers": [], "error": str(exc)[:200]}
+    (out_data / "routes.json").write_text(json.dumps(routes_out, default=str))
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []
@@ -229,6 +244,9 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
              "models": {tid: {"n_arrivals": m.n_arrivals, "n_days": m.n_days} for tid, m in models.items()},
              "journeys": [{"id": sp.id, "label": sp.label, "legs": [l.as_dict() for l in sp.legs],
                            "n_samples": jmodels[sp.id].n_samples if sp.id in jmodels else 0} for sp in specs],
+             "routes": [{"id": r["id"], "label": r["label"], "status": r["status"], "n_findings": len(r["findings"]),
+                         "top": next((f["text"] for f in r["findings"] if f["severity"] in ("high", "medium")), None),
+                         "dominant": r["decomposition"].get("dominant")} for r in routes_out.get("routes", [])],
              "sources": as_records(), "lines_available": sorted(lines.get("lines", {}).keys()),
              "alerts_active": sum(1 for a in json.loads((out_data / "alerts.json").read_text())["alerts"] if a["active_now"]),
              "status": {k: status[k] for k in ("arrivals_total", "days_with_data")}}

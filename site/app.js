@@ -36,7 +36,7 @@ const dateTime = iso => { try { return new Date(iso).toLocaleString(undefined, {
 const pctChange = v => v == null ? "–" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
 
 // ---------------------------------------------------------------- routing
-const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan };
+const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage };
 async function render() {
   const [section = "", arg] = location.hash.replace(/^#\/?/, "").split("/");
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === (section || "home")));
@@ -442,7 +442,11 @@ async function plan(idx, journeyId) {
         h("td", null, minTxt(o.wait_sec), row); const rc = h("td", null, null, row); o.routes.forEach(r => routeBullet(r, rc));
         h("td", "num eta hide-sm", hhmm(o.depart_ts), row); h("td", "num eta", hhmm(o.arrive_ts), row); h("td", "num", minTxt(o.total_sec), row);
         h("td", "num small hide-sm", `${minTxt(o.total_lo_sec)}–${minTxt(o.total_hi_sec)}`, row);
-        h("td", "small", o.legs.map(l => `${l.route_id}: wait ${minTxt(l.wait_sec)}${l.transfer_sec ? ` + walk ${minTxt(l.transfer_sec)}` : ""} + ride ${minTxt(l.ride_sec)}${l.ride_source === "typical" ? " (typical)" : ""}${l.train_lateness_sec != null && Math.abs(l.train_lateness_sec) >= 120 ? ` (train ${lateTxt(l.train_lateness_sec)})` : ""}`).join(" → "), row); });
+        const bd = h("td", "small", null, row);
+        bd.append(o.legs.map(l => `${l.route_id}: wait ${minTxt(l.wait_sec)}${l.transfer_sec ? ` + walk ${minTxt(l.transfer_sec)}` : ""} + ride ${minTxt(l.ride_sec)}${l.ride_source === "typical" ? " (typical)" : l.ride_source === "model" ? " (schedule+model)" : ""}${l.train_lateness_sec != null && Math.abs(l.train_lateness_sec) >= 120 ? ` (train ${lateTxt(l.train_lateness_sec)})` : ""}`).join(" → "));
+        o.legs.filter(l => l.connection_risk).forEach(l => { const c = h("span", `status-chip st-${l.connection_risk === "tight" ? "degraded" : "good"}`, null, bd); c.style.marginLeft = ".4rem"; h("span", "dot", null, c);
+          c.append(l.connection_risk === "tight" ? `tight connection at ${l.from_name}: ${(l.connection_margin_sec / 60).toFixed(1)} min margin${l.next_if_missed_sec != null ? `, next ${l.route_id} in ${minTxt(l.next_if_missed_sec)} if missed` : ""}` : `connection at ${l.from_name}: ${minTxt(l.connection_margin_sec)} margin`); });
+        (o.warnings || []).forEach(w => { const c = h("span", "status-chip st-disrupted", null, bd); c.style.marginLeft = ".4rem"; h("span", "dot", null, c); c.append(w); }); });
     }
     // Stringline chart with the recommended itinerary drawn
     if ((j.stringline || []).length) {
@@ -456,6 +460,16 @@ async function plan(idx, journeyId) {
       const lg = h("div", "small secondary", null, card); lg.style.marginTop = ".4rem";
       lg.textContent = "Highlighted lines are the trains you would take; grey lines are other trains on the corridor. Steeper lines mean faster running; flat segments are dwells or holds.";
     }
+    // Cross-line context from the route analysis
+    try {
+      const ra = await load("routes.json"); const rr = (ra.routes || []).find(x => x.id === j.id);
+      if (rr && rr.findings && rr.findings.length) {
+        h("h2", null, "What history says about this route", root);
+        const card = h("div", "card", null, root); const ul = h("ul", "findings", null, card);
+        rr.findings.slice(0, 4).forEach(f => { const li = h("li", `sev-${f.severity}`, null, ul); h("span", "sev", f.severity, li); li.append(" " + f.text); });
+        link(`#/routes/${j.id}`, "Full route analysis: transfers, cross-line effects, where the time goes →", card, "small");
+      }
+    } catch (e) { /* routes.json is optional */ }
     // Model explanation
     const m = j.model || {};
     const det = h("details", null, null, root); det.style.marginTop = "1rem"; h("summary", null, "How the estimate is built", det);
@@ -469,3 +483,98 @@ async function plan(idx, journeyId) {
   await draw();
   liveTimer = setInterval(draw, 60000);
 }
+
+
+// ---------------------------------------------------------------- routes (cross-line effects, full route analysis)
+const HOURS = Array.from({ length: 24 }, (_, i) => `${i}`);
+async function routesPage(idx, routeId) {
+  const root = app; root.replaceChildren();
+  let ra;
+  try { ra = await load("routes.json"); } catch (e) { h("h1", null, "Route analysis", root); h("div", "empty", "No route analysis yet (data/routes.json missing).", root); return; }
+  const list = ra.routes || [];
+  h("h1", null, "Route analysis: transfers and cross-line effects", root);
+  if (!list.length) { h("div", "empty", "No journeys configured, or no arrivals collected yet for their stops.", root); return; }
+  const filters = h("div", "filters", null, root);
+  h("label", "small secondary", "Route", filters);
+  const sel = h("select", null, null, filters);
+  list.forEach(r => { const o = h("option", null, r.label, sel); o.value = r.id; });
+  sel.value = routeId && list.some(r => r.id === routeId) ? routeId : list[0].id;
+  sel.addEventListener("change", () => { location.hash = `#/routes/${sel.value}`; });
+  const r = list.find(x => x.id === sel.value);
+  const d = r.decomposition || {};
+  h("div", "small secondary", `History ${ra.start_ts ? new Date(ra.start_ts * 1000).toLocaleDateString() : ""} – ${ra.end_ts ? new Date(ra.end_ts * 1000).toLocaleDateString() : ""}; observed rides per leg: ${Object.values(d.n_rides || {}).join(" / ") || "0"}`, root);
+  if (r.status !== "ok") h("div", "empty", "Collecting: fewer than 20 observed rides on a leg. Findings appear once the corridor stops have a few days of arrivals.", root);
+  // Tiles
+  const tiles = h("div", "tiles", null, root);
+  const tot = (d.total_by_hour || []).filter(v => v != null);
+  const worstH = tot.length ? (d.total_by_hour || []).indexOf(Math.max(...tot)) : null;
+  tile(tiles, "Mean excess over schedule", tot.length ? minTxt(tot.reduce((a, b) => a + b, 0) / tot.length) : "–", worstH != null ? `worst hour ${String(worstH).padStart(2, "0")}:00 (${minTxt(d.total_by_hour[worstH])})` : "");
+  tile(tiles, "Largest component", d.dominant ? d.dominant.replace(/^(wait|ride|transfer)/, m => m) : "–", d.dominant && d.shares && d.shares[d.dominant] != null ? `${(d.shares[d.dominant] * 100).toFixed(0)}% of the excess` : "");
+  tile(tiles, "Share from transfers", d.cross_line_share != null ? `${(d.cross_line_share * 100).toFixed(0)}%` : "–", "extra connection wait vs schedule");
+  const trs = (ra.transfers || []).filter(t => (r.transfers || []).includes(t.id));
+  const mr = trs.map(t => t.summary && t.summary.missed_rate).filter(v => v != null);
+  tile(tiles, "Missed connections", mr.length ? `${(Math.max(...mr) * 100).toFixed(0)}%` : "–", trs.length ? `at ${trs.map(t => t.station_name).join(", ")}` : "no transfer on this route");
+  // Findings
+  if ((r.findings || []).length) {
+    h("h2", null, "Findings", root);
+    const card = h("div", "card", null, root); const ul = h("ul", "findings", null, card);
+    r.findings.forEach(f => { const li = h("li", `sev-${f.severity}`, null, ul); h("span", "sev", f.severity, li); li.append(" " + f.text); });
+  }
+  // Decomposition chart
+  const comps = (d.components || []).filter(c => c.by_hour && c.by_hour.some(v => v != null));
+  if (comps.length) {
+    h("h2", null, "Where the time goes, by hour", root);
+    const card = h("div", "card", null, root);
+    barChart(card, { title: "Mean excess over schedule by component", subtitle: "minutes above the scheduled wait, ride or connection, averaged over the history; negative values (faster than schedule) are shown as zero",
+      categories: HOURS, series: comps.map((c, i) => ({ name: c.name, values: c.by_hour.map(v => v == null ? 0 : Math.max(0, v)), color: c.kind === "transfer" ? cssVarJs("--series-8") : undefined })),
+      stacked: true, format: fmt.min, labelEvery: 3, height: 260 });
+  }
+  // Transfers
+  trs.forEach(t => {
+    const s = t.summary || {};
+    h("h2", null, `Transfer at ${t.station_name}: ${t.from_routes.join("/")} → ${t.to_routes.join("/")} (walk ${(t.walk_sec / 60).toFixed(0)} min)`, root);
+    if (!s.ok) { h("div", "empty", `Collecting: ${s.n || 0} connections observed (need 20).`, root); return; }
+    const card = h("div", "card", null, root);
+    const tl = h("div", "tiles", null, card);
+    tile(tl, "Connection wait", minTxt(s.wait_median_sec), `median; schedule ${minTxt(s.sched_wait_median_sec)}; p90 ${minTxt(s.wait_p90_sec)}`);
+    tile(tl, "Missed the planned train", s.missed_rate != null ? `${(s.missed_rate * 100).toFixed(0)}%` : "–", `of ${s.n_planned_observed} connections`);
+    const eff = s.feeder_lateness_effect || {};
+    tile(tl, `Cost of a late ${t.from_routes.join("/")}`, eff.excess_wait_diff_sec != null ? `${eff.excess_wait_diff_sec >= 0 ? "+" : "−"}${Math.abs(eff.excess_wait_diff_sec / 60).toFixed(1)} min` : "–", eff.missed_rate_late != null ? `missed ${(eff.missed_rate_late * 100).toFixed(0)}% vs ${(eff.missed_rate_on_time * 100).toFixed(0)}% on time` : "");
+    const c = t.comovement || {};
+    tile(tl, "Lines move together?", c.spearman != null ? `ρ ${c.spearman >= 0 ? "+" : "−"}${Math.abs(c.spearman).toFixed(2)}` : "–", c.joint_lift != null ? `joint disruption ${c.joint_lift.toFixed(1)}× chance` : (c.n_bins ? `${c.n_bins} bins` : "collecting"));
+    const bh = s.by_hour || [];
+    if (bh.some(x => x.wait_median_sec != null)) {
+      lineChart(card, { title: "Connection wait by hour", subtitle: "median and p90 observed vs the scheduled connection", x: HOURS,
+        series: [{ name: "median", values: bh.map(x => x.wait_median_sec) }, { name: "p90", values: bh.map(x => x.wait_p90_sec) }, { name: "scheduled", values: bh.map(x => x.sched_wait_median_sec), color: cssVarJs("--text-secondary") }],
+        format: fmt.min, labelEvery: 3, yMin: 0 });
+    }
+    const wrap = h("div", "table-wrap", null, card); const tb = h("table", null, null, wrap);
+    const hr = h("tr", null, null, h("thead", null, null, tb)); ["feeder arrival", "n", "median wait", "extra wait vs schedule", "missed"].forEach((x, i) => h("th", i ? "num" : "", x, hr));
+    const body = h("tbody", null, null, tb);
+    (s.by_feeder_lateness || []).forEach(b => { const row = h("tr", null, null, body); h("td", null, { on_time: "on time (<2 min late)", late_2_5: "2–5 min late", late_5_plus: "5+ min late" }[b.bucket] || b.bucket, row);
+      h("td", "num", String(b.n), row); h("td", "num", minTxt(b.wait_median_sec), row); h("td", "num", b.excess_wait_mean_sec == null ? "–" : `${b.excess_wait_mean_sec >= 0 ? "+" : "−"}${Math.abs(b.excess_wait_mean_sec).toFixed(0)} s`, row); h("td", "num", b.missed_rate == null ? "–" : `${(b.missed_rate * 100).toFixed(0)}%`, row); });
+  });
+  // Interactions
+  const ints = (r.interactions || []);
+  if (ints.length) {
+    h("h2", null, "Shared-track interaction between lines", root);
+    const card = h("div", "card", null, root);
+    h("div", "small secondary", "Time a train loses at a shared stop when another line's train is just ahead of where it would have arrived (within 3 min), vs free-running trains of the same line.", card);
+    const wrap = h("div", "table-wrap", null, card); const tb = h("table", null, null, wrap);
+    const hr = h("tr", null, null, h("thead", null, null, tb)); ["line", "behind a", "where", "when", "trips affected", "time lost", "95% CI", "p", "if leader late"].forEach((x, i) => h("th", i >= 4 ? "num" : "", x, hr));
+    const body = h("tbody", null, null, tb);
+    ints.forEach(x => { const b = x.best || x.per_stop[0]; if (!b) return; const row = h("tr", x.significant ? "worse" : "", null, body);
+      routeBullet(x.route, h("td", null, null, row)); routeBullet(x.leader_route, h("td", null, null, row)); h("td", null, b.stop_name, row); h("td", null, b.scope && b.scope !== "all" ? b.scope.replace("_", " ") : "all day", row);
+      h("td", "num", `${(b.conflict_rate * 100).toFixed(0)}%`, row); h("td", "num", `${b.extra_sec.toFixed(0)} s`, row); h("td", "num small", `${b.ci_lo.toFixed(0)}–${b.ci_hi.toFixed(0)}`, row); h("td", "num small", b.p_value < 0.001 ? "<0.001" : b.p_value.toFixed(3), row);
+      h("td", "num", b.extra_when_leader_late_sec == null ? "–" : `${b.extra_when_leader_late_sec.toFixed(0)} s`, row); });
+  }
+  const det = h("details", null, null, root); det.style.marginTop = "1rem"; h("summary", null, "How to read this", det);
+  const ul = h("ul", "small secondary", null, det);
+  h("li", null, "Connection wait: from stepping off the feeder train plus the walk to the next connecting train's arrival. 'Missed' means the connecting train the schedule would have given (given the feeder's scheduled arrival) had already left.", ul);
+  h("li", null, "Cost of a late feeder: extra connection wait for feeder trains ≥3 min late vs on-time ones (bootstrap CI, Mann-Whitney p). The lateness itself is on top of this.", ul);
+  h("li", null, "Lines move together: Spearman correlation of the two lines' mean lateness in 15-minute bins at the station; the lag with the strongest correlation says which line leads. Joint disruption lift: how much more often both lines are ≥4 min late in the same bin than if independent.", ul);
+  h("li", null, "Shared-track interaction: for each stop both lines serve, a train's lateness change from the previous stop when the other line's train arrived within 3 min before its projected arrival, vs when not. Reported per period when the effect is concentrated in a peak.", ul);
+  h("li", null, "Where the time goes: mean excess over schedule per component (origin wait from observed vs scheduled headways, each ride, each transfer) by hour; shares use the positive components.", ul);
+}
+const fmtSec = v => v == null ? "–" : `${(v / 60).toFixed(1)} min`;
+const cssVarJs = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
