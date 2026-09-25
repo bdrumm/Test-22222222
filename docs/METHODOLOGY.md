@@ -501,11 +501,19 @@ times. The browser then reproduces the server rules (lateness against the
 timetable, holds and stalls with the same thresholds, an approximate position
 lateness that places the train's scheduled time at its current stop using the
 canonical running times, gaps and bunching against the scheduled headway, and
-the `hold_persists` shift with the 90 s follower constraint). `tests/
-test_rt_client_js.py` runs the decoder and board under Node against a
-synthetic snapshot and checks they agree with the Python parser and position
-rules. The synthetic preview ships its recorded feed next to the site so the
-mode can be exercised offline.
+the `hold_persists` shift with the 90 s follower constraint). Trip ids are matched to the timetable by id, then by stem, then to the
+nearest scheduled trip of the same route within 15 minutes (shown with a
+`~`), as in section 2. The Line view's live overlay uses `data/client_lines.json`
+(each trip's scheduled time at the last canonical stop it serves, per line) to
+derive the schedule at any stop from the canonical running times, and draws
+every started train of the line: its reported position as a dot (between
+stops when in transit), the feed's projected trajectory, and holds, stalls
+and feed-optimistic corrections. `tests/test_rt_client_js.py` runs the
+decoder and both boards under Node against a synthetic snapshot and checks
+they agree with the Python parser and position rules. The synthetic preview
+ships its recorded feed next to the site so the mode can be exercised
+offline; against real feeds (G and L, 3:48 AM) the decoder matched the Python
+parser entity for entity.
 
 ## 9k. Scoring the live forecasts
 

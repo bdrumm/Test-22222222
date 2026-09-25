@@ -178,6 +178,7 @@ class StaticGTFS:
             self._by_stem.setdefault(rt_trip_stem(tid), []).append((tid, sid))
         self._st_by_trip: dict[str, dict[str, int]] | None = None
         self._service_cache: dict[date, set[str]] = {}
+        self._nearest_cache: dict[tuple, tuple[list[str], np.ndarray]] = {}
 
     def _trip_stop_index(self) -> dict[str, dict[str, int]]:
         if self._st_by_trip is None:
@@ -200,6 +201,32 @@ class StaticGTFS:
     # ------------------------------------------------------------------ #
     # Stations
     # ------------------------------------------------------------------ #
+    def static_trip_arrival(self, static_trip_id: str, stop_id: str, service_date: date) -> float | None:
+        """Scheduled arrival (epoch seconds) of a *static* trip id at a stop on a service date."""
+        sec = self._trip_stop_index().get(static_trip_id, {}).get(stop_id)
+        if sec is None:
+            return None
+        return service_midnight(service_date).timestamp() + float(sec)
+
+    def nearest_scheduled_trip(self, stop_id: str, route_id: str, service_date: date, ts: float,
+                               tol_sec: float = 900.0) -> tuple[str, float] | None:
+        """(static trip id, scheduled arrival) of the same route nearest to ``ts`` at the stop, within ``tol_sec``.
+
+        The fallback for realtime trips whose id is not in the timetable (supplement schedules, reroutes)."""
+        key = (stop_id, service_date, str(route_id))
+        ev = self._nearest_cache.get(key)
+        if ev is None:
+            df = self.scheduled_stop_events(stop_id, service_date, [str(route_id)])
+            ev = (list(df["trip_id"]), df["arrival_ts"].to_numpy(dtype=float))
+            self._nearest_cache[key] = ev
+        tids, arr = ev
+        if len(arr) == 0:
+            return None
+        i = int(np.argmin(np.abs(arr - ts)))
+        if abs(arr[i] - ts) > tol_sec:
+            return None
+        return tids[i], float(arr[i])
+
     def stop_name(self, stop_id: str) -> str:
         return self._stop_names.get(stop_id, stop_id)
 

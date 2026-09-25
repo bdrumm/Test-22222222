@@ -43,6 +43,8 @@ class LiveTrain:
     next_eta_ts: float | None = None
     lateness_sec: float | None = None      # feed ETA at next stop minus scheduled arrival (if matched)
     sched_matched: bool = False
+    sched_trip_id: str | None = None        # static trip matched by the nearest-trip fallback (id not in the timetable)
+    sched_method: str | None = None         # trip_id | nearest
     service_date: date | None = None
     started: bool = True                   # False for scheduled trips the feed lists before departure
     track_changed: float = 0.0             # 1.0 when the feed's actual track differs from the scheduled one
@@ -80,7 +82,7 @@ class LiveTrain:
         name = (lambda s: static.stop_name(s) if static and s else s)
         return {"trip_id": self.trip_id, "route_id": self.route_id, "direction": self.direction, "feed": self.feed,
                 "next_stop_id": self.next_stop_id, "next_stop_name": name(self.next_stop_id),
-                "next_eta_ts": self.next_eta_ts, "lateness_sec": self.lateness_sec, "sched_matched": self.sched_matched,
+                "next_eta_ts": self.next_eta_ts, "lateness_sec": self.lateness_sec, "sched_matched": self.sched_matched, "sched_method": self.sched_method,
                 "started": self.started, "stops_ahead": len(self.stops), "track_changed": bool(self.track_changed), "train_id": self.train_id,
                 "position": {"status": self.pos_status, "stop_id": self.pos_stop_id, "stop_name": name(self.pos_stop_id), "since_sec": self.since_update_sec,
                              "expected_run_sec": self.expected_run_sec, "holding": self.holding, "stalled": self.stalled,
@@ -98,6 +100,13 @@ HOLD_SEC = 150.0        # stopped this long at a station = holding (a normal dwe
 STALL_SLACK_SEC = 120.0  # in transit this much longer than the scheduled run = stalled
 
 
+def _sched_at(static: StaticGTFS, train: "LiveTrain", stop_id: str) -> float | None:
+    """Scheduled arrival of this train at a stop, through its matched static trip when the id itself is not in the timetable."""
+    if train.sched_trip_id:
+        return static.static_trip_arrival(train.sched_trip_id, stop_id, train.service_date)
+    return static.scheduled_arrival(train.trip_id, stop_id, train.service_date)
+
+
 def _fuse_position(train: "LiveTrain", veh: dict, static: StaticGTFS | None, now: float) -> None:
     """Attach the vehicle position and derive holding / stalled flags and position-implied lateness."""
     status, stop = veh.get("current_status"), veh.get("stop_id")
@@ -113,7 +122,7 @@ def _fuse_position(train: "LiveTrain", veh: dict, static: StaticGTFS | None, now
         train.since_update_sec = max(0.0, now - train.pos_ts)
     if static is None or not train.pos_stop_id or train.service_date is None:
         return
-    sched_here = static.scheduled_arrival(train.trip_id, train.pos_stop_id, train.service_date)
+    sched_here = _sched_at(static, train, train.pos_stop_id)
     if train.pos_status == "STOPPED_AT":
         if train.since_update_sec is not None:
             train.holding = train.since_update_sec >= HOLD_SEC
@@ -128,7 +137,7 @@ def _fuse_position(train: "LiveTrain", veh: dict, static: StaticGTFS | None, now
         except Exception:
             prev = None
         if prev is not None and sched_here is not None:
-            sched_prev = static.scheduled_arrival(train.trip_id, prev, train.service_date)
+            sched_prev = _sched_at(static, train, prev)
             if sched_prev is not None:
                 train.expected_run_sec = max(30.0, float(sched_here - sched_prev))
         if train.since_update_sec is not None and train.expected_run_sec is not None:
@@ -180,6 +189,14 @@ def live_trains(feed_bytes: dict[str, bytes], static: StaticGTFS | None, now: fl
                 train.train_id = str(tid.iloc[0]) if len(tid) else None
             if static is not None:
                 sched = static.scheduled_arrival(trip_id, train.next_stop_id, train.service_date)
+                if sched is not None:
+                    train.sched_method = "trip_id"
+                else:
+                    # id not in the timetable (supplement schedule, reroute): nearest scheduled trip of the route
+                    hit = static.nearest_scheduled_trip(train.next_stop_id, train.route_id, train.service_date, train.next_eta_ts)
+                    if hit is not None:
+                        train.sched_trip_id, sched = hit
+                        train.sched_method = "nearest"
                 if sched is not None:
                     train.lateness_sec = float(train.next_eta_ts - sched)
                     train.sched_matched = True

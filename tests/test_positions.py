@@ -64,3 +64,27 @@ def test_held_train_is_flagged_and_raises_lateness(static):
     assert r6["positions"]["holding"] >= 1 and r6["status"] in ("degraded", "disrupted")
     kinds = {x.get("kind") for x in live["incidents_developing"]}
     assert "holding" in kinds and any("no alert posted yet" in x["text"] for x in live["incidents_developing"])
+
+
+def test_unmatched_trip_id_falls_back_to_the_nearest_scheduled_trip(static):
+    sim, now, feeds, _ = _snapshot(static)
+    key, data = next(iter(feeds.items()))
+    msg = rt.parse_feed(data)
+    renamed = None
+    for ent in msg.entity:
+        if ent.HasField("trip_update") and ent.trip_update.trip.route_id == "6" and len(ent.trip_update.stop_time_update) > 3:
+            renamed = ent.trip_update.trip.trip_id
+            new_id = renamed.replace(renamed.split("_")[0], "999999", 1)     # origin time not in the timetable
+            ent.trip_update.trip.trip_id = new_id
+            for v in msg.entity:
+                if v.HasField("vehicle") and v.vehicle.trip.trip_id == renamed:
+                    v.vehicle.trip.trip_id = new_id
+            renamed = new_id
+            break
+    assert renamed
+    trains = {t.trip_id: t for t in live_trains({key: msg.SerializeToString()}, static, now)}
+    t = trains[renamed]
+    assert static.match_trip(renamed, t.service_date) is None
+    assert t.sched_matched and t.sched_method == "nearest" and t.sched_trip_id and t.lateness_sec is not None and abs(t.lateness_sec) < 900
+    if t.pos_status:
+        assert t.corroboration in ("agree", "feed_optimistic")

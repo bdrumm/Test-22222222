@@ -306,7 +306,7 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
             for k, data in feed_bytes.items():
                 (out_data / "feeds" / f"{k}.pb").write_bytes(data)
             feed_urls, demo_now, feeds_all = {k: f"feeds/{k}.pb" for k in feed_bytes}, now.timestamp(), sorted(feed_bytes)
-        export_client_schedule(static, resolved, specs, out_data, now, feeds_all, feed_urls=feed_urls, demo_now=demo_now)
+        export_client_schedule(static, resolved, specs, out_data, now, feeds_all, feed_urls=feed_urls, demo_now=demo_now, extra_routes=LINE_VIEW_ROUTES)
     except Exception as exc:
         logging.warning("client schedule export failed: %s", exc)
     routes_out = {"routes": [], "transfers": []}

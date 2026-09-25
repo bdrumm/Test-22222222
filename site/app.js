@@ -1,5 +1,5 @@
 import { barChart, lineChart, heatmap, sparkline, stringline, fmt, seriesColor } from "./charts.js";
-import { createClientLive } from "./rt-client.js";
+import { createClientLive, lineBoard } from "./rt-client.js";
 
 const app = document.getElementById("app");
 // Where the JSON lives. Normally next to the page (built site). When GitHub Pages serves the
@@ -438,21 +438,50 @@ function posFlags(cell, p, corroboration, extra = {}) {
 }
 
 // Browser-side polling of the MTA feeds (every 30 s) rendered above the pipeline snapshot.
-function setupClientLive(ctl, box) {
+function setupClientLive(ctl, box, { render = renderClientBoard, feedKeys = null } = {}) {
   const btn = h("button", "icon-btn live-toggle", null, ctl); btn.title = "Poll the MTA GTFS-Realtime feeds from this browser every 30 seconds";
   let on = false; try { on = localStorage.getItem("rtClient") === "1"; } catch {}
   const setLabel = () => { btn.textContent = on ? "● live feeds: on" : "○ live feeds: off"; btn.classList.toggle("on", on); };
   const stop = () => { if (clientLive) { clientLive.stop(); clientLive = null; } box.replaceChildren(); };
   const start = () => {
     stop(); h("div", "small secondary", "Connecting to the MTA feeds…", box);
-    clientLive = createClientLive({ base: DATA, onUpdate: (board, schedule) => renderClientBoard(box, board, schedule),
+    clientLive = createClientLive({ base: DATA, feedKeys, onUpdate: (board, schedule, feeds) => render(box, board, schedule, feeds),
       onError: e => { box.replaceChildren(); const em = h("div", "empty", null, box); h("div", null, "Could not read the MTA feeds from this browser.", em);
-        h("div", "small muted", `${e.message || e}. The feeds are fetched directly from api-endpoint.mta.info; an ad blocker, a corporate proxy or a missing data/client_schedule.json can block them. The pipeline snapshot below still works.`, em); } });
+        h("div", "small muted", `${e.message || e}. The feeds are fetched directly from api-endpoint.mta.info; an ad blocker, a corporate proxy or a missing data/client_schedule.json can block them. The pipeline snapshot still works.`, em); } });
     clientLive.start();
   };
   btn.addEventListener("click", () => { on = !on; try { localStorage.setItem("rtClient", on ? "1" : "0"); } catch {} setLabel(); if (on) start(); else stop(); });
   setLabel(); if (on) start();
 }
+async function renderLineLive(box, board, schedule, feeds, route, direction) {
+  let lines = null;
+  try { lines = await load("client_lines.json"); } catch (e) { /* optional: lateness unavailable */ }
+  const lb = lineBoard(schedule, (lines && lines.lines || {})[`${route}_${direction}`] || [], feeds, route, direction, board.now);
+  box.replaceChildren();
+  if (!lb) { h("div", "small secondary", `No stop sequence for ${route} ${direction} in data/client_schedule.json (rebuild the site).`, box); return; }
+  const now = board.now, card = h("div", "card", null, box);
+  const hd = h("div", "row between", null, card);
+  h("h3", null, "Live from the MTA feeds: every train on the line now", hd);
+  h("span", "small secondary", `${board.demo ? "recorded snapshot replayed at" : "polled"} ${hhmmss(now)} ET · every 30 s · ${lb.trains.length} trains · ${lb.n_holding} holding · ${lb.n_stalled} stalled · feed optimistic for ${lb.n_feed_optimistic}`, hd);
+  const held = t => t.position && (t.position.holding || t.position.stalled);
+  const legs = [{ stops: lb.stops, trains: lb.trains.map(t => ({ trip_id: t.trip_id, train_id: t.train_id, route_id: route, points: t.points, lateness_sec: t.effective_lateness_sec ?? t.lateness_sec, kind: held(t) ? "live-hold" : "live" })) }];
+  const markers = lb.trains.filter(t => t.position && t.position.stop_idx != null).map(t => { const p = t.position, moving = p.status !== "STOPPED_AT";
+    return { leg: 0, stop: moving && p.stop_idx > 0 ? p.stop_idx - 0.5 : p.stop_idx, ts: now, color: held(t) ? "var(--status-critical)" : moving ? "var(--status-good)" : "var(--status-warning)",
+      label: `${route} ${(t.train_id || t.trip_id).trim()}`, rows: [["position", `${posText(p)}`], ["lateness", lateTxt(t.effective_lateness_sec ?? t.lateness_sec)], ["feed vs position", t.corroboration.replace(/_/g, " ")]] }; });
+  stringline(card, { title: `${route} ${direction === "N" ? "northbound" : "southbound"}: reported positions and the feed's projection for the next hour`,
+    subtitle: "dots: where each train is now (green moving, amber stopped, red holding or stalled); dashed: the feed's ETAs; red dashed: held or stalled trains (lateness from the position when it proves the feed optimistic)",
+    legs, now, horizonSec: 3600, backSec: 600, routeColor: () => ROUTE_COLORS[route] || null, rowH: 12, markers });
+  if (lb.trains.length) {
+    const wrap = h("div", "table-wrap", null, card); const tb = h("table", "tiny", null, wrap); const tr = h("tr", null, null, h("thead", null, null, tb));
+    ["train", "position", "next stop", "ETA", "vs schedule", "flags"].forEach((x, i) => h("th", i === 3 || i === 4 ? "num" : "", x, tr)); const body = h("tbody", null, null, tb);
+    lb.trains.forEach(t => { const row = h("tr", null, null, body); const c0 = h("td", null, null, row); routeBullet(route, c0); c0.append(` ${(t.train_id || t.trip_id).trim()}`);
+      h("td", "small", t.position ? posText(t.position) : "–", row); h("td", "small", t.next_name, row); h("td", "num eta", hhmm(t.eta_ts), row);
+      const lc = h("td", "num", (t.sched_method === "nearest" ? "~" : "") + lateTxt(t.lateness_sec) + (t.corroboration === "feed_optimistic" ? ` → ${lateTxt(t.effective_lateness_sec)}` : ""), row); if (t.sched_method === "nearest") lc.title = "matched to the nearest scheduled trip (the realtime trip id is not in the timetable)";
+      posFlags(h("td", "small", null, row), t.position, t.corroboration, { track_changed: t.track_changed }); });
+  } else h("div", "small secondary", "No train of this line is under way right now.", card);
+  h("div", "tiny muted", "Computed in this browser from the feed's trip updates and vehicle positions; lateness compares the ETA at the next stop with the timetable (scheduled time at the trip's last stop minus the canonical running times).", card);
+}
+
 function renderClientBoard(box, board, schedule) {
   box.replaceChildren();
   const now = board.now, C = schedule.constants || {};
@@ -482,7 +511,7 @@ function renderClientBoard(box, board, schedule) {
       const row = h("tr", a.gap ? "gap-row" : "", null, body); const c0 = h("td", null, null, row); routeBullet(a.route, c0); if (a.train_id) { const sp = h("span", "tiny muted", ` ${a.train_id.trim()}`, c0); sp.title = "NYCT train id"; }
       h("td", "num eta", hhmm(a.eta_ts), row); h("td", "num", minsFromNow(a.eta_ts, now), row);
       if (t.disturbed) h("td", "num eta", a.hold_eta_ts && a.hold_eta_ts - a.eta_ts >= 30 ? `${hhmm(a.hold_eta_ts)} (+${((a.hold_eta_ts - a.eta_ts) / 60).toFixed(0)})` : "same", row);
-      h("td", "num", lateTxt(a.lateness_sec) + (a.corroboration === "feed_optimistic" ? ` → ${lateTxt(a.effective_lateness_sec)}` : ""), row);
+      const lc = h("td", "num", (a.sched_method === "nearest" ? "~" : "") + lateTxt(a.lateness_sec) + (a.corroboration === "feed_optimistic" ? ` → ${lateTxt(a.effective_lateness_sec)}` : ""), row); if (a.sched_method === "nearest") lc.title = "matched to the nearest scheduled trip (the realtime trip id is not in the timetable)";
       h("td", "small", !a.started ? "not departed" : posText(a.position), row);
       posFlags(h("td", "small", null, row), a.position, a.corroboration, a);
     });
@@ -952,6 +981,7 @@ async function linePage(idx, arg) {
   avail.forEach(l => { const o = h("option", null, `${l.route} ${l.direction === "N" ? "northbound" : "southbound"}`, sel); o.value = `${l.route}_${l.direction}`; });
   const key = avail.some(l => `${l.route}_${l.direction}` === `${routeArg}_${dirArg}`) ? `${routeArg}_${dirArg}` : `${avail[0].route}_${avail[0].direction}`;
   sel.value = key; sel.addEventListener("change", () => { location.hash = `#/line/${sel.value}`; });
+  const ctl = h("span", null, null, filters); ctl.style.marginLeft = "auto";
   let d;
   try { d = await load(`lines/${key}.json`); } catch (e) { h("div", "empty", `No data for ${key}.`, root); return; }
   const snap = d.snapshot, dev = d.deviation;
@@ -981,6 +1011,8 @@ async function linePage(idx, arg) {
   stringline(card, { title: `${route} ${snap.direction === "N" ? "northbound" : "southbound"}: last 2 hours and the next hour`, subtitle: `solid: observed arrivals (green on time, amber ≥2 min late, red ≥5 min); dashed: the feed's projection for trains under way; grey: the timetable${sim ? "; dotted: the model's simulation (position-corrected ETAs, no overtaking)" : ""}${sim && sim.scenarios.hold_persists ? "; red dotted: if the current hold persists" : ""}`,
     legs, now: snap.now, horizonSec: 3600, backSec: 7200, highlight: new Set(), path: [], routeColor: () => ROUTE_COLORS[route] || null, rowH: 12 });
   h("div", "small secondary", "Read it like a railway dispatcher: parallel lines are regular service, converging lines are bunching, a flat stretch is a hold, and a widening white band is a gap. Compare the slope of observed lines with the grey timetable to see where trains run slower than planned.", card).style.marginTop = ".4rem";
+  const liveBox = h("div", null, null, root);
+  setupClientLive(ctl, liveBox, { feedKeys: sch => [(sch.route_feeds || {})[route]].filter(Boolean), render: (box, board, schedule, feeds) => renderLineLive(box, board, schedule, feeds, route, snap.direction) });
   if (sim) {
     const b = sim.scenarios.baseline, hp = sim.scenarios.hold_persists;
     const c = h("div", "card", null, root);

@@ -73,3 +73,7 @@ def test_client_schedule_export(static, tmp_path):
     ln = cs["lines"]["6_N"]
     assert ln["stops"] and len(ln["run_sec"]) == len(ln["stops"]) - 1 and all(r is None or r > 0 for r in ln["run_sec"])
     assert (tmp_path / "client_schedule.json").exists()
+    cl = json.loads((tmp_path / "client_lines.json").read_text())
+    ls = cl["lines"]["6_N"]
+    assert len(ls) > 50 and all(len(x) == 3 and 0 <= x[1] < len(ln["stops"]) for x in ls) and ls == sorted(ls, key=lambda x: x[2])
+    assert cs["route_feeds"]["6"] == "1234567S" and cs["target_feeds"]

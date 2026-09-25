@@ -18,12 +18,14 @@ from tests.test_positions import _snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = """
-import { parseFeed, computeBoard, tripSuffix } from "%s";
+import { parseFeed, computeBoard, tripSuffix, lineBoard } from "%s";
 import { readFileSync } from "node:fs";
 const schedule = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const lines = JSON.parse(readFileSync(process.argv[2].replace("client_schedule", "client_lines"), "utf8")).lines;
 const feeds = {}; for (const [key, path] of Object.entries(JSON.parse(process.argv[3]))) feeds[key] = parseFeed(new Uint8Array(readFileSync(path)));
 const now = Number(process.argv[4]);
 const board = computeBoard(schedule, feeds, now);
+board.line = lineBoard(schedule, lines["6_N"] || [], feeds, "6", "N", now);
 const parsed = Object.fromEntries(Object.entries(feeds).map(([k, f]) => [k, { timestamp: f.timestamp, trips: f.trips.length, vehicles: f.vehicles.length,
   sample: f.trips[0] && { trip_id: f.trips[0].trip.trip_id, route: f.trips[0].trip.route_id, n_stops: f.trips[0].stops.length, first: f.trips[0].stops[0] } }]));
 console.log(JSON.stringify({ board, parsed, suffix: tripSuffix("AFA25GEN-1038-Sunday-00_000600_1..S03R") }));
@@ -75,3 +77,18 @@ def test_js_board_flags_the_held_train_like_the_server(static, tmp_path):
     assert abs(row["position"]["position_lateness_sec"] - server.position_lateness_sec) < 120
     assert board["summary"]["holding"] >= 1 and board["summary"]["trips"] > 5
     hw = tgt["per_route"]["6"]["sched_headway_sec"]; assert hw and 120 <= hw <= 1200
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_js_line_board_places_every_train(static, tmp_path):
+    res, now, feeds, held = _run_board(static, tmp_path, hold_sec=400)
+    lb = res["board"]["line"]
+    assert lb and lb["route"] == "6" and len(lb["stops"]) >= 10
+    trains = lb["trains"]
+    assert len(trains) >= 5 and all(t["points"] for t in trains)
+    assert trains == sorted(trains, key=lambda t: (-t["next_idx"], t["eta_ts"]))     # furthest along first
+    with_pos = [t for t in trains if t["position"]]
+    assert len(with_pos) >= len(trains) * 0.8 and all(t["position"]["stop_idx"] is not None for t in with_pos)
+    assert sum(1 for t in trains if t["lateness_sec"] is not None) >= len(trains) * 0.8, "line schedule should give lateness"
+    h = next(t for t in trains if t["trip_id"] == held)
+    assert h["position"]["holding"] and h["corroboration"] == "feed_optimistic" and lb["n_holding"] >= 1

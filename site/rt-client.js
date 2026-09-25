@@ -89,14 +89,18 @@ export const tripSuffix = id => { const p = id.split("_"); return p.length >= 3 
 export const tripStem = id => { const m = /^(\d+_[^.]+\.\.?[NS])/.exec(tripSuffix(id)); return m ? m[1] : tripSuffix(id); };
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 
+const NEAREST_TOL_SEC = 900;   // same tolerance as the offline matcher's nearest-by-route fallback
+// -> [scheduled ts, method] : trip id, its stem (ids without a path code), or the nearest scheduled arrival of the
+// same route (trips running on a supplement schedule whose realtime origin time differs from the static one)
 function matchSched(sched, tripId, route, eta) {
-  const suf = tripSuffix(tripId), stem = tripStem(tripId); let best = null, bestStem = null;
+  const suf = tripSuffix(tripId), stem = tripStem(tripId); let best = null, bestStem = null, near = null;
   for (const [s, r, ts] of sched) {
     if (r !== route || Math.abs(ts - eta) >= 3 * 3600) continue;
     if (s === suf) { if (best == null || Math.abs(ts - eta) < Math.abs(best - eta)) best = ts; }
     else if (tripStem(s) === stem) { if (bestStem == null || Math.abs(ts - eta) < Math.abs(bestStem - eta)) bestStem = ts; }
+    if (Math.abs(ts - eta) <= NEAREST_TOL_SEC && (near == null || Math.abs(ts - eta) < Math.abs(near - eta))) near = ts;
   }
-  return best ?? bestStem;
+  return best != null ? [best, "trip_id"] : bestStem != null ? [bestStem, "trip_stem"] : near != null ? [near, "nearest"] : [null, null];
 }
 function schedHeadway(sched, route, now) {
   const ts = sched.filter(([, r, t]) => r === route && t >= now - 3600 && t <= now + 3600).map(x => x[2]);
@@ -137,7 +141,7 @@ export function computeBoard(schedule, feeds, now) {
       const route = tu.trip.route_id; if (!tgt.routes.includes(route)) continue;
       const i = tu.stops.findIndex(s => s.stop_id === tgt.stop_id); if (i < 0) continue;
       const st = tu.stops[i], eta = st.arrival ?? st.departure; if (eta == null || eta < now - C.past_slack_sec || eta > now + 3600) continue;
-      const sched = matchSched(tgt.sched, tu.trip.trip_id, route, eta);
+      const [sched, schedMethod] = matchSched(tgt.sched, tu.trip.trip_id, route, eta);
       const veh = vehicles.get(key);
       const line = schedule.lines[`${route}_${tgt.direction}`];
       // NYCT publishes a vehicle with a status for every train in service; a trip still in the yard has
@@ -150,7 +154,7 @@ export function computeBoard(schedule, feeds, now) {
       let corroboration = "position_unknown", effective = lateness;
       if (pos && pos.position_lateness_sec != null && lateness != null) { corroboration = pos.position_lateness_sec - lateness > 60 ? "feed_optimistic" : "agree"; effective = Math.max(lateness, pos.position_lateness_sec); }
       if (pos && started && !seen.has(key)) { seen.add(key); if (pos.holding) summary.holding++; if (pos.stalled) summary.stalled++; if (corroboration === "feed_optimistic") summary.feed_optimistic++; }
-      arrivals.push({ key, trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, feed: tu.feed, eta_ts: eta, sched_ts: sched, lateness_sec: lateness, effective_lateness_sec: effective,
+      arrivals.push({ key, trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, feed: tu.feed, eta_ts: eta, sched_ts: sched, sched_method: schedMethod, lateness_sec: lateness, effective_lateness_sec: effective,
         stops_away: i, next_stop_id: tu.stops[0] && tu.stops[0].stop_id, started, position: pos, corroboration,
         track_changed: !!(st.actual_track && st.sched_track && st.actual_track !== st.sched_track), actual_track: st.actual_track });
     }
@@ -184,22 +188,79 @@ export function computeBoard(schedule, feeds, now) {
   return { now, summary, targets };
 }
 
-/** Poll the feeds every intervalMs and hand computed boards to onUpdate. */
-export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, fetchImpl = (u, o) => fetch(u, o) }) {
+const runBetween = (line, a, b) => { let run = 0; for (let q = a; q < b; q++) { if (line.run_sec[q] == null) return null; run += line.run_sec[q]; } return run; };
+const vehKey = trip => `${trip.start_date || ""}|${trip.trip_id}`;
+
+/** Every started train of one line right now: feed projection, reported position, lateness, holds and stalls.
+ *  lineSched is the entry of client_lines.json for the same key ([stem, last canonical stop idx, scheduled ts] per trip). */
+export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
+  const line = schedule.lines[`${route}_${direction}`]; if (!line) return null;
+  const C = { hold_sec: 150, stall_slack_sec: 120, ...(schedule.constants || {}) };
+  const idx = new Map(line.stops.map((s, i) => [s, i]));
+  const vehicles = new Map();
+  for (const fd of Object.values(feeds)) for (const v of fd.vehicles) if (v.trip && v.trip.trip_id) vehicles.set(vehKey(v.trip), v);
+  const trains = [];
+  for (const fd of Object.values(feeds)) for (const tu of fd.trips) {
+    if (!tu.trip || tu.trip.route_id !== route || !tu.stops.length) continue;
+    if ((tu.stops[0].stop_id || "").slice(-1) !== direction) continue;
+    const points = []; for (const s of tu.stops) { const i = idx.get(s.stop_id), t = s.arrival ?? s.departure; if (i != null && t != null) points.push([i, t]); }
+    if (!points.length) continue;
+    const veh = vehicles.get(vehKey(tu.trip));
+    const hasPos = !!(veh && veh.stop_id && veh.timestamp && veh.timestamp <= now + 60);
+    if (hasPos && !veh.status) veh.status = "IN_TRANSIT_TO";
+    if (!(hasPos || tu.trip.is_assigned === true)) continue;
+    const [j, eta] = points[0];
+    // schedule at the next stop from the trip's scheduled time at its last canonical stop
+    let sched = null, schedMethod = null; const stem = tripStem(tu.trip.trip_id); let best = null, near = null;
+    for (const [st, li, ts] of lineSched || []) {
+      if (li < j || Math.abs(ts - eta) > 4 * 3600) continue;
+      if (st === stem) { if (best == null || Math.abs(ts - eta) < Math.abs(best[1] - eta)) best = [li, ts]; continue; }
+      const run = runBetween(line, j, li); if (run == null) continue;
+      const at = ts - run;   // this trip's scheduled time at the train's next stop
+      if (Math.abs(at - eta) <= NEAREST_TOL_SEC && (near == null || Math.abs(at - eta) < Math.abs(near - eta))) near = at;
+    }
+    if (best) { const run = runBetween(line, j, best[0]); if (run != null) { sched = best[1] - run; schedMethod = "trip_stem"; } }
+    if (sched == null && near != null) { sched = near; schedMethod = "nearest"; }
+    const lateness = sched != null ? eta - sched : null;
+    let pos = null, corroboration = "position_unknown", effective = lateness;
+    if (hasPos) {
+      const pj = idx.get(veh.stop_id), since = Math.max(0, now - veh.timestamp);
+      let holding = false, stalled = false, expectedRun = null, plate = null;
+      if (veh.status === "STOPPED_AT") holding = since >= C.hold_sec;
+      else if (pj != null && pj > 0 && line.run_sec[pj - 1] != null) { expectedRun = line.run_sec[pj - 1]; stalled = since > expectedRun + C.stall_slack_sec; }
+      if (sched != null && pj != null && pj <= j) { const run = runBetween(line, pj, j); if (run != null) { const remaining = veh.status === "STOPPED_AT" ? 0 : (expectedRun != null ? Math.max(0, expectedRun - since) : 0); plate = now + remaining - (sched - run); } }
+      pos = { status: veh.status, stop_id: veh.stop_id, stop_idx: pj ?? null, stop_name: pj != null ? line.names[pj] : veh.stop_id, since_sec: since, holding, stalled, expected_run_sec: expectedRun, position_lateness_sec: plate };
+      if (plate != null && lateness != null) { corroboration = plate - lateness > 60 ? "feed_optimistic" : "agree"; effective = Math.max(lateness, plate); }
+    }
+    trains.push({ trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, points, next_idx: j, next_name: line.names[j], eta_ts: eta, sched_ts: sched, sched_method: schedMethod, lateness_sec: lateness,
+      effective_lateness_sec: effective, position: pos, corroboration, track_changed: !!(tu.stops[0].actual_track && tu.stops[0].sched_track && tu.stops[0].actual_track !== tu.stops[0].sched_track) });
+  }
+  trains.sort((a, b) => b.next_idx - a.next_idx || a.eta_ts - b.eta_ts);
+  return { route, direction, now, stops: line.stops.map((s, i) => ({ stop_id: s, name: line.names[i] })), trains,
+    n_holding: trains.filter(t => t.position && t.position.holding).length, n_stalled: trains.filter(t => t.position && t.position.stalled).length,
+    n_feed_optimistic: trains.filter(t => t.corroboration === "feed_optimistic").length };
+}
+
+/** Poll the feeds every intervalMs and hand computed boards to onUpdate(board, schedule, feeds).
+ *  feedKeys limits which feeds are polled (default: the feeds the monitored platforms need). */
+export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, fetchImpl = (u, o) => fetch(u, o), feedKeys = null }) {
   let timer = null, schedule = null, running = false, busy = false;
   async function tick() {
     if (busy) return; busy = true;
     try {
       if (!schedule) { const r = await fetchImpl(base + "client_schedule.json", { cache: "no-store" }); if (!r.ok) throw new Error(`client_schedule.json: HTTP ${r.status}`); schedule = await r.json(); }
       const now = schedule.demo_now || Date.now() / 1000, feeds = {}, info = [];
-      await Promise.all(Object.entries(schedule.feeds).map(async ([key, url]) => {
-        const t0 = Date.now();
+      const wanted = (typeof feedKeys === "function" ? feedKeys(schedule) : feedKeys) || schedule.target_feeds || Object.keys(schedule.feeds);
+      const keys = wanted.filter(k => schedule.feeds[k]);
+      if (!keys.length) throw new Error("no feed available for this page in data/client_schedule.json");
+      await Promise.all(keys.map(async key => {
+        const url = schedule.feeds[key], t0 = Date.now();
         const r = await fetchImpl(/^https?:/.test(url) ? url : base + url, { cache: "no-store" }); if (!r.ok) throw new Error(`${key}: HTTP ${r.status}`);
         const fd = parseFeed(new Uint8Array(await r.arrayBuffer())); feeds[key] = fd;
         info.push({ key, feed_ts: fd.timestamp, trips: fd.trips.length, vehicles: fd.vehicles.length, ms: Date.now() - t0 });
       }));
       const board = computeBoard(schedule, feeds, now); board.feeds = info.sort((a, b) => a.key.localeCompare(b.key)); board.schedule_generated_at = schedule.generated_at; board.demo = !!schedule.demo_now;
-      onUpdate(board, schedule);
+      await onUpdate(board, schedule, feeds);
     } catch (e) { if (onError) onError(e); }
     finally { busy = false; }
   }

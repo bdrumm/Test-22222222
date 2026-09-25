@@ -195,7 +195,8 @@ export function sparkline(container, values, { color, width = 120, height = 28 }
 // Time-distance ("stringline") chart: stops on the y axis, time on the x axis, one line per train.
 // legs: [{stops:[{name}], trains:[{trip_id, route_id, points:[[stopIdx, ts]], lateness_sec}]}]
 // highlight: Set of trip_ids to emphasise; path: [[legIdx, stopIdx, ts], ...] the rider's own itinerary.
-export function stringline(container, { title, subtitle, legs, now, horizonSec = 3600, backSec = 300, highlight = new Set(), path = [], routeColor = () => null, rowH = 18 }) {
+// markers: [{leg, stop (may be fractional: between stops), ts, color, label}] drawn as dots, e.g. reported train positions.
+export function stringline(container, { title, subtitle, legs, now, horizonSec = 3600, backSec = 300, highlight = new Set(), path = [], routeColor = () => null, rowH = 18, markers = [] }) {
   const stops = []; const legOffsets = [];
   legs.forEach((lg, li) => { legOffsets.push(stops.length); lg.stops.forEach((st, i) => {
     if (li > 0 && i === 0) { const prev = stops[stops.length - 1]; stops[stops.length - 1] = { ...prev, name: prev.name === st.name ? st.name : `${prev.name} / ${st.name}` }; legOffsets[li] = stops.length - 1; return; }
@@ -222,21 +223,24 @@ export function stringline(container, { title, subtitle, legs, now, horizonSec =
     const hi = highlight.has(tr.trip_id);
     const kind = tr.kind || "feed";
     const isSim = kind === "sim" || kind === "sim-hold";
-    const color = kind === "sched" ? cssVar("--grid") : kind === "actual" ? lateColor(tr.lateness_sec) : kind === "sim-hold" ? cssVar("--status-critical") : (routeColor(tr.route_id) || seriesColor(li));
+    const color = kind === "sched" ? cssVar("--grid") : kind === "actual" ? lateColor(tr.lateness_sec) : (kind === "sim-hold" || kind === "live-hold") ? cssVar("--status-critical") : (routeColor(tr.route_id) || seriesColor(li));
     const baseW = kind === "sched" ? 1 : kind === "actual" ? 2 : isSim ? 1.4 : 1.5;
     const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
     const pathEl = el("path", { d, fill: "none", stroke: hi ? color : (kind === "feed" && highlight.size ? cssVar("--de-emphasis") : color),
       "stroke-width": hi ? 3 : baseW, "stroke-linejoin": "round", "stroke-linecap": "round",
-      opacity: hi ? 1 : (kind === "sched" ? 0.7 : isSim ? 0.85 : 0.9), ...(kind === "live" ? { "stroke-dasharray": "5 4" } : isSim ? { "stroke-dasharray": "1.5 3.5" } : {}) }, f.svg);
+      opacity: hi ? 1 : (kind === "sched" ? 0.7 : isSim ? 0.85 : 0.9), ...((kind === "live" || kind === "live-hold") ? { "stroke-dasharray": "5 4" } : isSim ? { "stroke-dasharray": "1.5 3.5" } : {}) }, f.svg);
     const hit = el("path", { d, fill: "none", stroke: "transparent", "stroke-width": 14 }, f.svg);
     const late = tr.lateness_sec == null ? "–" : `${tr.lateness_sec >= 0 ? "+" : "−"}${Math.abs(tr.lateness_sec / 60).toFixed(0)} min`;
     if (kind !== "sched") {
-      const kindName = kind === "actual" ? "observed" : kind === "sim" ? "simulated" : kind === "sim-hold" ? "if the hold persists" : "projected";
+      const kindName = kind === "actual" ? "observed" : kind === "sim" ? "simulated" : kind === "sim-hold" ? "if the hold persists" : kind === "live-hold" ? "held / stalled" : "projected";
       hit.addEventListener("pointermove", ev => { pathEl.setAttribute("stroke-width", "4"); f.showTip(ev.clientX, ev.clientY, `${tr.route_id || ""} ${kindName} ${tr.train_id || tr.trip_id}`, [["lateness", late], ["stops", String(pts.length)]]); });
       hit.addEventListener("pointerleave", () => { pathEl.setAttribute("stroke-width", hi ? "3" : String(baseW)); f.hideTip(); });
       rows.push([`${tr.route_id || ""} ${tr.train_id || tr.trip_id}`, kindName, late, String(pts.length)]);
     }
   }));
+  markers.forEach(mk => { if (mk.ts < t0 || mk.ts > t1) return;
+    const c = el("circle", { cx: xp(mk.ts), cy: yp(gIndex(mk.leg || 0, mk.stop)), r: mk.r || 4.5, fill: mk.color || cssVar("--text-primary"), stroke: cssVar("--surface-1"), "stroke-width": 1.5 }, f.svg);
+    if (mk.label) { c.addEventListener("pointermove", ev => f.showTip(ev.clientX, ev.clientY, mk.label, mk.rows || [])); c.addEventListener("pointerleave", () => f.hideTip()); } });
   if (path.length >= 2) {
     const d = path.map(([li, si, ts], i) => `${i ? "L" : "M"}${xp(ts).toFixed(1)},${yp(gIndex(li, si)).toFixed(1)}`).join(" ");
     el("path", { d, fill: "none", stroke: cssVar("--series-8"), "stroke-width": 2.5, "stroke-dasharray": "6 4", "stroke-linejoin": "round" }, f.svg);

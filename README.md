@@ -217,7 +217,11 @@ every monitored platform: next arrivals, lateness against today's timetable
 (shipped by the build as `data/client_schedule.json`), positions, holds,
 stalls, feed-optimistic corrections, gaps and bunching, and the "if the hold
 persists" ETAs with the same rules the Python side uses. The pipeline snapshot
-below it still carries the model forecasts and downstream effects.
+below it still carries the model forecasts and downstream effects. The same
+toggle on the Line view draws every train of the line from the feeds every
+30 seconds: reported positions as dots on the Marey chart (green moving, amber
+stopped, red holding or stalled), the feed's projections, and a table with
+each train's position, lateness and flags.
 
 ## Learned arrival model
 
