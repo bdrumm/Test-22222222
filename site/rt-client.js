@@ -300,6 +300,133 @@ export function segmentTrips(lb, line, fromIdx, toIdx, now, maxN = 6) {
   return out.sort((a, b) => a.board_ts - b.board_ts).slice(0, maxN);
 }
 
+/** Two-leg trips: ride line 1 from fromIdx to xIdx1, walk walkSec, ride line 2 from xIdx2 to destIdx.
+ *  Each option pairs a first-leg train with the earliest connecting train it can catch. */
+export function transferTrips(lb1, line1, fromIdx, xIdx1, lb2, line2, xIdx2, destIdx, walkSec, now, maxN = 5) {
+  const firsts = segmentTrips(lb1, line1, fromIdx, xIdx1, now, maxN + 2);
+  const seconds = segmentTrips(lb2, line2, xIdx2, destIdx, now, 40);
+  const out = [];
+  for (const a of firsts) {
+    const b = seconds.find(s => s.board_ts >= a.arrive_ts + walkSec);
+    if (!b) continue;
+    const sched = (a.sched_ride_sec || 0) + walkSec + (b.sched_ride_sec || 0);
+    out.push({ legs: [a, b], board_ts: a.board_ts, arrive_ts: b.arrive_ts, total_sec: b.arrive_ts - now, ride_sec: b.arrive_ts - a.board_ts,
+      wait_at_transfer_sec: b.board_ts - a.arrive_ts, connection_margin_sec: b.board_ts - a.arrive_ts - walkSec, walk_sec: walkSec,
+      sched_ride_sec: sched, ride_vs_sched_sec: b.arrive_ts - a.board_ts - sched, next_if_missed_sec: (() => { const n = seconds.find(s => s.board_ts > b.board_ts); return n ? n.board_ts - b.board_ts : null; })() });
+  }
+  // a later first train that reaches the same connection is dominated
+  const seen = new Set();
+  return out.filter(o => { const k = o.legs[1].trip_id; if (seen.has(k)) return false; seen.add(k); return true; }).sort((x, y) => x.arrive_ts - y.arrive_ts).slice(0, maxN);
+}
+
+// ---------------------------------------------------------------- station graph: paths with up to one transfer
+const parentOf = sid => sid.replace(/[NS]$/, "");
+/** Stations (complexes) from the exported lines and transfers: Map(id -> {id, name, routes, members: [{key, route, dir, stop, idx}]}). */
+export function stationIndex(schedule) {
+  const root = new Map();
+  const find = x => { if (!root.has(x)) root.set(x, x); let r = x; while (root.get(r) !== r) r = root.get(r); root.set(x, r); return r; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) root.set(ra, rb); };
+  for (const [key, ln] of Object.entries(schedule.lines || {})) for (const sid of ln.stops) { find(parentOf(sid)); for (const o of (schedule.transfers || {})[sid] || []) union(parentOf(sid), parentOf(o.stop)); }
+  const stations = new Map();
+  for (const [key, ln] of Object.entries(schedule.lines || {})) {
+    const [route, dir] = key.split("_");
+    ln.stops.forEach((sid, idx) => { const id = find(parentOf(sid)); let st = stations.get(id); if (!st) { st = { id, names: new Map(), routes: new Set(), members: [] }; stations.set(id, st); }
+      st.names.set(ln.names[idx], (st.names.get(ln.names[idx]) || 0) + 1); st.routes.add(route); st.members.push({ key, route, dir, stop: sid, idx }); });
+  }
+  for (const st of stations.values()) { st.name = [...st.names.entries()].sort((a, b) => b[1] - a[1])[0][0]; st.routes = [...st.routes].sort(); delete st.names; }
+  return { stations, stationOf: sid => find(parentOf(sid)) };
+}
+
+/** Viable paths from station o to station d: direct on a shared line, or one transfer at a downstream station. Parallel routes
+ *  over the same stops are merged into one option (leg.keys lists them). Returns options sorted by scheduled time. */
+export function enumeratePaths(schedule, index, oId, dId, maxOptions = 8) {
+  const { stations, stationOf } = index; const o = stations.get(oId), d = stations.get(dId); if (!o || !d) return [];
+  const destByKey = new Map(d.members.map(m => [m.key, m]));
+  const raw = [], directRoutes = new Set();
+  for (const m1 of o.members) { const dm = destByKey.get(m1.key); if (dm && dm.idx > m1.idx) directRoutes.add(m1.route); }
+  for (const m1 of o.members) {
+    const L1 = schedule.lines[m1.key]; const dm = destByKey.get(m1.key);
+    if (dm && dm.idx > m1.idx) raw.push({ legs: [{ key: m1.key, from: m1.stop, fromIdx: m1.idx, to: dm.stop, toIdx: dm.idx }], transfer: null });
+    if (directRoutes.has(m1.route)) continue;              // a line that goes there directly: no point changing off it
+    for (let x = m1.idx + 1; x < L1.stops.length; x++) {
+      const xs = L1.stops[x]; const xst = stationOf(xs); if (xst === oId) continue;
+      if (xst === dId) break;                              // riding through the destination and doubling back is never a path
+      for (const opt of (schedule.transfers || {})[xs] || []) {
+        const dm2 = destByKey.get(opt.line); if (!dm2 || opt.line.split("_")[0] === m1.route) continue;
+        const L2 = schedule.lines[opt.line]; const x2 = L2.stops.indexOf(opt.stop); if (x2 < 0 || dm2.idx <= x2) continue;
+        if (L2.stops.slice(x2 + 1, dm2.idx).some(s => stationOf(s) === oId)) continue;   // the second leg passes back through the origin
+        raw.push({ legs: [{ key: m1.key, from: m1.stop, fromIdx: m1.idx, to: xs, toIdx: x }, { key: opt.line, from: opt.stop, fromIdx: x2, to: dm2.stop, toIdx: dm2.idx }], transfer: { stop: xs, stop2: opt.stop, station: stations.get(xst) ? stations.get(xst).name : xs, walk_sec: opt.min_sec || 120 } });
+      }
+    }
+  }
+  // merge parallel routes: same stop pattern (from/to per leg), different routes
+  const merged = new Map();
+  for (const p of raw) {
+    const sig = p.legs.map(l => `${l.from}>${l.to}`).join("|");
+    let m = merged.get(sig);
+    if (!m) { m = { id: sig, legs: p.legs.map(l => ({ from: l.from, to: l.to, keys: [], routes: [], idx: {} })), transfer: p.transfer }; merged.set(sig, m); }
+    p.legs.forEach((l, i) => { if (!m.legs[i].keys.includes(l.key)) { m.legs[i].keys.push(l.key); m.legs[i].routes.push(l.key.split("_")[0]); m.legs[i].idx[l.key] = [l.fromIdx, l.toIdx]; } });
+  }
+  const out = [...merged.values()];
+  for (const m of out) {
+    m.legs.forEach(l => { l.sched_ride_sec = Math.min(...l.keys.map(k => runBetween(schedule.lines[k], l.idx[k][0], l.idx[k][1]) ?? Infinity)); if (!isFinite(l.sched_ride_sec)) l.sched_ride_sec = null; l.n_stops = Math.min(...l.keys.map(k => l.idx[k][1] - l.idx[k][0])); });
+    m.sched_sec = m.legs.reduce((a, l) => a + (l.sched_ride_sec || 0), 0) + (m.transfer ? m.transfer.walk_sec : 0);
+    m.label = m.legs.map(l => l.routes.join("/")).join(" → ") + (m.transfer ? ` at ${m.transfer.station}` : " direct");
+  }
+  return out.sort((a, b) => a.sched_sec - b.sched_sec).slice(0, maxOptions);
+}
+
+/** Stations reachable from station oId directly or with one transfer: Map(stationId -> "direct" | "transfer"). */
+export function reachableStations(schedule, index, oId) {
+  const { stations, stationOf } = index; const o = stations.get(oId); const out = new Map(); if (!o) return out;
+  const mark = (sid, how) => { const st = stationOf(sid); if (st === oId) return; if (how === "direct" || !out.has(st)) out.set(st, how); };
+  for (const m1 of o.members) {
+    const L1 = schedule.lines[m1.key];
+    for (let x = m1.idx + 1; x < L1.stops.length; x++) {
+      mark(L1.stops[x], "direct");
+      for (const opt of (schedule.transfers || {})[L1.stops[x]] || []) { if (opt.line.split("_")[0] === m1.route) continue; const L2 = schedule.lines[opt.line]; const x2 = L2 ? L2.stops.indexOf(opt.stop) : -1; if (x2 < 0) continue;
+        for (let y = x2 + 1; y < L2.stops.length; y++) mark(L2.stops[y], "transfer"); }
+    }
+  }
+  return out;
+}
+
+/** Scheduled headway (s) of the routes of a leg at its origin stop around ``now`` from the per-line schedules (client_lines.json). */
+export function schedHeadwayAt(schedule, lineSched, keys, stop, now, windowSec = 1800) {
+  let rate = 0;
+  for (const k of keys) {
+    const line = schedule.lines[k], i = line.stops.indexOf(stop); const entries = lineSched[k] || []; if (i < 0 || !entries.length) continue;
+    let n = 0;
+    for (const [, li, ts] of entries) { if (li < i) continue; const run = runBetween(line, i, li); if (run == null) continue; const at = ts - run; if (Math.abs(at - now) <= windowSec) n++; }
+    if (n >= 1) rate += n / (2 * windowSec);
+  }
+  return rate > 0 ? 1 / rate : null;
+}
+
+/** Live trips for a merged leg (several parallel routes): each route's board with its own line indices, merged by boarding time. */
+export function legTrips(boards, schedule, leg, now, maxN = 6) {
+  const out = [];
+  for (const k of leg.keys) { const lb = boards[k], line = schedule.lines[k]; if (!lb || !line) continue; const [fi, ti] = leg.idx[k];
+    for (const t of segmentTrips(lb, line, fi, ti, now, maxN)) out.push({ ...t, key: k }); }
+  return out.sort((a, b) => a.board_ts - b.board_ts).slice(0, maxN);
+}
+
+/** Live itineraries for a path option (1 or 2 legs). */
+export function pathTrips(boards, schedule, option, now, maxN = 5) {
+  if (option.legs.length === 1) return legTrips(boards, schedule, option.legs[0], now, maxN + 4).map(t => ({ legs: [t], board_ts: t.board_ts, arrive_ts: t.arrive_ts, total_sec: t.arrive_ts - now, walk_sec: 0, sched_ride_sec: option.sched_sec, ride_vs_sched_sec: t.ride_sec - option.sched_sec }))
+    .sort((x, y) => x.arrive_ts - y.arrive_ts).slice(0, maxN);   // an express boarding later can still arrive first
+  const walk = option.transfer.walk_sec;
+  const firsts = legTrips(boards, schedule, option.legs[0], now, maxN + 2), seconds = legTrips(boards, schedule, option.legs[1], now, 40);
+  const out = [], seen = new Set();
+  for (const a of firsts) {
+    const b = seconds.find(s => s.board_ts >= a.arrive_ts + walk); if (!b || seen.has(b.trip_id)) continue; seen.add(b.trip_id);
+    const nxt = seconds.find(s => s.board_ts > b.board_ts);
+    out.push({ legs: [a, b], board_ts: a.board_ts, arrive_ts: b.arrive_ts, total_sec: b.arrive_ts - now, walk_sec: walk, wait_at_transfer_sec: b.board_ts - a.arrive_ts, connection_margin_sec: b.board_ts - a.arrive_ts - walk,
+      next_if_missed_sec: nxt ? nxt.board_ts - b.board_ts : null, sched_ride_sec: option.sched_sec, ride_vs_sched_sec: (b.arrive_ts - a.board_ts) - option.sched_sec });
+  }
+  return out.sort((x, y) => x.arrive_ts - y.arrive_ts).slice(0, maxN);
+}
+
 /** Feeds needed for the configured journeys. */
 export const journeyFeeds = schedule => [...new Set((schedule.journeys || []).flatMap(j => j.legs.flatMap(l => l.routes.map(r => (schedule.route_feeds || {})[r]))).filter(Boolean))];
 

@@ -69,6 +69,7 @@ def export_client_schedule(static: StaticGTFS, resolved: list[dict], journeys: l
                     sched.append([rt_trip_stem(t_id), int(idx[last["stop_id"]]), int(last["arrival_ts"])])
             lines[f"{r}_{d}"] = {"stops": seq, "names": [static.stop_name(s) for s in seq], "run_sec": run}
             line_sched[f"{r}_{d}"] = sorted(sched, key=lambda x: x[2])
+    transfers = station_transfers(static, lines)
     all_routes = {x for v in config.SUBWAY_FEED_ROUTES.values() for x in v}
     target_feeds = sorted(feeds or {config.feed_for_route(r) for r in routes_needed if r in all_routes})
     feed_keys = sorted(set(target_feeds) | (set() if feed_urls else set(config.SUBWAY_FEED_ROUTES)))
@@ -76,6 +77,7 @@ def export_client_schedule(static: StaticGTFS, resolved: list[dict], journeys: l
     out = {"generated_at": now.isoformat(), "service_date": sd.isoformat(), "targets": targets, "lines": lines,
            "feeds": {k: (feed_urls or {}).get(k) or config.rt_feed_url(k) for k in feed_keys}, "target_feeds": target_feeds,
            "route_feeds": {r: k for k, rs in config.SUBWAY_FEED_ROUTES.items() for r in rs},
+           "transfers": transfers,
            "journeys": [{"id": j.id, "label": j.label, "legs": [{"from_stop": l.from_stop, "to_stop": l.to_stop, "routes": [str(r) for r in l.routes],
                                                                   "from_name": l.from_name, "to_name": l.to_name, "transfer_min": l.transfer_min} for l in j.legs]}
                         for j in (journeys or [])],
@@ -84,4 +86,58 @@ def export_client_schedule(static: StaticGTFS, resolved: list[dict], journeys: l
            "constants": {"hold_sec": HOLD_SEC, "stall_slack_sec": STALL_SLACK_SEC, "past_slack_sec": 90, "gap_ratio": config.DEFAULTS.gap_ratio, "bunching_ratio": config.DEFAULTS.bunching_ratio,
                          "hold_extra_sec": DEFAULT_HOLD_EXTRA_SEC, "min_headway_sec": MIN_HEADWAY_SEC}}
     (out_data / "client_schedule.json").write_text(json.dumps(out))
+    return out
+
+
+def station_transfers(static: StaticGTFS, lines: dict, default_sec: int = 120) -> dict[str, list[dict]]:
+    """For every stop of every exported line: the other lines' stops in the same station complex.
+
+    A complex is the set of parent stations joined by GTFS transfers.txt (plus the stop's own parent); the
+    minimum transfer time comes from transfers.txt when the pair is listed. The browser uses this to offer
+    destinations reachable with one change and to plan the connection."""
+    parent = {}
+    for key, ln in lines.items():
+        for sid in ln["stops"]:
+            parent[sid] = static.parent_of(sid)
+    # union-find over parents
+    root: dict[str, str] = {}
+    def find(x):
+        root.setdefault(x, x)
+        while root[x] != x:
+            root[x] = root[root[x]]; x = root[x]
+        return x
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            root[ra] = rb
+    min_sec: dict[tuple[str, str], int] = {}
+    tr = getattr(static, "transfers", None)
+    if tr is not None and not tr.empty and {"from_stop_id", "to_stop_id"} <= set(tr.columns):
+        for r in tr.itertuples(index=False):
+            a, b = str(r.from_stop_id), str(r.to_stop_id)
+            if a in root or b in root or a in parent.values() or b in parent.values():
+                union(a, b)
+            mt = getattr(r, "min_transfer_time", None)
+            try:
+                if mt is not None and mt == mt:
+                    min_sec[(a, b)] = int(float(mt)); min_sec.setdefault((b, a), int(float(mt)))
+            except (TypeError, ValueError):
+                pass
+    by_complex: dict[str, list[tuple[str, str]]] = {}
+    for key, ln in lines.items():
+        for sid in ln["stops"]:
+            by_complex.setdefault(find(parent[sid]), []).append((key, sid))
+    out: dict[str, list[dict]] = {}
+    for key, ln in lines.items():
+        route = key.split("_")[0]
+        for sid in ln["stops"]:
+            opts = []
+            for key2, sid2 in by_complex.get(find(parent[sid]), []):
+                if key2 == key or key2.split("_")[0] == route:
+                    continue
+                p1, p2 = parent[sid], parent[sid2]
+                sec = min_sec.get((p1, p2), min_sec.get((p1, p1), default_sec) if p1 == p2 else default_sec)
+                opts.append({"line": key2, "stop": sid2, "min_sec": int(sec)})
+            if opts:
+                out[sid] = sorted(opts, key=lambda o: o["line"])
     return out

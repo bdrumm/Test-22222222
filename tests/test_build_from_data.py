@@ -77,3 +77,7 @@ def test_client_schedule_export(static, tmp_path):
     ls = cl["lines"]["6_N"]
     assert len(ls) > 50 and all(len(x) == 3 and 0 <= x[1] < len(ln["stops"]) for x in ls) and ls == sorted(ls, key=lambda x: x[2])
     assert cs["route_feeds"]["6"] == "1234567S" and cs["target_feeds"]
+    # transfers: the 6 and the 4 share Grand Central (same stop id in the mini corridor)
+    tx = cs["transfers"]
+    assert {o["line"] for o in tx["631N"]} >= {"4_N"} and all(o["stop"] == "631N" and o["min_sec"] > 0 for o in tx["631N"] if o["line"] == "4_N")
+    assert all(o["line"].split("_")[0] != "6" for o in tx.get("631N", [])), "never a transfer onto the same route"

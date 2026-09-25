@@ -251,53 +251,82 @@ export function stringline(container, { title, subtitle, legs, now, horizonSec =
 }
 
 
-// Vertical track diagram for one direction of a line: stops as rows, the rider's segment highlighted, trains as markers
-// that glide between polls (the caller feeds dead-reckoned positions), optional per-stop data layers as small bars.
-// layers: [{name, values: number[] indexed like stops (null = none), max, color, format}]; targets: stop ids that are monitored platforms.
-export function trackStrip(container, { stops, fromIdx, toIdx, startIdx = 0, endIdx = stops.length - 1, routeColor, rowH = 24, layers = [], targets = new Set() }) {
+// Horizontal track diagram: one track per leg (left to right in the direction of travel), stops as ticks with
+// names below, the rider's segment highlighted, per-stop data layers as small bars under the names, trains as
+// route-bullet markers that glide along the track (the caller feeds dead-reckoned positions).
+// tracks: [{stops, fromIdx, toIdx, startIdx, endIdx, route, color, layers: [{name, values, max, color, format}]}]
+// link: {from: [track, idx], to: [track, idx], label} draws the transfer between two tracks. targets: monitored stop ids.
+export function trackDiagram(container, { tracks, link = null, targets = new Set(), colW = null }) {
   const root = html("div", "track", null, container);
-  const trackX = 180, nameX = 196, nameW = 196, layerW = 70, layerGap = 22;
-  const n = endIdx - startIdx + 1, height = 18 + n * rowH + 10;
-  const width = nameX + nameW + layers.length * (layerW + layerGap) + 6;
+  const left = 64, labelH = 56, nameH = 84, layerRowH = 16;
+  const nCols = Math.max(...tracks.map(t => t.endIdx - t.startIdx + 1));
+  // stops spread over at least ~600px so short trips do not cram, but never wider than the stop count needs
+  const cw = colW || Math.max(58, Math.min(120, Math.floor(600 / Math.max(1, nCols - 1))));
+  const layersMax = Math.max(0, ...tracks.map(t => (t.layers || []).length));
+  const trackH = labelH + 24 + nameH + layersMax * layerRowH + 10;
+  const width = left + (nCols - 1) * cw + 60, height = tracks.length * trackH + 6;
   const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" }, root);
-  svg.style.width = "100%"; svg.style.maxWidth = `${width}px`; svg.style.minWidth = "440px"; svg.style.height = "auto";
-  const color = routeColor || cssVar("--series-1");
-  const y = i => 18 + (i - startIdx) * rowH;
-  el("line", { x1: trackX, x2: trackX, y1: y(startIdx), y2: y(endIdx), stroke: cssVar("--grid"), "stroke-width": 4, "stroke-linecap": "round" }, svg);
-  el("line", { x1: trackX, x2: trackX, y1: y(fromIdx), y2: y(toIdx), stroke: color, "stroke-width": 6, "stroke-linecap": "round" }, svg);
-  layers.forEach((L, li) => { const x = nameX + nameW + li * (layerW + layerGap); const t = el("text", { x, y: 9, class: "axis-text" }, svg); t.style.fontSize = "10px"; t.textContent = L.name; });
-  for (let i = startIdx; i <= endIdx; i++) {
-    const inSeg = i >= fromIdx && i <= toIdx, isEnd = i === fromIdx || i === toIdx;
-    el("circle", { cx: trackX, cy: y(i), r: isEnd ? 6 : 3.5, fill: isEnd ? color : cssVar("--surface-1"), stroke: inSeg ? color : cssVar("--text-secondary"), "stroke-width": isEnd ? 2.5 : 1.5 }, svg);
-    const name = stops[i].name.length > 27 ? stops[i].name.slice(0, 26) + "…" : stops[i].name;
-    const t = el("text", { x: nameX, y: y(i) + 4, class: "axis-text", "font-weight": isEnd ? 700 : 400 }, svg); t.textContent = name + (targets.has(stops[i].stop_id) ? " ◎" : "");
-    if (isEnd) el("text", { x: nameX + nameW - 4, y: y(i) + 4, class: "dlabel", "text-anchor": "end" }, svg).textContent = i === fromIdx ? "board" : "alight";
-    layers.forEach((L, li) => { const val = L.values[i]; if (val == null || !(val > 0)) return;
-      const x = nameX + nameW + li * (layerW + layerGap), w = Math.max(2, Math.min(1, val / (L.max || 1)) * layerW);
-      el("rect", { x, y: y(i) - rowH * 0.27, width: w, height: rowH * 0.54, rx: 2, fill: L.color, opacity: 0.75 }, svg);
-      if (val >= (L.max || 1) * 0.2) el("text", { x: x + w + 3, y: y(i) + 4, class: "axis-text" }, svg).textContent = L.format ? L.format(val) : String(val); });
+  // rendered at its natural size (never scaled up); the container scrolls when narrower
+  svg.style.width = `${width}px`; svg.style.maxWidth = "none"; svg.style.height = `${height}px`;
+  const geo = tracks.map((t, ti) => ({ y: ti * trackH + labelH + 8, x: i => left + 20 + (i - t.startIdx) * cw }));
+  tracks.forEach((t, ti) => {
+    const { y, x } = geo[ti], color = t.color || cssVar("--series-1");
+    el("line", { x1: x(t.startIdx), x2: x(t.endIdx), y1: y, y2: y, stroke: cssVar("--grid"), "stroke-width": 5, "stroke-linecap": "round" }, svg);
+    el("line", { x1: x(t.fromIdx), x2: x(t.toIdx), y1: y, y2: y, stroke: color, "stroke-width": 7, "stroke-linecap": "round" }, svg);
+    // route badge at the left end of the track (all routes of a merged leg named above it)
+    const bx = x(t.startIdx) - 22; el("circle", { cx: bx, cy: y, r: 9, fill: color }, svg);
+    const bt = el("text", { x: bx, y: y + 4, "text-anchor": "middle", class: "badge-text" }, svg); bt.textContent = t.route; if (["N", "Q", "R", "W"].includes(t.route)) bt.style.fill = "#111";
+    if (t.routesLabel && t.routesLabel !== t.route) { const rl = el("text", { x: bx, y: y - 14, "text-anchor": "middle", class: "axis-text" }, svg); rl.style.fontSize = "9px"; rl.textContent = t.routesLabel; }
+    for (let i = t.startIdx; i <= t.endIdx; i++) {
+      const inSeg = i >= t.fromIdx && i <= t.toIdx, isEnd = i === t.fromIdx || i === t.toIdx;
+      el("circle", { cx: x(i), cy: y, r: isEnd ? 6 : 3.5, fill: isEnd ? color : cssVar("--surface-1"), stroke: inSeg ? color : cssVar("--text-secondary"), "stroke-width": isEnd ? 2.5 : 1.5 }, svg);
+      const nm = t.stops[i].name.length > 22 ? t.stops[i].name.slice(0, 21) + "…" : t.stops[i].name;
+      const tx = el("text", { x: x(i) + 4, y: y + 26, class: "axis-text", "text-anchor": "end", transform: `rotate(-38 ${x(i) + 4} ${y + 26})`, "font-weight": isEnd ? 700 : 400 }, svg);
+      tx.textContent = nm + (targets.has(t.stops[i].stop_id) ? " ◎" : "");
+      if (isEnd) { const fl = el("text", { x: x(i), y: y + 14, class: "dlabel", "text-anchor": "middle" }, svg); fl.style.fontSize = "9px"; fl.textContent = i === t.fromIdx ? (ti === 0 ? "▲ board" : "▲ change here") : (ti === tracks.length - 1 ? "▲ alight" : "▲ change here"); }
+      (t.layers || []).forEach((L, li) => { const val = L.values[i]; const ly = y + 26 + nameH + li * layerRowH;
+        if (li === 0 && i === t.startIdx) (t.layers || []).forEach((LL, lj) => { const hd = el("text", { x: 2, y: y + 26 + nameH + lj * layerRowH + 10, class: "axis-text" }, svg); hd.style.fontSize = "9px"; hd.textContent = LL.name; });
+        if (val == null || !(val > 0)) return;
+        const w = Math.max(3, Math.min(1, val / (L.max || 1)) * (cw - 10));
+        el("rect", { x: x(i) - w / 2, y: ly + 3, width: w, height: layerRowH - 6, rx: 2, fill: L.color, opacity: 0.75 }, svg);
+        if (val >= (L.max || 1) * 0.35) { const vt = el("text", { x: x(i), y: ly + 11, class: "axis-text", "text-anchor": "middle" }, svg); vt.style.fontSize = "8.5px"; vt.textContent = L.format ? L.format(val) : String(val); } });
+    }
+  });
+  if (link && tracks.length > 1) {
+    const [ta, ia] = link.from, [tb, ib] = link.to;
+    const ax = geo[ta].x(ia), ay = geo[ta].y, bx = geo[tb].x(ib), by = geo[tb].y;
+    el("path", { d: `M${ax},${ay + 8} C${ax},${(ay + by) / 2} ${bx},${(ay + by) / 2} ${bx},${by - 8}`, fill: "none", stroke: cssVar("--text-secondary"), "stroke-width": 1.5, "stroke-dasharray": "4 3" }, svg);
+    if (link.label) el("text", { x: (ax + bx) / 2 + 8, y: (ay + by) / 2 + 4, class: "dlabel" }, svg).textContent = link.label;
   }
   const layer = el("g", {}, svg);
   const markers = new Map();
-  /** trains: [{id, idx (fractional), state, label, sub, color}] */
+  /** trains: [{id, track, idx (fractional), state, route, color, label, sub, emphasis}] */
   function update(trains) {
     const seen = new Set();
+    const rowOf = new Map();   // label row per marker so neighbours alternate between two heights
+    tracks.forEach((t, ti) => { trains.filter(tr => (tr.track || 0) === ti && tr.idx != null).sort((a, b) => a.idx - b.idx).forEach((tr, i) => rowOf.set(`${ti}|${tr.id}`, i % 2)); });
     for (const tr of trains) {
-      if (tr.idx == null || tr.idx < startIdx - 0.98 || tr.idx > endIdx + 0.02) continue;
-      seen.add(tr.id);
-      let m = markers.get(tr.id);
+      const t = tracks[tr.track || 0]; if (!t || tr.idx == null || tr.idx < t.startIdx - 0.98 || tr.idx > t.endIdx + 0.02) continue;
+      const key = `${tr.track || 0}|${tr.id}`; seen.add(key);
+      const g = geo[tr.track || 0];
+      let m = markers.get(key);
       if (!m) {
-        m = el("g", { class: "train" }, layer); m.style.transition = "transform .9s linear"; m.style.transform = `translate(0px, ${y(tr.idx).toFixed(1)}px)`;
-        m.c = el("circle", { cx: trackX, cy: 0, r: 7, stroke: cssVar("--surface-1"), "stroke-width": 2 }, m);
-        m.l = el("text", { x: trackX - 14, y: 4, "text-anchor": "end", class: "train-label" }, m);
-        m.s = el("text", { x: trackX - 14, y: 15, "text-anchor": "end", class: "train-sub" }, m);
-        markers.set(tr.id, m);
+        m = el("g", { class: "train" }, layer); m.style.transition = "transform .9s linear"; m.style.transform = `translate(${g.x(tr.idx).toFixed(1)}px, ${g.y}px)`;
+        m.ring = el("circle", { cx: 0, cy: 0, r: 13, fill: "none", stroke: cssVar("--text-primary"), "stroke-width": 2, opacity: 0 }, m);
+        m.c = el("circle", { cx: 0, cy: 0, r: 9, stroke: cssVar("--surface-1"), "stroke-width": 2 }, m);
+        m.r = el("text", { x: 0, y: 3.5, "text-anchor": "middle", class: "badge-text" }, m);
+        m.l = el("text", { x: 0, y: -26, "text-anchor": "middle", class: "train-label" }, m);
+        m.s = el("text", { x: 0, y: -16, "text-anchor": "middle", class: "train-sub" }, m);
+        markers.set(key, m);
       }
-      m.style.transform = `translate(0px, ${y(tr.idx).toFixed(1)}px)`;
+      m.style.transform = `translate(${g.x(tr.idx).toFixed(1)}px, ${g.y}px)`;
       m.c.setAttribute("fill", tr.color); m.c.classList.toggle("pulse", tr.state === "holding" || tr.state === "stalled");
+      m.r.textContent = tr.route || ""; m.r.style.fill = ["N", "Q", "R", "W"].includes(tr.route) ? "#111" : "#fff";
+      m.ring.setAttribute("opacity", tr.emphasis ? 1 : 0); m.ring.setAttribute("stroke", tr.emphasis === "connection" ? cssVar("--series-8") : cssVar("--text-primary"));
+      const row = rowOf.get(key) || 0; m.l.setAttribute("y", row ? -44 : -26); m.s.setAttribute("y", row ? -34 : -16);
       m.l.textContent = tr.label || ""; m.s.textContent = tr.sub || "";
     }
-    for (const [id, m] of markers) if (!seen.has(id)) { m.remove(); markers.delete(id); }
+    for (const [key, m] of markers) if (!seen.has(key)) { m.remove(); markers.delete(key); }
   }
   return { root, update };
 }

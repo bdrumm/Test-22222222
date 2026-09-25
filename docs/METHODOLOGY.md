@@ -529,25 +529,30 @@ ships its recorded feed next to the site so the mode can be exercised
 offline; against real feeds (G and L, 3:48 AM) the decoder matched the Python
 parser entity for entity.
 
-**Travel mode** (`#/travel/<route>_<dir>/<from>/<to>`). The browser's line
-board (every started train, its position, lateness, holds and stalls) drives a
-track diagram. Between polls each marker is dead-reckoned: a stopped train
-stays put; a moving train advances from its last stop toward the next in
-proportion to elapsed time over the canonical running time, capped short of
-the stop until the feed confirms it. Trip candidates are the trains whose
-feed stop list carries both the origin and the destination with the origin
-ETA still ahead; ride time is the difference of the two ETAs and is compared
-with the canonical running time between the stops. Layers come from the
-published analyses: the line view's deviation grid gives each stop's mean
-lateness change at the current hour (summed over the stretch as "typical
-time lost"), the hold log gives holds per day per stop, ETA trust gives the
-feed's typical error at the boarding train's distance, the snapshot's
-simulation gives the destination arrival under "hold persists", the
-monitored platforms' forecasts give the learned model's ETA and downstream
-effects, and the climatology gives the line's disruption base rate for this
-day and hour. When the feeds cannot be fetched from the browser the tab falls
-back to the pipeline's last line snapshot (feed projections without
-positions).
+**Travel mode** (`#/travel/<origin>/<destination>/<path>`). The client
+schedule exports, for every stop of every line, the other lines' stops in
+the same station complex (parents joined by GTFS `transfers.txt`, with its
+minimum transfer time, 120 s when unlisted). The browser builds the station
+index from it and enumerates paths from origin to destination: direct on any
+line serving both (destination downstream of the origin), or one transfer at
+any downstream stop of an origin line onto a line that serves the destination
+downstream of the transfer. Paths that pass through the destination and
+double back, whose second leg passes back through the origin, or that change
+off a line that already reaches the destination directly are dropped. Options
+with the same stop pattern on parallel routes are merged (their routes listed
+together) and each option carries the scheduled time (minimum canonical
+running time over its routes per leg, plus the walk), an expected time (half
+the scheduled headway of the leg's routes at the boarding stop, from the
+per-line schedules, as the wait at the origin and at the change; the sum of
+the line view's mean lateness change at the current hour over each stretch;
+and a hold risk, holds per day times median hold length divided by trips per
+day, summed over the stretch) and, from the feeds, the live time of the next
+itinerary: the earliest-arriving train serving both stops of the first leg,
+then the first train of the second leg's routes boarding after the arrival
+plus the walk. Ranking uses the live arrival when any path has one, else the
+expected time. The track diagram dead-reckons each train as before, mapping
+its line index onto the leg's stop list by stop id so express and local
+trains share a track.
 
 ## 9k. Scoring the live forecasts
 

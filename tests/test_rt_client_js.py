@@ -18,7 +18,7 @@ from tests.test_positions import _snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = """
-import { parseFeed, computeBoard, tripSuffix, lineBoard, planJourneys, journeyFeeds, trainProgress, segmentTrips } from "%s";
+import { parseFeed, computeBoard, tripSuffix, lineBoard, planJourneys, journeyFeeds, trainProgress, segmentTrips, stationIndex, enumeratePaths, reachableStations, pathTrips, schedHeadwayAt } from "%s";
 import { readFileSync } from "node:fs";
 const schedule = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const lines = JSON.parse(readFileSync(process.argv[2].replace("client_schedule", "client_lines"), "utf8")).lines;
@@ -29,6 +29,11 @@ board.line = lineBoard(schedule, lines["6_N"] || [], feeds, "6", "N", now);
 board.plan = planJourneys(schedule, feeds, now); board.journey_feeds = journeyFeeds(schedule);
 const L6 = schedule.lines["6_N"]; const fi = L6.stops.indexOf("635N"), ti = L6.stops.indexOf("631N");
 board.travel = { trips: segmentTrips(board.line, L6, fi, ti, now), progress0: board.line.trains.map(t => trainProgress(t, 0, L6)), progress60: board.line.trains.map(t => trainProgress(t, 60, L6)) };
+const index = stationIndex(schedule); const usq = index.stationOf("635N"), s59 = index.stationOf("629N"), gc = index.stationOf("631N");
+const paths = enumeratePaths(schedule, index, usq, s59, 8);
+const boards = {}; for (const k of Object.keys(schedule.lines)) { const [r, d] = k.split("_"); boards[k] = lineBoard(schedule, lines[k] || [], feeds, r, d, now); }
+board.paths = { n_stations: index.stations.size, usq, s59, gc, reach: Object.fromEntries(reachableStations(schedule, index, usq)), paths: paths.map(p => ({ id: p.id, label: p.label, sched_sec: p.sched_sec, legs: p.legs.map(l => ({ keys: l.keys, routes: l.routes, from: l.from, to: l.to, sched_ride_sec: l.sched_ride_sec })), transfer: p.transfer, its: pathTrips(boards, schedule, p, now, 3) })),
+  hw6: schedHeadwayAt(schedule, lines, ["6_N"], "635N", now), hw46: schedHeadwayAt(schedule, lines, ["4_N", "6_N"], "631N", now) };
 const parsed = Object.fromEntries(Object.entries(feeds).map(([k, f]) => [k, { timestamp: f.timestamp, trips: f.trips.length, vehicles: f.vehicles.length,
   sample: f.trips[0] && { trip_id: f.trips[0].trip.trip_id, route: f.trips[0].trip.route_id, n_stops: f.trips[0].stops.length, first: f.trips[0].stops[0] } }]));
 console.log(JSON.stringify({ board, parsed, suffix: tripSuffix("AFA25GEN-1038-Sunday-00_000600_1..S03R") }));
@@ -164,3 +169,19 @@ def test_js_travel_helpers_dead_reckon_and_pick_trips(static, tmp_path):
             assert a["state"] == "unknown"
     h = next(t for t in trains if t["trip_id"] == held); ph = next(p for t, p in zip(trains, p0) if t["trip_id"] == held)
     assert ph["state"] == "holding" and ph["since"] >= 400
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_js_station_graph_paths_and_itineraries(static, tmp_path):
+    res, now, feeds, held = _run_board(static, tmp_path, hold_sec=400)
+    P = res["board"]["paths"]
+    assert P["n_stations"] >= 10 and P["usq"] != P["s59"]
+    assert P["reach"][P["s59"]] == "direct" and P["reach"][P["gc"]] == "direct"
+    paths = P["paths"]; assert paths and paths == sorted(paths, key=lambda p: p["sched_sec"])
+    direct = [p for p in paths if p["transfer"] is None]
+    assert direct and set(direct[0]["legs"][0]["routes"]) >= {"4", "6"}, "the 4 and the 6 serve the same stops: merged into one direct option"
+    assert all(p["transfer"] is None or p["transfer"]["walk_sec"] > 0 for p in paths)
+    assert not any(p["transfer"] and p["legs"][0]["routes"][0] in direct[0]["legs"][0]["routes"] for p in paths), "no change off a line that goes there directly"
+    its = direct[0]["its"]; assert its and len(its[0]["legs"]) == 1 and its[0]["board_ts"] >= now - 60 and its[0]["arrive_ts"] > its[0]["board_ts"]
+    assert its[0]["sched_ride_sec"] == direct[0]["sched_sec"] and its == sorted(its, key=lambda x: x["arrive_ts"])
+    assert P["hw6"] and 120 <= P["hw6"] <= 1200 and P["hw46"] and P["hw46"] < P["hw6"], "two routes at a stop: shorter combined headway"

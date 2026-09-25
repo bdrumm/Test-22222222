@@ -213,19 +213,36 @@ chart next to the observed and feed-projected ones.
 
 ### Travel mode
 
-The Travel tab is one trip, live: pick a line and direction, where you board
-and where you alight. A track diagram shows every train on the line as a
-marker that glides between the 30-second polls along the scheduled running
-time (green moving, amber stopped, red holding or stalled), your stretch
-highlighted, monitored platforms marked. Next to it the trip panel lists the
-trains that will carry you, with the feed's boarding and arrival ETAs, ride
-time against the schedule, lateness corrected from the position, the learned
-model's ETA where a monitored platform is on the trip and the simulation's
-arrival if the current hold persists. Per-stop layers draw the time trains
-typically lose at each stop at this hour and how often they get held there,
-the countdown tile carries the feed's typical ETA error at that distance, and
-the alerts naming the line sit alongside. A Marey chart of the stretch over
-the next 45 minutes draws your recommended train's path through the traffic.
+The Travel tab is an origin-to-destination planner over the transfer graph,
+live. Pick where you board and where you are going (the destination list
+offers only stations reachable directly or with one change from the origin,
+grouped that way). Every viable path is enumerated from the exported lines
+and station complexes: direct on a shared line, or one transfer at any
+station downstream; parallel routes over the same stops merge into one option
+("F → A/C/E at W 4 St", "G → A/C at Hoyt-Schermerhorn Sts"), and paths that
+ride through the destination or change off a line that already goes there
+are dropped. Each path gets three numbers: scheduled (canonical running
+times plus the transfer walk), expected (adds half the scheduled headway as
+the wait at the origin and at the change, the time trains typically lose on
+each stretch at this hour from the line views, and a hold risk from the hold
+log) and live (the arrival of the next itinerary from the feeds, once they
+arrive). Paths are ranked by the live arrival, else by the expected time,
+with proportional bars broken into wait, ride and walk and a note on why.
+
+The selected path is drawn as a horizontal track diagram, one track per leg,
+left to right in the direction of travel, with the transfer link between the
+tracks. Every train on those lines is a route-badged marker that glides
+between the 30-second feed polls along the scheduled running time (green
+moving, amber stopped, red holding or stalled), the recommended itinerary's
+trains ringed (black: your first train, purple: the connection), monitored
+platforms marked, and bars under the stops for typical time lost and holds
+per day. Below it: the next itineraries with both trains, boarding and
+arrival ETAs, the connection's walk, wait and margin, lateness corrected
+from positions and flags; what our data says about the stretches (worst
+stops at this hour, where trains get held, alerts, the simulation's projected
+gaps, monitored-platform effects, the disruption base rate); and a Marey
+chart of the path over the next 45 minutes with the recommended itinerary
+drawn through the traffic.
 
 ### 30-second live mode in the browser
 

@@ -195,11 +195,21 @@ table.tiny td, table.tiny th { font-size: .8rem; padding: .2rem .4rem; }
 
 /* Travel mode: track diagram */
 .track { overflow-x: auto; }
-.track .train-label { font-size: 11px; font-weight: 650; fill: var(--text-primary); }
-.track .train-sub { font-size: 9.5px; fill: var(--text-secondary); }
+.track .train-label { font-size: 10.5px; font-weight: 650; fill: var(--text-primary); }
+.track .train-sub { font-size: 9px; fill: var(--text-secondary); }
+.track .badge-text { font-size: 10px; font-weight: 700; fill: #fff; }
 .track circle.pulse { animation: trainpulse 1.3s ease-in-out infinite; }
 @keyframes trainpulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .countdown { font-variant-numeric: tabular-nums; }
 .layers label { margin-right: .8rem; font-size: .85rem; color: var(--text-secondary); cursor: pointer; }
 .travel-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
 @media (max-width: 900px) { .travel-grid { grid-template-columns: 1fr; } }
+
+/* Travel mode: ranked paths */
+.pathrow { padding: .55rem .6rem; border: 1px solid var(--border); border-radius: 8px; margin: .4rem 0; cursor: pointer; background: var(--surface-1); }
+.pathrow:hover { background: var(--page); } .pathrow.sel { border-color: var(--series-1); box-shadow: 0 0 0 2px color-mix(in oklab, var(--series-1) 30%, transparent); }
+.pathrow .rank { display: inline-block; min-width: 1.4rem; font-weight: 700; color: var(--text-secondary); }
+.pathrow .nums { text-align: right; white-space: nowrap; }
+.pathbar { position: relative; display: flex; height: 12px; margin: .4rem 0 .25rem; border-radius: 6px; overflow: hidden; background: var(--page); }
+.pathbar > span { display: block; height: 100%; }
+.pathbar .livemark { position: absolute; top: -2px; width: 3px; height: 16px; background: var(--text-primary); border-radius: 1px; }
