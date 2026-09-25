@@ -197,7 +197,52 @@ minutes during its hourly run (GitHub Pages allows about ten builds per hour),
 and the site build stores a final snapshot plus the fitted models
 (`data/models/<target>.json`).
 
-## 9. Validation
+## 9. Journey-time model and trip planning
+
+A journey is a list of legs; a leg is a ride on one of a set of routes from
+platform *a* to platform *b* (with an optional transfer walk before boarding).
+For each leg the training set is every trip observed at both *a* and *b*:
+
+    ride = t_b − t_a,   excess = ride − scheduled ride for the matched trip
+
+Features at boarding (all known in realtime): the train's lateness at *a*
+(clipped to −5..30 min), an active unplanned alert on the route, holiday,
+weekend, weekday peak, permitted street-event weight and venue-event weight
+within ±2 h on the route (events.py), news weight (RSS items mentioning the
+route on that day, 0.6 if the item talks about delays / suspensions), daily
+precipitation (mm, capped) and a heat flag.
+
+The mean model is a ridge regression `excess ~ features` (λ = 25, intercept
+unpenalised) whose prediction is shrunk to zero with weight n/(n+15), so a leg
+with little history simply follows the schedule. The range is the p10–p90 of
+the residuals, grouped by route and period (weekday peak, off-peak, weekend),
+also shrunk towards ±1–2 minutes with little data. Typical waits are the
+expected wait E[h²]/2E[h] from observed headways per route and hour, falling
+back to half the scheduled headway.
+
+Planning at time *t* uses the live snapshot. For the first leg, every train
+serving the route set with a feed ETA at *a* in the next hour is a candidate.
+Its ride is the feed's own ETA difference *b − a* when the feed publishes *b*,
+averaged with `schedule + predicted excess` (the feed's long-horizon ETAs are
+optimistic; the model corrects with what history says about trains in this
+state). At a transfer, the earliest boarding is arrival plus the walk time,
+and the first train of the next leg after that becomes the next candidate; if
+the feed lists none, the typical wait for the hour is used and marked as such.
+Options are ordered by arrival; the best is compared with the *typical* total
+for the hour (typical waits + scheduled rides + walks) so the page can say
+"about normal" or "+6 min slower than usual". Range = sum of leg ranges.
+
+The time-distance (stringline) chart shows every train on each leg's stop
+sequence as a line through its feed ETAs; the recommended itinerary is drawn
+as a dashed path (wait at *a*, ride, walk, ride). Flat segments are dwells or
+holds; a fan of lines converging is bunching; a wide empty band is a gap.
+
+The whole training table (`context/journeys_training.csv.gz` on the `data`
+branch) has one row per observed ride with these features, so gradient-boosted
+or sequence models can be trained offline and dropped in through
+`JourneyModel.from_dict`.
+
+## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4
 express) and injects known causes: signal failure on a segment, peak dwell,
@@ -207,9 +252,13 @@ scenario produces no finding. The collector is tested by encoding simulated
 arrivals into GTFS-RT protobuf snapshots and replaying them. The realtime
 model is tested by fitting on the simulated history, then holding one
 approaching train 7 minutes in a synthetic snapshot: the forecast must flag the
-late inbound train, the gap it creates and the active alert's effect.
+late inbound train, the gap it creates and the active alert's effect. The
+journey model is tested by fitting on the same simulated history (the
+signal-failure scenario must yield a positive alert coefficient) and planning
+from a synthetic snapshot: options must be catchable, ordered by arrival, and
+chain through the transfer with the configured walk time.
 
-## 10. Known limitations
+## 11. Known limitations
 
 * Observed arrivals inherit the feed's own errors (reassigned trains, trip-id
   changes mid-run, missing predictions). Confidence is tracked per arrival.

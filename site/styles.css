@@ -156,7 +156,7 @@ select, input[type=search] { font: inherit; padding: .3rem .5rem; border-radius:
 .kicker { text-transform: uppercase; letter-spacing: .06em; font-size: .72rem; color: var(--muted); font-weight: 600; }
 .hours { display: inline-flex; gap: .2rem; flex-wrap: wrap; }
 .hours span { padding: 0 .35rem; border-radius: 4px; background: var(--page); border: 1px solid var(--border); font-size: .78rem; font-variant-numeric: tabular-nums; }
-@media (max-width: 640px) { .topbar { gap: .6rem; } .container { padding: 1rem 16px 2rem; } .tile .value { font-size: 1.3rem; } }
+@media (max-width: 640px) { .topbar { gap: .6rem; } .container { padding: 1rem 16px 2rem; } .tile .value { font-size: 1.3rem; } .hide-sm { display: none; } }
 
 /* Live page */
 .status-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .55rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); font-size: .85rem; }

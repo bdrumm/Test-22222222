@@ -51,6 +51,7 @@ log reports the HTTP status of the live URL.
 
 | page | what it shows |
 |---|---|
+| Plan a trip | trip-time planner for the configured journeys (e.g. 4 Av-9 St → 14 St-8 Av): leave-now arrival time with a range, every catchable option in the next hour with wait / walk / ride breakdown, typical time at this hour vs right now, and a time-distance (stringline) chart of the trains on the corridor with the recommended itinerary drawn on it |
 | Live | holistic status now: every route/direction with trains in service, lateness, the largest gap forming and where, active unplanned alerts; for each monitored platform the next arrivals with feed ETA, look-back-calibrated ETA and range, predicted headways, and the *downstream effects* (gaps forming, late trains inbound with their expected lateness here, alert effects) |
 | Stations | one card per monitored platform: severity, verdict, focus hours, where / why, rider impact |
 | Station report | what changed (with CIs), problem rate and lateness by hour, day × hour heatmap, daily trend, ranked locations and causes with evidence, recommendations |
@@ -75,7 +76,10 @@ on push, briefly) on GitHub Actions, where the MTA and Open Data hosts are reach
 
 Reports say "collecting" until a platform has about two days of arrivals; the
 Lines and Alerts pages are populated from the first run. To monitor other
-platforms, edit `pipeline/targets.json`. To preview offline:
+platforms, edit `pipeline/targets.json`; monitored today: Grand Central
+(uptown 4/5/6), Times Sq (downtown 1/2/3), Jay St-MetroTech (Manhattan-bound
+A/C), **4 Av-9 St** (F/G and R/N/D/W, both directions) and **14 St-8 Av** (A/C/E
+both directions, L both directions). To preview offline:
 
 ```bash
 python -m pipeline.build_site --synthetic --out _site && python -m http.server -d _site 8000
@@ -95,6 +99,7 @@ The scheduled collector is a convenience for review; for production, run
 | open data | Customer Journey-Focused Metrics, Wait Assessment, Terminal OTP | line-level APT/ATT/CJTP baselines |
 | open data | Hourly Ridership, Stations | riders exposed per hour → passenger-minutes lost |
 | weather | Open-Meteo hourly (no key) | precipitation / snow / heat / wind correlation |
+| events | NYC permitted events (Open Data), Ticketmaster venue events (optional key), transit news RSS, federal holidays | journey-time model features (crowding / disruption context) |
 
 `mta-insights sources` prints the full catalog with URLs; see
 [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
@@ -160,6 +165,37 @@ The look-back model is fitted from the collected history: how much feed ETAs
 slip by lead time, how lateness upstream carries to the platform, how often
 gaps persist, and how much each alert cause adds. See
 [docs/METHODOLOGY.md](docs/METHODOLOGY.md#8-realtime-mode-and-the-look-back-propagation-model).
+
+## Trip planner and the journey-time model
+
+Journeys are chains of legs declared in `pipeline/targets.json`:
+
+```json
+"journeys": [{"id": "4av9st-to-14st8av-via-f", "label": "4 Av-9 St → 14 St-8 Av (F, then A/C/E)",
+  "legs": [{"from": {"station": "4 Av-9 St", "direction": "N", "routes": ["F"]}, "to": {"station": "W 4 St-Wash Sq"}},
+           {"transfer_min": 2, "from": {"station": "W 4 St-Wash Sq", "direction": "N", "routes": ["A","C","E"]}, "to": {"station": "14 St"}}]}]
+```
+
+The collector then records arrivals at every stop of every leg, and
+`build_site` fits one **journey-time model** per journey
+(`mta_delay_insights/realtime/journey.py`): for each leg, a ridge regression
+of *actual ride minus scheduled ride* on the conditions at boarding (the
+train's lateness, an unplanned alert on the route, holiday / weekend / peak,
+permitted street events and venue events, transit news mentions, precipitation,
+heat), residual quantiles per route and period for the range, and typical
+waits from observed headways. The **Plan a trip** page enumerates the trains a
+rider can actually catch from the live snapshot, chains legs through transfers,
+and shows each option's arrival window and the stringline of trains on the
+corridor. Models are published as `data/models/journey_<id>.json`; the full
+training table (one row per observed ride with all features) is exported to
+the `data` branch as `context/journeys_training.csv.gz` so you can train your
+own model on it.
+
+External signals come from `mta_delay_insights/sources/events.py`: NYC
+permitted events (Open Data), venue events near major stations (Ticketmaster,
+optional `TICKETMASTER_API_KEY` secret), local transit news via RSS, and
+federal holidays. `pipeline/context.py` refreshes them hourly into
+`context/events.csv.gz`.
 
 ## Try it offline
 

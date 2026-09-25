@@ -57,6 +57,20 @@ def stops_and_feeds(static: StaticGTFS, targets: dict) -> tuple[set[str], list[s
             except KeyError:
                 pass
         resolved.append({**t, **{k: r[k] for k in ("station_id", "station_name", "stop_id", "routes")}})
+    # Journey legs: both endpoints and every intermediate stop, so ride times can be learned.
+    try:
+        from mta_delay_insights.realtime.journey import resolve_journeys
+        for j in resolve_journeys(static, targets):
+            for leg in j.legs:
+                stops |= set(leg.stops) | {leg.from_stop, leg.to_stop}
+                for route in leg.routes:
+                    try:
+                        feeds.add(config.feed_for_route(route))
+                    except KeyError:
+                        pass
+    except Exception as exc:  # a bad journey definition must not stop collection
+        import logging
+        logging.getLogger(__name__).warning("journeys not resolved: %s", exc)
     return stops, sorted(feeds), resolved
 
 
@@ -169,3 +183,12 @@ def append_run(data_dir: Path, record: dict) -> None:
 def load_runs(data_dir: Path) -> list[dict]:
     f = Path(data_dir) / "runs.json"
     return json.loads(f.read_text()) if f.exists() else []
+
+
+def load_events(data_dir: Path) -> pd.DataFrame | None:
+    ev = load_context(data_dir, "events")
+    if ev is None or ev.empty:
+        return ev
+    ev = ev.copy()
+    ev["routes"] = ev["routes"].map(lambda v: json.loads(v) if isinstance(v, str) and v.startswith("[") else [])
+    return ev

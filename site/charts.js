@@ -189,3 +189,48 @@ export function sparkline(container, values, { color, width = 120, height = 28 }
   const last = n - 1; if (values[last] != null) el("circle", { cx: xp(last), cy: yp(values[last]), r: 3, fill: color || cssVar("--series-1") }, svg);
   return svg;
 }
+
+
+// Time-distance ("stringline") chart: stops on the y axis, time on the x axis, one line per train.
+// legs: [{stops:[{name}], trains:[{trip_id, route_id, points:[[stopIdx, ts]], lateness_sec}]}]
+// highlight: Set of trip_ids to emphasise; path: [[legIdx, stopIdx, ts], ...] the rider's own itinerary.
+export function stringline(container, { title, subtitle, legs, now, horizonSec = 3600, highlight = new Set(), path = [], routeColor = () => null }) {
+  const stops = []; const legOffsets = [];
+  legs.forEach((lg, li) => { legOffsets.push(stops.length); lg.stops.forEach((st, i) => {
+    if (li > 0 && i === 0) { const prev = stops[stops.length - 1]; stops[stops.length - 1] = { ...prev, name: prev.name === st.name ? st.name : `${prev.name} / ${st.name}` }; legOffsets[li] = stops.length - 1; return; }
+    stops.push({ name: st.name, leg: li }); }); });
+  const rowH = 18, m = { l: 150, r: 16, t: 16, b: 28 }, height = m.t + Math.max(1, stops.length - 1) * rowH + m.b;
+  const f = new Frame(container, { title, subtitle, series: null, height });
+  const W = f.width - m.l - m.r, H = height - m.t - m.b;
+  const t0 = now - 300, t1 = now + horizonSec;
+  const xp = ts => m.l + ((ts - t0) / (t1 - t0)) * W, yp = i => m.t + (stops.length > 1 ? (i / (stops.length - 1)) * H : H / 2);
+  const gIndex = (li, si) => legOffsets[li] + si;
+  stops.forEach((st, i) => { el("line", { x1: m.l, x2: m.l + W, y1: yp(i), y2: yp(i), class: "grid-line" }, f.svg);
+    const label = st.name.length > 22 ? st.name.slice(0, 21) + "…" : st.name;
+    el("text", { x: m.l - 8, y: yp(i) + 4, "text-anchor": "end", class: "axis-text" }, f.svg).textContent = label; });
+  for (let t = Math.ceil(t0 / 600) * 600; t <= t1; t += 600) { el("line", { x1: xp(t), x2: xp(t), y1: m.t, y2: m.t + H, class: "grid-line" }, f.svg);
+    el("text", { x: xp(t), y: height - 8, "text-anchor": "middle", class: "axis-text" }, f.svg).textContent = new Date(t * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }); }
+  el("line", { x1: xp(now), x2: xp(now), y1: m.t, y2: m.t + H, stroke: cssVar("--text-secondary"), "stroke-width": 1.5 }, f.svg);
+  el("text", { x: xp(now) + 4, y: m.t + 10, class: "dlabel" }, f.svg).textContent = "now";
+  const rows = [];
+  legs.forEach((lg, li) => lg.trains.forEach(tr => {
+    const pts = tr.points.filter(([, ts]) => ts >= t0 && ts <= t1).map(([si, ts]) => [xp(ts), yp(gIndex(li, si))]);
+    if (pts.length < 2) return;
+    const hi = highlight.has(tr.trip_id);
+    const color = routeColor(tr.route_id) || seriesColor(li);
+    const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+    const pathEl = el("path", { d, fill: "none", stroke: hi ? color : cssVar("--de-emphasis"), "stroke-width": hi ? 3 : 1.5, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: hi ? 1 : 0.9 }, f.svg);
+    const hit = el("path", { d, fill: "none", stroke: "transparent", "stroke-width": 14 }, f.svg);
+    const late = tr.lateness_sec == null ? "–" : `${tr.lateness_sec >= 0 ? "+" : "−"}${Math.abs(tr.lateness_sec / 60).toFixed(0)} min`;
+    hit.addEventListener("pointermove", ev => { pathEl.setAttribute("stroke-width", "4"); f.showTip(ev.clientX, ev.clientY, `${tr.route_id} train ${tr.trip_id}`, [["lateness now", late], ["stops shown", String(pts.length)]]); });
+    hit.addEventListener("pointerleave", () => { pathEl.setAttribute("stroke-width", hi ? "3" : "1.5"); f.hideTip(); });
+    rows.push([`${tr.route_id} ${tr.trip_id}`, late, String(pts.length)]);
+  }));
+  if (path.length >= 2) {
+    const d = path.map(([li, si, ts], i) => `${i ? "L" : "M"}${xp(ts).toFixed(1)},${yp(gIndex(li, si)).toFixed(1)}`).join(" ");
+    el("path", { d, fill: "none", stroke: cssVar("--series-8"), "stroke-width": 2.5, "stroke-dasharray": "6 4", "stroke-linejoin": "round" }, f.svg);
+    path.forEach(([li, si, ts]) => el("circle", { cx: xp(ts), cy: yp(gIndex(li, si)), r: 4, fill: cssVar("--series-8"), stroke: cssVar("--surface-1"), "stroke-width": 2 }, f.svg));
+  }
+  f.table(["train", "lateness", "stops"], rows);
+  return f.root;
+}

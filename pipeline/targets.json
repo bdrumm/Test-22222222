@@ -1,12 +1,375 @@
 {
-  "targets": [
-    {"id": "grand-central-n", "station": "Grand Central-42 St", "direction": "N", "routes": ["4", "5", "6", "6X"],
-     "label": "Grand Central-42 St, uptown 4/5/6"},
-    {"id": "times-sq-s", "station": "Times Sq-42 St", "direction": "S", "routes": ["1", "2", "3"],
-     "label": "Times Sq-42 St, downtown 1/2/3"},
-    {"id": "jay-st-n", "station": "Jay St-MetroTech", "direction": "N", "routes": ["A", "C"],
-     "label": "Jay St-MetroTech, Manhattan-bound A/C"}
-  ],
-  "upstream_stops": 6,
-  "route_share_of_entries": 0.5
+ "targets": [
+  {
+   "id": "grand-central-n",
+   "station": "Grand Central-42 St",
+   "direction": "N",
+   "routes": [
+    "4",
+    "5",
+    "6",
+    "6X"
+   ],
+   "label": "Grand Central-42 St, uptown 4/5/6"
+  },
+  {
+   "id": "times-sq-s",
+   "station": "Times Sq-42 St",
+   "direction": "S",
+   "routes": [
+    "1",
+    "2",
+    "3"
+   ],
+   "label": "Times Sq-42 St, downtown 1/2/3"
+  },
+  {
+   "id": "jay-st-n",
+   "station": "Jay St-MetroTech",
+   "direction": "N",
+   "routes": [
+    "A",
+    "C"
+   ],
+   "label": "Jay St-MetroTech, Manhattan-bound A/C"
+  },
+  {
+   "id": "4av-9st-fg-n",
+   "station": "4 Av-9 St",
+   "direction": "N",
+   "routes": [
+    "F",
+    "G"
+   ],
+   "label": "4 Av-9 St, Manhattan-bound F/G"
+  },
+  {
+   "id": "4av-9st-fg-s",
+   "station": "4 Av-9 St",
+   "direction": "S",
+   "routes": [
+    "F",
+    "G"
+   ],
+   "label": "4 Av-9 St, Coney Island-bound F/G"
+  },
+  {
+   "id": "4av-9st-r-n",
+   "station": "4 Av-9 St",
+   "direction": "N",
+   "routes": [
+    "R",
+    "N",
+    "D",
+    "W"
+   ],
+   "label": "4 Av-9 St, Manhattan-bound R (N/D late nights)"
+  },
+  {
+   "id": "4av-9st-r-s",
+   "station": "4 Av-9 St",
+   "direction": "S",
+   "routes": [
+    "R",
+    "N",
+    "D",
+    "W"
+   ],
+   "label": "4 Av-9 St, Bay Ridge-bound R"
+  },
+  {
+   "id": "14st-8av-ace-n",
+   "station": "14 St",
+   "direction": "N",
+   "routes": [
+    "A",
+    "C",
+    "E"
+   ],
+   "label": "14 St-8 Av, uptown A/C/E"
+  },
+  {
+   "id": "14st-8av-ace-s",
+   "station": "14 St",
+   "direction": "S",
+   "routes": [
+    "A",
+    "C",
+    "E"
+   ],
+   "label": "14 St-8 Av, downtown A/C/E"
+  },
+  {
+   "id": "8av-l-n",
+   "station": "8 Av",
+   "direction": "N",
+   "routes": [
+    "L"
+   ],
+   "label": "8 Av, L arrivals (from Brooklyn)"
+  },
+  {
+   "id": "8av-l-s",
+   "station": "8 Av",
+   "direction": "S",
+   "routes": [
+    "L"
+   ],
+   "label": "8 Av, L departures (to Brooklyn)"
+  }
+ ],
+ "journeys": [
+  {
+   "id": "4av9st-to-14st8av-via-f",
+   "label": "4 Av-9 St → 14 St-8 Av (F to W 4 St, then A/C/E)",
+   "legs": [
+    {
+     "from": {
+      "station": "4 Av-9 St",
+      "direction": "N",
+      "routes": [
+       "F"
+      ]
+     },
+     "to": {
+      "station": "W 4 St-Wash Sq",
+      "direction": "N",
+      "routes": [
+       "F"
+      ]
+     }
+    },
+    {
+     "transfer_min": 2,
+     "from": {
+      "station": "W 4 St-Wash Sq",
+      "direction": "N",
+      "routes": [
+       "A",
+       "C",
+       "E"
+      ]
+     },
+     "to": {
+      "station": "14 St",
+      "direction": "N",
+      "routes": [
+       "A",
+       "C",
+       "E"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "4av9st-to-14st8av-via-f-jay",
+   "label": "4 Av-9 St → 14 St-8 Av (F to Jay St, cross-platform to A/C)",
+   "legs": [
+    {
+     "from": {
+      "station": "4 Av-9 St",
+      "direction": "N",
+      "routes": [
+       "F"
+      ]
+     },
+     "to": {
+      "station": "Jay St-MetroTech",
+      "direction": "N",
+      "routes": [
+       "F"
+      ]
+     }
+    },
+    {
+     "transfer_min": 1,
+     "from": {
+      "station": "Jay St-MetroTech",
+      "direction": "N",
+      "routes": [
+       "A",
+       "C"
+      ]
+     },
+     "to": {
+      "station": "14 St",
+      "direction": "N",
+      "routes": [
+       "A",
+       "C"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "4av9st-to-14st8av-via-r",
+   "label": "4 Av-9 St → 14 St-8 Av (R to Jay St, then A/C)",
+   "legs": [
+    {
+     "from": {
+      "station": "4 Av-9 St",
+      "direction": "N",
+      "routes": [
+       "R"
+      ]
+     },
+     "to": {
+      "station": "Jay St-MetroTech",
+      "direction": "N",
+      "routes": [
+       "R"
+      ]
+     }
+    },
+    {
+     "transfer_min": 3,
+     "from": {
+      "station": "Jay St-MetroTech",
+      "direction": "N",
+      "routes": [
+       "A",
+       "C"
+      ]
+     },
+     "to": {
+      "station": "14 St",
+      "direction": "N",
+      "routes": [
+       "A",
+       "C"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "14st8av-to-4av9st-via-f",
+   "label": "14 St-8 Av → 4 Av-9 St (A/C/E to W 4 St, then F)",
+   "legs": [
+    {
+     "from": {
+      "station": "14 St",
+      "direction": "S",
+      "routes": [
+       "A",
+       "C",
+       "E"
+      ]
+     },
+     "to": {
+      "station": "W 4 St-Wash Sq",
+      "direction": "S",
+      "routes": [
+       "A",
+       "C",
+       "E"
+      ]
+     }
+    },
+    {
+     "transfer_min": 2,
+     "from": {
+      "station": "W 4 St-Wash Sq",
+      "direction": "S",
+      "routes": [
+       "F"
+      ]
+     },
+     "to": {
+      "station": "4 Av-9 St",
+      "direction": "S",
+      "routes": [
+       "F"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "14st8av-to-4av9st-via-f-jay",
+   "label": "14 St-8 Av → 4 Av-9 St (A/C to Jay St, cross-platform to F)",
+   "legs": [
+    {
+     "from": {
+      "station": "14 St",
+      "direction": "S",
+      "routes": [
+       "A",
+       "C"
+      ]
+     },
+     "to": {
+      "station": "Jay St-MetroTech",
+      "direction": "S",
+      "routes": [
+       "A",
+       "C"
+      ]
+     }
+    },
+    {
+     "transfer_min": 1,
+     "from": {
+      "station": "Jay St-MetroTech",
+      "direction": "S",
+      "routes": [
+       "F"
+      ]
+     },
+     "to": {
+      "station": "4 Av-9 St",
+      "direction": "S",
+      "routes": [
+       "F"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "14st8av-to-4av9st-via-r",
+   "label": "14 St-8 Av → 4 Av-9 St (A/C to Jay St, then R)",
+   "legs": [
+    {
+     "from": {
+      "station": "14 St",
+      "direction": "S",
+      "routes": [
+       "A",
+       "C"
+      ]
+     },
+     "to": {
+      "station": "Jay St-MetroTech",
+      "direction": "S",
+      "routes": [
+       "A",
+       "C"
+      ]
+     }
+    },
+    {
+     "transfer_min": 3,
+     "from": {
+      "station": "Jay St-MetroTech",
+      "direction": "S",
+      "routes": [
+       "R"
+      ]
+     },
+     "to": {
+      "station": "4 Av-9 St",
+      "direction": "S",
+      "routes": [
+       "R"
+      ]
+     }
+    }
+   ]
+  }
+ ],
+ "upstream_stops": 6,
+ "route_share_of_entries": 0.5
 }

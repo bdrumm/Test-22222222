@@ -45,7 +45,22 @@ def main(argv=None) -> int:
     if args.live_every > 0:
         from mta_delay_insights.realtime import build_live
         from mta_delay_insights.realtime.propagation import PropagationModel
+        from mta_delay_insights.realtime.journey import JourneyModel, resolve_journeys
         models = {}
+        try:
+            journeys = resolve_journeys(static, targets)
+        except Exception as exc:
+            logging.warning("journeys not resolved: %s", exc); journeys = []
+        jmodels = {}
+        for j in journeys:
+            jf = Path(args.models_dir) / f"journey_{j.id}.json"
+            if jf.exists():
+                try:
+                    jmodels[j.id] = JourneyModel.from_dict(json.loads(jf.read_text()))
+                except Exception as exc:
+                    logging.warning("journey model %s unreadable: %s", jf, exc)
+        weather_daily = lib.load_context(data_dir, "weather_daily")
+        events_df = lib.load_events(data_dir)
         for t in resolved:
             rr = lib.resolve_target(static, t); t["upstream"], t["terminals"] = rr["upstream"], rr["terminals"]
             mf = Path(args.models_dir) / f"{t['id']}.json"
@@ -60,7 +75,8 @@ def main(argv=None) -> int:
             if now - state["last"] < args.live_every or not c.last_feed_bytes:
                 return
             alerts_df = alerts_src.alerts_frame(c.last_alerts) if c.last_alerts else c.store.alerts()
-            live = build_live(dict(c.last_feed_bytes), alerts_df, static, resolved, models, now, source="pipeline-snapshot")
+            live = build_live(dict(c.last_feed_bytes), alerts_df, static, resolved, models, now, source="pipeline-snapshot",
+                              journeys=journeys, journey_models=jmodels, weather_daily=weather_daily, events_df=events_df)
             Path(args.live_out).write_text(json.dumps(live, default=str))
             state["last"], state["n"] = now, state["n"] + 1
             logging.info("live snapshot %d: %d trains, %s", state["n"], live["trains_total"], live["summary"])

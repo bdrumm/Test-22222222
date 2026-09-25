@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import date, timedelta
@@ -77,6 +78,32 @@ def main(argv=None) -> int:
                 if profiles:
                     lib.save_context(data_dir, "ridership_profile", pd.concat(profiles, ignore_index=True))
     step("weather_daily", lambda: weather.daily_summary(weather.fetch_recent_hourly(args.days)))
+
+    # External signals for the journey model: permitted events, venue events, news, holidays.
+    from mta_delay_insights.sources import events as events_src
+    frames = []
+    for name, fn in (("nyc_events", lambda: events_src.fetch_nyc_permitted_events()),
+                     ("ticketmaster", lambda: events_src.fetch_ticketmaster_events()),
+                     ("news", lambda: events_src.fetch_news())):
+        try:
+            df = fn()
+            if df is not None and not df.empty:
+                frames.append(df)
+                record["ok"].append(f"{name}:{len(df)}")
+            else:
+                record.setdefault("skipped", []).append(name)
+        except Exception as exc:
+            record["failed"][name] = str(exc)[:300]
+            logging.warning("%s failed: %s", name, exc)
+    frames.append(events_src.holiday_events(date.today() - timedelta(days=60), date.today() + timedelta(days=60)))
+    ev = pd.concat(frames, ignore_index=True)
+    ev["routes"] = ev["routes"].map(lambda rs: json.dumps(list(rs) if isinstance(rs, (list, tuple)) else []))
+    old = lib.load_context(data_dir, "events")
+    if old is not None and not old.empty:
+        ev = pd.concat([old, ev], ignore_index=True).drop_duplicates(["source", "title", "ts_start"], keep="last")
+        ev = ev[ev["ts_start"] >= (pd.Timestamp.now().timestamp() - 120 * 86400)]
+    lib.save_context(data_dir, "events", ev)
+    record["ok"].append(f"events:{len(ev)}")
     lib.append_run(data_dir, record)
     logging.info("done: %s", record)
     return 0

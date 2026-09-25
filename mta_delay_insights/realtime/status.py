@@ -203,8 +203,10 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
 
 def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, static: StaticGTFS,
                targets: list[dict], models: dict[str, PropagationModel] | None, now: float | None = None,
-               source: str = "live") -> dict:
-    """Assemble the full live snapshot. ``targets`` are resolved target dicts (see pipeline.lib.resolve_target)."""
+               source: str = "live", journeys: list | None = None, journey_models: dict | None = None,
+               weather_daily: pd.DataFrame | None = None, events_df: pd.DataFrame | None = None) -> dict:
+    """Assemble the full live snapshot. ``targets`` are resolved target dicts (see pipeline.lib.resolve_target);
+    ``journeys`` are JourneySpec objects with optional fitted ``journey_models``."""
     now = float(now or datetime.now(NY_TZ).timestamp())
     trains = live_trains(feed_bytes, static, now)
     alerts_now = active_alerts(alerts_df, now)
@@ -213,6 +215,14 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
     for t in targets:
         model = (models or {}).get(t["id"])
         stations.append(forecast_station(t, trains, static, model, now, alerts_now))
+    plans = []
+    if journeys:
+        from .journey import plan_journey
+        for spec in journeys:
+            try:
+                plans.append(plan_journey(spec, (journey_models or {}).get(spec.id), trains, static, now, alerts_df, weather_daily, events_df))
+            except Exception as exc:  # planning must never break the snapshot
+                plans.append({"id": spec.id, "label": spec.label, "error": str(exc)[:200], "options": [], "legs": [l.as_dict() for l in spec.legs]})
     unplanned = alerts_now[alerts_now["kind"] == "delay"] if not alerts_now.empty else alerts_now
     alerts_out = [{"alert_id": r.alert_id, "alert_type": r.alert_type, "cause_category": r.cause_category,
                    "routes": list(r.routes), "header": str(r.header)[:240], "active_start": _f(r.active_start)}
@@ -225,7 +235,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
         "generated_at": datetime.fromtimestamp(now, NY_TZ).isoformat(), "generated_ts": now, "source": source,
         "feeds": sorted(feed_bytes.keys()), "trains_total": len(started), "trains_scheduled_not_started": len(trains) - len(started),
         "trains_matched": sum(1 for t in started if t.sched_matched),
-        "summary": n_by_status, "routes": routes, "alerts": alerts_out, "stations": stations,
+        "summary": n_by_status, "routes": routes, "alerts": alerts_out, "stations": stations, "journeys": plans,
     }
 
 

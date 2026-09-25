@@ -65,6 +65,8 @@ jobs:
         run: pipeline/data_branch.sh commit
       - name: Build site
         run: python -m pipeline.build_site --out _site
+      - name: Commit training export
+        run: pipeline/data_branch.sh commit
       # Publishing path 1: the gh-pages branch (works with Pages source "Deploy from a branch").
       - name: Publish to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4

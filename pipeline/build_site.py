@@ -22,6 +22,7 @@ from mta_delay_insights.analysis.engine import AnalysisRequest, analyze_station
 from mta_delay_insights.analysis.line_insights import line_insights
 from mta_delay_insights.sources.alerts import alert_kind
 from mta_delay_insights.realtime import build_live, fit_model
+from mta_delay_insights.realtime.journey import JourneyModel, fit_journey, resolve_journeys
 from mta_delay_insights.sources.gtfs_static import NY_TZ, StaticGTFS
 from mta_delay_insights.sources.registry import as_records
 from mta_delay_insights.storage.db import Store
@@ -143,12 +144,41 @@ def fit_models(store: Store, static: StaticGTFS, targets: dict, now: datetime) -
     return models, resolved
 
 
+def fit_journeys(store: Store, static: StaticGTFS, targets: dict, alerts: pd.DataFrame, context: dict,
+                 now: datetime, data_dir: Path | None) -> tuple[list, dict]:
+    """Fit the journey-time model per configured journey; export the training table to the data dir."""
+    specs, models, tables = [], {}, []
+    try:
+        specs = resolve_journeys(static, targets)
+    except Exception as exc:
+        logging.warning("journeys not resolved: %s", exc)
+        return [], {}
+    events = context.get("events")
+    for spec in specs:
+        try:
+            m, table = fit_journey(store, static, spec, alerts, context.get("weather_daily"), events, now.timestamp())
+            models[spec.id] = m
+            if not table.empty:
+                tables.append(table)
+        except Exception as exc:
+            logging.warning("journey %s fit failed: %s", spec.id, exc)
+    if tables and data_dir is not None:
+        try:
+            lib.save_context(data_dir, "journey_training", pd.concat(tables, ignore_index=True))
+        except Exception as exc:
+            logging.warning("training export failed: %s", exc)
+    return specs, models
+
+
 def live_snapshot(static: StaticGTFS, resolved: list[dict], models: dict, alerts: pd.DataFrame, now: datetime,
-                  feed_bytes: dict[str, bytes] | None) -> dict | None:
+                  feed_bytes: dict[str, bytes] | None, journeys: list | None = None, journey_models: dict | None = None,
+                  context: dict | None = None) -> dict | None:
     if not feed_bytes:
         return None
     try:
-        return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot")
+        ctx = context or {}
+        return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot",
+                          journeys=journeys, journey_models=journey_models, weather_daily=ctx.get("weather_daily"), events_df=ctx.get("events"))
     except Exception as exc:
         logging.warning("live snapshot failed: %s", exc)
         return None
@@ -166,7 +196,10 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     models, resolved = fit_models(store, static, targets, now)
     for tid, m in models.items():
         (out_data / "models" / f"{tid}.json").write_text(json.dumps(m.to_dict(), default=str))
-    live = live_snapshot(static, resolved, models, alerts, now, feed_bytes)
+    specs, jmodels = fit_journeys(store, static, targets, alerts, context, now, data_dir if mode == "live" else None)
+    for jid, m in jmodels.items():
+        (out_data / "models" / f"journey_{jid}.json").write_text(json.dumps(m.to_dict(), default=str))
+    live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context)
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []
@@ -194,6 +227,8 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     (out_data / "status.json").write_text(json.dumps(status, default=str))
     index = {"generated_at": now.isoformat(), "mode": mode, "targets": [e for e, _ in reports], "live": live is not None,
              "models": {tid: {"n_arrivals": m.n_arrivals, "n_days": m.n_days} for tid, m in models.items()},
+             "journeys": [{"id": sp.id, "label": sp.label, "legs": [l.as_dict() for l in sp.legs],
+                           "n_samples": jmodels[sp.id].n_samples if sp.id in jmodels else 0} for sp in specs],
              "sources": as_records(), "lines_available": sorted(lines.get("lines", {}).keys()),
              "alerts_active": sum(1 for a in json.loads((out_data / "alerts.json").read_text())["alerts"] if a["active_now"]),
              "status": {k: status[k] for k in ("arrivals_total", "days_with_data")}}
@@ -214,6 +249,7 @@ def build_from_data(args) -> dict:
         store.upsert_alerts(alerts, seen_ts=time.time())
     context = {k: lib.load_context(data_dir, k) for k in
                ("trains_delayed", "delay_incidents", "major_incidents", "customer_journey", "ridership_profile", "weather_daily")}
+    context["events"] = lib.load_events(data_dir)
     feed_bytes = {}
     if not args.no_feeds:
         from mta_delay_insights import config
@@ -261,10 +297,17 @@ def build_synthetic(args) -> dict:
                        for i, m in enumerate(sorted(td["month"].unique())) for k, l in enumerate(["6", "4", "A", "L", "F", "N"])])
     targets = {"targets": [{"id": "grand-central-n", "station": "Grand Central", "direction": "N", "routes": ["6", "4"],
                             "label": "Grand Central-42 St, uptown 6/4 (synthetic)"}],
+               "journeys": [{"id": "union-sq-to-59st", "label": "14 St-Union Sq → 59 St (6 local, transfer to 4 at Grand Central)",
+                             "legs": [{"from": {"station": "14 St-Union Sq", "direction": "N", "routes": ["6"]}, "to": {"station": "Grand Central", "direction": "N", "routes": ["6"]}},
+                                      {"transfer_min": 1, "from": {"station": "Grand Central", "direction": "N", "routes": ["4"]}, "to": {"station": "59 St", "direction": "N", "routes": ["4"]}}]},
+                            {"id": "bleecker-to-59st-direct", "label": "Bleecker St → 59 St (6 local, no transfer)",
+                             "legs": [{"from": {"station": "Bleecker St", "direction": "N", "routes": ["6"]}, "to": {"station": "59 St", "direction": "N", "routes": ["6"]}}]}],
                "upstream_stops": 6, "route_share_of_entries": 0.5}
     now = datetime.combine(sc.end, datetime.min.time(), NY_TZ)
+    from mta_delay_insights.sources import events as events_src
+    ev = events_src.holiday_events(sc.start, sc.end)
     context = {"trains_delayed": td, "customer_journey": cj, "major_incidents": None, "ridership_profile": rp,
-               "weather_daily": sim.weather_daily, "delay_incidents": None}
+               "weather_daily": sim.weather_daily, "delay_incidents": None, "events": ev}
     runs = [{"ts": now.timestamp() - 3600 * i, "iso": (now - timedelta(hours=i)).isoformat(), "kind": "collect",
              "polls": 100, "arrivals": 900, "errors": 0} for i in range(5)]
     # Live snapshot: a weekday morning of the last simulated day, with one train held 6 minutes.

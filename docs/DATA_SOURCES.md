@@ -64,6 +64,19 @@ Open-Meteo archive/forecast API (no key): hourly temperature, precipitation,
 rain, snowfall, wind speed and weather code for Central Park. Flags: heavy rain
 ≥ 5 mm/h, snow, heat ≥ 32 °C, cold ≤ −5 °C, wind ≥ 50 km/h.
 
+## Events, news and holidays (journey-time model context)
+
+| source | endpoint | use |
+|---|---|---|
+| NYC permitted events | `https://data.cityofnewyork.us/resource/tvpn-ykxb.json` (no key; app token optional) | parades, races, street fairs, festivals → `street_event_w` (0.8 for parade / marathon / festival, 0.3 default, 0.2 for closures) within ±2 h of the event |
+| Venue events | Ticketmaster Discovery API (`TICKETMASTER_API_KEY`), 15-mile radius of Midtown | events at Barclays Center, MSG, Yankee Stadium, Citi Field, USTA, Radio City, Beacon Theatre… mapped to the routes that serve the venue → `venue_event_w` |
+| Local transit news | RSS: Gothamist, NY1 (no key) | items mentioning subway/MTA/train; route letters/numbers extracted ("F train", "L line"); weight 0.6 when the item mentions delays / suspensions / derailments / signal problems, else 0.2, for the publication day → `news_w` |
+| Federal holidays | computed (`us_federal_holidays`) | `holiday` flag (schedule and demand differ) |
+
+All are best-effort: a failing source is logged in `runs.json` and the model
+simply sees zeros for that feature. Rows accumulate in `context/events.csv.gz`
+for 120 days.
+
 ## Other feeds worth adding
 
 * **MTA Bus Time / bus GTFS-RT** for stations where bus connections matter.

@@ -1,4 +1,4 @@
-import { barChart, lineChart, heatmap, sparkline, fmt, seriesColor } from "./charts.js";
+import { barChart, lineChart, heatmap, sparkline, stringline, fmt, seriesColor } from "./charts.js";
 
 const app = document.getElementById("app");
 // Where the JSON lives. Normally next to the page (built site). When GitHub Pages serves the
@@ -36,7 +36,7 @@ const dateTime = iso => { try { return new Date(iso).toLocaleString(undefined, {
 const pctChange = v => v == null ? "–" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
 
 // ---------------------------------------------------------------- routing
-const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live };
+const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan };
 async function render() {
   const [section = "", arg] = location.hash.replace(/^#\/?/, "").split("/");
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === (section || "home")));
@@ -390,6 +390,81 @@ async function live(idx) {
       d.alerts.forEach(a => { const row = h("div", "rec", null, ul); const rc = h("div", null, null, row); (a.routes || []).forEach(r => routeBullet(r, rc)); const bd = h("div", null, null, row); h("div", null, a.header, bd); h("div", "why", `${a.alert_type || ""} · ${causeName(a.cause_category)} · since ${hhmm(a.active_start)}`, bd); });
     }
     h("p", "tiny muted", "Feed ETAs come from the MTA GTFS-Realtime trip updates. Model ETAs add the look-back calibration (how much ETAs at this lead time slipped historically at this platform) and the historical effect of active alerts; the range is the p10–p90 of past ETA error. Route status: disrupted = a Delays/Suspended alert, a gap ≥ 2.5× the scheduled headway or median lateness ≥ 8 min; degraded = any unplanned alert, gap ≥ 1.6× or lateness ≥ 4 min.", root);
+  }
+  await draw();
+  liveTimer = setInterval(draw, 60000);
+}
+
+
+// ---------------------------------------------------------------- plan (trip time planner)
+const minTxt = s => s == null ? "–" : `${(s / 60).toFixed(0)} min`;
+async function plan(idx, journeyId) {
+  const root = app;
+  async function draw() {
+    let d;
+    try { await dataReady; const r = await fetch(DATA + "live.json", { cache: "no-store" }); if (!r.ok) throw new Error(String(r.status)); d = await r.json(); }
+    catch (e) { root.replaceChildren(); h("h1", null, "Trip planner", root); h("div", "empty", "No live snapshot yet. The planner needs data/live.json (published by the collector, or served by mta-insights serve).", root); return; }
+    const journeys = d.journeys || [];
+    root.replaceChildren();
+    const head = h("div", "row between", null, root);
+    h("h1", null, "Trip planner: how long will it take right now?", head);
+    const rf = h("div", "refresh small secondary", null, head);
+    h("span", "age", `as of ${hhmm(d.generated_ts)} ET · ${ageText(Date.now() / 1000 - d.generated_ts)} · ${d.source}`, rf);
+    const btn = h("button", "icon-btn", "↻", rf); btn.title = "Refresh"; btn.addEventListener("click", draw);
+    if (!journeys.length) { h("div", "empty", "No journeys configured. Add them under \"journeys\" in pipeline/targets.json.", root); return; }
+    const filters = h("div", "filters", null, root);
+    h("label", "small secondary", "Journey", filters);
+    const sel = h("select", null, null, filters);
+    journeys.forEach(j => { const o = h("option", null, j.label, sel); o.value = j.id; });
+    sel.value = journeyId && journeys.some(j => j.id === journeyId) ? journeyId : journeys[0].id;
+    sel.addEventListener("change", () => { location.hash = `#/plan/${sel.value}`; });
+    const j = journeys.find(x => x.id === sel.value);
+    if (j.error) { h("div", "empty", `Planner error: ${j.error}`, root); return; }
+    const now = d.generated_ts, best = j.best;
+    const tiles = h("div", "tiles", null, root);
+    if (best) {
+      tile(tiles, "Leave now: arrive", hhmm(best.arrive_ts), `${minTxt(best.total_sec)} door to door (${minTxt(best.total_lo_sec)}–${minTxt(best.total_hi_sec)})`);
+      tile(tiles, "First train", `${best.legs[0].route_id} in ${minTxt(best.wait_sec)}`, best.legs[0].train_now_at ? `now at ${best.legs[0].train_now_at}` : "");
+      tile(tiles, "Typical at this hour", minTxt(j.typical_total_sec), "schedule + typical waits");
+      const delta = best.total_sec - j.typical_total_sec;
+      tile(tiles, "Right now vs typical", `${delta >= 0 ? "+" : "−"}${Math.abs(delta / 60).toFixed(0)} min`, delta > 180 ? "slower than usual" : delta < -180 ? "faster than usual" : "about normal");
+    } else {
+      h("div", "empty", "No catchable train within the next hour appears in the feed for the first leg.", root);
+    }
+    // Options table
+    if ((j.options || []).length) {
+      h("h2", null, "Options in the next hour", root);
+      const wrap = h("div", "table-wrap card", null, root); const t = h("table", null, null, wrap);
+      const tr = h("tr", null, null, h("thead", null, null, t));
+      [["leave in", ""], ["trains", ""], ["board", "num hide-sm"], ["arrive", "num"], ["total", "num"], ["range", "num hide-sm"], ["breakdown", ""]].forEach(([x, c]) => h("th", c, x, tr));
+      const tb = h("tbody", null, null, t);
+      j.options.forEach((o, i) => { const row = h("tr", i === 0 ? "worse" : "", null, tb);
+        h("td", null, minTxt(o.wait_sec), row); const rc = h("td", null, null, row); o.routes.forEach(r => routeBullet(r, rc));
+        h("td", "num eta hide-sm", hhmm(o.depart_ts), row); h("td", "num eta", hhmm(o.arrive_ts), row); h("td", "num", minTxt(o.total_sec), row);
+        h("td", "num small hide-sm", `${minTxt(o.total_lo_sec)}–${minTxt(o.total_hi_sec)}`, row);
+        h("td", "small", o.legs.map(l => `${l.route_id}: wait ${minTxt(l.wait_sec)}${l.transfer_sec ? ` + walk ${minTxt(l.transfer_sec)}` : ""} + ride ${minTxt(l.ride_sec)}${l.ride_source === "typical" ? " (typical)" : ""}${l.train_lateness_sec != null && Math.abs(l.train_lateness_sec) >= 120 ? ` (train ${lateTxt(l.train_lateness_sec)})` : ""}`).join(" → "), row); });
+    }
+    // Stringline chart with the recommended itinerary drawn
+    if ((j.stringline || []).length) {
+      h("h2", null, "Trains on this corridor right now", root);
+      const card = h("div", "card", null, root);
+      const hl = new Set((best?.legs || []).map(l => l.trip_id).filter(Boolean));
+      const path = [];
+      (best?.legs || []).forEach((l, li) => { const lg = j.stringline[li]; if (!lg) return; const iFrom = lg.stops.findIndex(s => s.stop_id === l.from), iTo = lg.stops.findIndex(s => s.stop_id === l.to);
+        if (li === 0) path.push([0, Math.max(0, iFrom), now]); path.push([li, Math.max(0, iFrom), l.board_ts]); path.push([li, Math.max(0, iTo), l.arrive_ts]); });
+      stringline(card, { title: "Time-distance view", subtitle: "each line is a train (feed ETAs); the dashed red path is the recommended itinerary: wait, ride, transfer, ride", legs: j.stringline, now, highlight: hl, path, routeColor: r => ROUTE_COLORS[r] || null });
+      const lg = h("div", "small secondary", null, card); lg.style.marginTop = ".4rem";
+      lg.textContent = "Highlighted lines are the trains you would take; grey lines are other trains on the corridor. Steeper lines mean faster running; flat segments are dwells or holds.";
+    }
+    // Model explanation
+    const m = j.model || {};
+    const det = h("details", null, null, root); det.style.marginTop = "1rem"; h("summary", null, "How the estimate is built", det);
+    const ul = h("ul", "small secondary", null, det);
+    h("li", null, `Ride time per leg: average of the feed's own ETA difference (when the train's ETA at the destination is published) and the schedule plus the model's predicted excess.`, ul);
+    h("li", null, `Model: ridge regression on the collected history (${m.n_samples || 0} observed rides${m.fitted_at ? `, fitted ${dateTime(m.fitted_at)}` : ""}); coefficients shrink to zero until enough rides are observed.`, ul);
+    Object.entries(m.coef || {}).forEach(([li, coef]) => { const parts = Object.entries(coef).filter(([, v]) => Math.abs(v) >= 5).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(0)} s`); h("li", null, `Leg ${Number(li) + 1} effects: ${parts.length ? parts.join(", ") : "none learned yet"}`, ul); });
+    h("li", null, "Range: p10–p90 of the model's residuals for the route and period (weekday peak, off-peak, weekend), summed over legs.", ul);
+    h("li", null, "Signals used: lateness of the train at boarding, unplanned alerts on the route, holidays, weekends, peak, permitted street events and venue events, transit news mentions, precipitation and heat.", ul);
   }
   await draw();
   liveTimer = setInterval(draw, 60000);
