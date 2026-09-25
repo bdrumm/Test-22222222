@@ -13,6 +13,7 @@ from ..sources import alerts as alerts_src
 from ..sources import gtfs_realtime as rt
 from ..storage.db import Store
 from .arrivals import ArrivalTracker
+from .dwells import DwellTracker
 
 log = logging.getLogger(__name__)
 
@@ -23,17 +24,21 @@ class Collector:
     def __init__(self, store: Store, feeds: Iterable[str], stops_of_interest: Iterable[str] | None = None,
                  store_predictions: bool = False, poll_interval_sec: float = 30.0,
                  fetcher: Fetcher | None = None, alerts_fetcher: Callable[[], dict] | None = None,
-                 alerts_every_n_polls: int = 2, raw_dir: str | Path | None = None):
+                 alerts_every_n_polls: int = 2, raw_dir: str | Path | None = None,
+                 sample_stops: Iterable[str] | None = None, track_dwells: bool = True):
         self.store = store
         self.feeds = list(feeds)
         self.stops_of_interest = set(stops_of_interest) if stops_of_interest else None
+        self.sample_stops = set(sample_stops) if sample_stops is not None else self.stops_of_interest
+        self.track_dwells = track_dwells
         self.store_predictions = store_predictions
         self.poll_interval_sec = poll_interval_sec
         self.fetcher = fetcher or (lambda key: rt.fetch_feed_bytes(config.rt_feed_url(key)))
         self.alerts_fetcher = alerts_fetcher
         self.alerts_every_n_polls = alerts_every_n_polls
         self.raw_dir = Path(raw_dir) if raw_dir else None
-        self.trackers = {f: ArrivalTracker(self.stops_of_interest, poll_interval_sec) for f in self.feeds}
+        self.trackers = {f: ArrivalTracker(self.stops_of_interest, poll_interval_sec, sample_stops=self.sample_stops) for f in self.feeds}
+        self.dwell_trackers = {f: DwellTracker(self.stops_of_interest) for f in self.feeds}
         self.polls = 0
         self.last_feed_bytes: dict[str, bytes] = {}
         self.last_alerts: dict | None = None
@@ -45,10 +50,15 @@ class Collector:
         msg = rt.parse_feed(data)
         tu = rt.trip_updates_frame(msg, feed_key, snapshot_ts)
         vp = rt.vehicle_positions_frame(msg, feed_key, snapshot_ts)
-        arrivals = self.trackers[feed_key].update(tu, snapshot_ts)
+        tracker = self.trackers[feed_key]
+        arrivals = tracker.update(tu, snapshot_ts)
         if self.store_predictions:
             self.store.insert_predictions(tu if not self.stops_of_interest else tu[tu["stop_id"].isin(self.stops_of_interest)])
         self.store.insert_arrivals(arrivals)
+        self.store.insert_eta_samples(tracker.take_samples())
+        if self.track_dwells:
+            dt = self.dwell_trackers.setdefault(feed_key, DwellTracker(self.stops_of_interest))
+            self.store.insert_dwells(dt.update(vp, snapshot_ts))
         feed_ts = float(msg.header.timestamp) if msg.header.HasField("timestamp") else None
         self.store.insert_snapshot(feed_key, snapshot_ts, feed_ts, int(tu["trip_id"].nunique()), len(vp), len(arrivals))
         if self.raw_dir:
@@ -116,7 +126,7 @@ class Collector:
         n = 0
         for key, ts, data in sorted(snapshots, key=lambda s: s[1]):
             if key not in self.trackers:
-                self.trackers[key] = ArrivalTracker(self.stops_of_interest, self.poll_interval_sec)
+                self.trackers[key] = ArrivalTracker(self.stops_of_interest, self.poll_interval_sec, sample_stops=self.sample_stops)
             n += len(self.ingest(key, data, ts))
         return n
 

@@ -30,6 +30,7 @@ def main(argv=None) -> int:
     ap.add_argument("--live-out", default="live.json", help="where to write the live snapshot")
     ap.add_argument("--models-dir", default="gh-pages-branch/data/models", help="fitted propagation models (from the published site)")
     ap.add_argument("--live-publish", default="", help="script to run after each live snapshot (e.g. pipeline/live_publish.sh)")
+    ap.add_argument("--all-stops", action="store_true", help="track every stop of the polled feeds (also targets.json collect.all_stops)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
 
@@ -40,8 +41,15 @@ def main(argv=None) -> int:
     logging.info("targets=%s feeds=%s stops=%d", [t["id"] for t in resolved], feeds, len(stops))
 
     store = Store(":memory:")
-    col = Collector(store, feeds, stops, poll_interval_sec=args.interval,
-                    alerts_fetcher=lambda: alerts_src.fetch_alerts_json(), alerts_every_n_polls=4)
+    copts = lib.collect_options(targets)
+    all_stops = bool(copts.get("all_stops")) or args.all_stops
+    if all_stops:
+        # every feed's stops are tracked; ETA samples and dwell rows stay limited to the stops of interest
+        feeds = sorted(set(feeds) | set(copts.get("extra_feeds", [])))
+    logging.info("collection mode: %s", "all stops" if all_stops else f"{len(stops)} stops of interest")
+    col = Collector(store, feeds, None if all_stops else stops, poll_interval_sec=args.interval,
+                    alerts_fetcher=lambda: alerts_src.fetch_alerts_json(), alerts_every_n_polls=4,
+                    sample_stops=stops)
     if args.live_every > 0:
         from mta_delay_insights.realtime import build_live
         from mta_delay_insights.realtime.propagation import PropagationModel
@@ -88,7 +96,16 @@ def main(argv=None) -> int:
     flushed = col.flush(time.time())
     arrivals = store.arrivals()
     alerts = store.alerts()
+    if all_stops:
+        core = arrivals[arrivals["stop_id"].isin(stops)]
+        written_all = lib.save_network_arrivals(data_dir, arrivals)
+        lib.prune_daily(data_dir, "arrivals_all", int(copts.get("network_retention_days", 21)))
+        logging.info("network arrivals: %d rows in %d day files", len(arrivals), len(written_all))
+        arrivals = core
     written = lib.save_arrivals(data_dir, arrivals)
+    n_samples = lib.save_eta_samples(data_dir, store.eta_samples())
+    n_dwells = lib.save_dwells(data_dir, store.dwells(stops))
+    logging.info("eta samples: %s, dwells: %s", n_samples, n_dwells)
     n_alerts = lib.save_alerts(data_dir, alerts, time.time())
     stats = store.snapshot_stats()
     record = {

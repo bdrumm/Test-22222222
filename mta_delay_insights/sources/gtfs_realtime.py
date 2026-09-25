@@ -15,11 +15,13 @@ import requests
 from google.transit import gtfs_realtime_pb2 as rt
 
 from .. import config
+from . import nyct_ext
 from .gtfs_static import direction_from_stop_id, direction_from_trip_id
 
 TRIP_UPDATE_COLUMNS = [
     "snapshot_ts", "feed_ts", "feed", "trip_id", "route_id", "start_date", "direction",
     "stop_id", "stop_sequence", "arrival_ts", "departure_ts", "schedule_relationship",
+    "train_id", "is_assigned", "sched_track", "actual_track",
 ]
 VEHICLE_COLUMNS = [
     "snapshot_ts", "feed", "trip_id", "route_id", "start_date", "direction", "stop_id",
@@ -62,10 +64,14 @@ def trip_updates_frame(feed: rt.FeedMessage, feed_name: str = "", snapshot_ts: f
         tu = ent.trip_update
         trip = tu.trip
         rel = rt.TripDescriptor.ScheduleRelationship.Name(trip.schedule_relationship) if trip.HasField("schedule_relationship") else "SCHEDULED"
+        nyct = nyct_ext.trip_fields(trip)
         for stu in tu.stop_time_update:
             arr = float(stu.arrival.time) if stu.HasField("arrival") and stu.arrival.time else None
             dep = float(stu.departure.time) if stu.HasField("departure") and stu.departure.time else None
+            tracks = nyct_ext.stop_fields(stu)
             rows.append({
+                "train_id": nyct["train_id"], "is_assigned": nyct["is_assigned"],
+                "sched_track": tracks["sched_track"], "actual_track": tracks["actual_track"],
                 "snapshot_ts": snap,
                 "feed_ts": feed_ts,
                 "feed": feed_name,
@@ -147,6 +153,9 @@ def encode_trip_updates(trips: Iterable[dict], feed_ts: float) -> bytes:
         tu.trip.route_id = t["route_id"]
         if t.get("start_date"):
             tu.trip.start_date = t["start_date"]
+        if t.get("train_id") or t.get("is_assigned") is not None:
+            nyct_ext.set_trip_fields(tu.trip, t.get("train_id"), t.get("is_assigned"))
+        tracks = t.get("tracks") or {}
         for i, (stop_id, arr, dep) in enumerate(t["stops"]):
             stu = tu.stop_time_update.add()
             stu.stop_id = stop_id
@@ -156,6 +165,8 @@ def encode_trip_updates(trips: Iterable[dict], feed_ts: float) -> bytes:
                 stu.arrival.time = int(arr)
             if dep is not None:
                 stu.departure.time = int(dep)
+            if stop_id in tracks:
+                nyct_ext.set_stop_fields(stu, *tracks[stop_id])
         if t.get("vehicle"):
             vent = msg.entity.add()
             vent.id = "v:" + t["trip_id"]

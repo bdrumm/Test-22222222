@@ -371,5 +371,13 @@
   }
  ],
  "upstream_stops": 6,
- "route_share_of_entries": 0.5
+ "route_share_of_entries": 0.5,
+ "collect": {
+  "all_stops": true,
+  "extra_feeds": [
+   "jz",
+   "si"
+  ],
+  "network_retention_days": 21
+ }
 }

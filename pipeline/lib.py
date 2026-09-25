@@ -11,7 +11,7 @@ import pandas as pd
 
 from mta_delay_insights import config
 from mta_delay_insights.sources.gtfs_static import NY_TZ, StaticGTFS
-from mta_delay_insights.storage.db import ARRIVAL_COLUMNS
+from mta_delay_insights.storage.db import ARRIVAL_COLUMNS, DWELL_COLUMNS, ETA_SAMPLE_COLUMNS
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = ROOT / "data-branch"
@@ -192,3 +192,83 @@ def load_events(data_dir: Path) -> pd.DataFrame | None:
     ev = ev.copy()
     ev["routes"] = ev["routes"].map(lambda v: json.loads(v) if isinstance(v, str) and v.startswith("[") else [])
     return ev
+
+
+def _save_daily(data_dir: Path, sub: str, df: pd.DataFrame, columns: list[str], ts_col: str, keys: list[str]) -> dict[str, int]:
+    if df is None or df.empty:
+        return {}
+    d = Path(data_dir) / sub
+    d.mkdir(parents=True, exist_ok=True)
+    df = df.reindex(columns=columns)
+    df["_date"] = df[ts_col].map(local_date)
+    written = {}
+    for date, g in df.groupby("_date"):
+        f = d / f"{date}.csv.gz"
+        g = g.drop(columns=["_date"])
+        if f.exists():
+            g = pd.concat([pd.read_csv(f), g], ignore_index=True)
+        g = g.drop_duplicates(keys, keep="last")
+        g.to_csv(f, index=False, compression="gzip")
+        written[date] = int(len(g))
+    return written
+
+
+def _load_daily(data_dir: Path, sub: str, days: int | None = None, stops: set[str] | None = None) -> pd.DataFrame:
+    d = Path(data_dir) / sub
+    if not d.exists():
+        return pd.DataFrame()
+    files = sorted(d.glob("*.csv.gz"))
+    if days:
+        files = files[-days:]
+    frames = []
+    for f in files:
+        x = pd.read_csv(f)
+        if stops is not None and "stop_id" in x.columns:
+            x = x[x["stop_id"].isin(stops)]
+        frames.append(x)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def save_eta_samples(data_dir: Path, df: pd.DataFrame) -> dict[str, int]:
+    return _save_daily(data_dir, "eta_samples", df, ETA_SAMPLE_COLUMNS, "at_ts", ["trip_key", "stop_id", "at_stop"])
+
+
+def load_eta_samples(data_dir: Path, days: int | None = None, stops: set[str] | None = None) -> pd.DataFrame:
+    return _load_daily(data_dir, "eta_samples", days, stops)
+
+
+def save_dwells(data_dir: Path, df: pd.DataFrame) -> dict[str, int]:
+    return _save_daily(data_dir, "dwells", df, DWELL_COLUMNS, "stopped_from_ts", ["trip_key", "stop_id"])
+
+
+def load_dwells(data_dir: Path, days: int | None = None, stops: set[str] | None = None) -> pd.DataFrame:
+    return _load_daily(data_dir, "dwells", days, stops)
+
+
+def save_network_arrivals(data_dir: Path, df: pd.DataFrame) -> dict[str, int]:
+    """Arrivals at every stop of the polled feeds (all-stops mode), kept apart from the core files."""
+    return _save_daily(data_dir, "arrivals_all", df, ARRIVAL_COLUMNS, "arrival_ts", ["trip_key", "stop_id"])
+
+
+def load_network_arrivals(data_dir: Path, days: int | None = None, stops: set[str] | None = None) -> pd.DataFrame:
+    return _load_daily(data_dir, "arrivals_all", days, stops)
+
+
+def collect_options(targets: dict) -> dict:
+    c = dict(targets.get("collect") or {})
+    c.setdefault("all_stops", False)
+    c.setdefault("network_retention_days", 21)
+    return c
+
+
+def prune_daily(data_dir: Path, sub: str, keep_days: int) -> list[str]:
+    """Delete day files older than the newest ``keep_days`` (rolling window for bulky network-wide data)."""
+    d = Path(data_dir) / sub
+    if not d.exists() or keep_days <= 0:
+        return []
+    files = sorted(d.glob("*.csv.gz"))
+    removed = []
+    for f in files[:-keep_days] if len(files) > keep_days else []:
+        f.unlink()
+        removed.append(f.name)
+    return removed

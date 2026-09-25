@@ -26,11 +26,23 @@ CREATE TABLE IF NOT EXISTS arrivals (
     trip_key TEXT NOT NULL, trip_id TEXT NOT NULL, route_id TEXT, start_date TEXT, direction TEXT,
     stop_id TEXT NOT NULL, arrival_ts REAL NOT NULL, departure_ts REAL, source TEXT,
     first_seen_ts REAL, last_seen_ts REAL, first_pred_ts REAL, n_predictions INTEGER,
-    pred_drift_sec REAL, confidence REAL,
+    pred_drift_sec REAL, confidence REAL, train_id TEXT, sched_track TEXT, actual_track TEXT,
     UNIQUE(trip_key, stop_id) ON CONFLICT REPLACE
 );
 CREATE INDEX IF NOT EXISTS ix_arr_stop_ts ON arrivals(stop_id, arrival_ts);
 CREATE INDEX IF NOT EXISTS ix_arr_trip ON arrivals(trip_key);
+CREATE TABLE IF NOT EXISTS eta_samples (
+    trip_key TEXT NOT NULL, route_id TEXT, stop_id TEXT NOT NULL, at_stop TEXT NOT NULL, at_ts REAL NOT NULL,
+    stops_ahead INTEGER, eta_ts REAL NOT NULL,
+    UNIQUE(trip_key, stop_id, at_stop) ON CONFLICT REPLACE
+);
+CREATE INDEX IF NOT EXISTS ix_eta_stop ON eta_samples(stop_id, at_ts);
+CREATE TABLE IF NOT EXISTS dwells (
+    trip_key TEXT NOT NULL, route_id TEXT, direction TEXT, stop_id TEXT NOT NULL,
+    stopped_from_ts REAL NOT NULL, stopped_to_ts REAL NOT NULL, dwell_sec REAL, polls INTEGER,
+    UNIQUE(trip_key, stop_id) ON CONFLICT REPLACE
+);
+CREATE INDEX IF NOT EXISTS ix_dwell_stop ON dwells(stop_id, stopped_from_ts);
 CREATE TABLE IF NOT EXISTS alerts (
     alert_id TEXT NOT NULL, alert_type TEXT, planned INTEGER, cause_category TEXT,
     created_at REAL, updated_at REAL, active_start REAL, active_end REAL,
@@ -43,8 +55,10 @@ CREATE INDEX IF NOT EXISTS ix_alerts_start ON alerts(active_start);
 ARRIVAL_COLUMNS = [
     "trip_key", "trip_id", "route_id", "start_date", "direction", "stop_id", "arrival_ts",
     "departure_ts", "source", "first_seen_ts", "last_seen_ts", "first_pred_ts", "n_predictions",
-    "pred_drift_sec", "confidence",
+    "pred_drift_sec", "confidence", "train_id", "sched_track", "actual_track",
 ]
+ETA_SAMPLE_COLUMNS = ["trip_key", "route_id", "stop_id", "at_stop", "at_ts", "stops_ahead", "eta_ts"]
+DWELL_COLUMNS = ["trip_key", "route_id", "direction", "stop_id", "stopped_from_ts", "stopped_to_ts", "dwell_sec", "polls"]
 ALERT_COLUMNS = [
     "alert_id", "alert_type", "planned", "cause_category", "created_at", "updated_at",
     "active_start", "active_end", "routes", "stops", "header", "description", "last_seen_ts",
@@ -52,6 +66,13 @@ ALERT_COLUMNS = [
 
 
 class Store:
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(arrivals)")}
+        for c in ("train_id", "sched_track", "actual_track"):
+            if c not in cols:
+                self.conn.execute(f"ALTER TABLE arrivals ADD COLUMN {c} TEXT")
+        self.conn.commit()
+
     def __init__(self, path: str | Path = ":memory:"):
         self.path = str(path)
         if self.path != ":memory:":
@@ -59,6 +80,7 @@ class Store:
         self.conn = sqlite3.connect(self.path)
         self.conn.execute("PRAGMA journal_mode=WAL") if self.path != ":memory:" else None
         self.conn.executescript(SCHEMA)
+        self._migrate()
 
     # ---- writes ----------------------------------------------------------- #
     def insert_snapshot(self, feed: str, fetched_at: float, feed_ts: float | None,
@@ -101,6 +123,46 @@ class Store:
             f"INSERT INTO alerts ({','.join(ALERT_COLUMNS)}) VALUES ({','.join('?' * len(ALERT_COLUMNS))})", rows)
         self.conn.commit()
         return len(rows)
+
+    def insert_eta_samples(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        d = df.reindex(columns=ETA_SAMPLE_COLUMNS)
+        rows = d.astype(object).where(d.notna(), None).values.tolist()
+        self.conn.executemany(f"INSERT INTO eta_samples ({','.join(ETA_SAMPLE_COLUMNS)}) VALUES ({','.join('?' * len(ETA_SAMPLE_COLUMNS))})", rows)
+        self.conn.commit()
+        return len(rows)
+
+    def eta_samples(self, stop_ids=None, start_ts: float | None = None, end_ts: float | None = None) -> pd.DataFrame:
+        q = "SELECT * FROM eta_samples WHERE 1=1"; args: list = []
+        if stop_ids:
+            ids = [stop_ids] if isinstance(stop_ids, str) else list(stop_ids)
+            q += f" AND stop_id IN ({','.join('?' * len(ids))})"; args += ids
+        if start_ts is not None:
+            q += " AND at_ts >= ?"; args.append(start_ts)
+        if end_ts is not None:
+            q += " AND at_ts < ?"; args.append(end_ts)
+        return pd.read_sql(q + " ORDER BY at_ts", self.conn, params=args)
+
+    def insert_dwells(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        d = df.reindex(columns=DWELL_COLUMNS)
+        rows = d.astype(object).where(d.notna(), None).values.tolist()
+        self.conn.executemany(f"INSERT INTO dwells ({','.join(DWELL_COLUMNS)}) VALUES ({','.join('?' * len(DWELL_COLUMNS))})", rows)
+        self.conn.commit()
+        return len(rows)
+
+    def dwells(self, stop_ids=None, start_ts: float | None = None, end_ts: float | None = None) -> pd.DataFrame:
+        q = "SELECT * FROM dwells WHERE 1=1"; args: list = []
+        if stop_ids:
+            ids = [stop_ids] if isinstance(stop_ids, str) else list(stop_ids)
+            q += f" AND stop_id IN ({','.join('?' * len(ids))})"; args += ids
+        if start_ts is not None:
+            q += " AND stopped_from_ts >= ?"; args.append(start_ts)
+        if end_ts is not None:
+            q += " AND stopped_from_ts < ?"; args.append(end_ts)
+        return pd.read_sql(q + " ORDER BY stopped_from_ts", self.conn, params=args)
 
     def put_frame(self, name: str, df: pd.DataFrame, replace: bool = True) -> None:
         """Persist a context DataFrame (incidents, ridership, weather...) as its own table."""

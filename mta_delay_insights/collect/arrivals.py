@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from ..storage.db import ARRIVAL_COLUMNS
+from ..storage.db import ARRIVAL_COLUMNS, ETA_SAMPLE_COLUMNS
+
+SAMPLE_STOPS_AHEAD = (1, 2, 3, 5, 8, 12)   # ETA snapshots kept when the train is this many stops away
 
 
 @dataclass
@@ -33,6 +35,9 @@ class TrackedStop:
     last_pred_ts: float
     last_dep_ts: float | None
     n_predictions: int = 1
+    train_id: str | None = None
+    sched_track: str | None = None
+    actual_track: str | None = None
 
 
 @dataclass
@@ -42,8 +47,11 @@ class ArrivalTracker:
     stops_of_interest: set[str] | None = None
     poll_interval_sec: float = 30.0
     vanish_slack_sec: float = 120.0
+    sample_stops: set[str] | None = None      # stops for which ETA samples are kept (default: stops of interest)
     state: dict[str, dict[str, TrackedStop]] = field(default_factory=dict)
     trip_last_seen: dict[str, float] = field(default_factory=dict)
+    trip_order: dict[str, list[str]] = field(default_factory=dict)   # remaining stop order at the last poll
+    samples: list[dict] = field(default_factory=list)
 
     @staticmethod
     def trip_key(trip_id: str, start_date: str | None) -> str:
@@ -63,14 +71,22 @@ class ArrivalTracker:
                 seen_trips.add(key)
                 self.trip_last_seen[key] = snapshot_ts
                 tracked = self.state.setdefault(key, {})
-                current = set(grp["stop_id"])
+                order_now = list(grp["stop_id"])
+                current = set(order_now)
+                prev_order = self.trip_order.get(key, [])
                 # Stops we tracked that are no longer predicted -> served.
-                for stop_id in list(tracked):
-                    if stop_id not in current:
-                        ts = tracked.pop(stop_id)
+                served = [sid for sid in prev_order if sid not in current] or [sid for sid in tracked if sid not in current]
+                for stop_id in served:
+                    ts = tracked.pop(stop_id, None)
+                    if ts is not None:
                         emitted.append(self._emit(ts, snapshot_ts, source="rt_dropoff"))
+                        self._sample(key, stop_id, ts, prev_order, tracked)
+                    else:
+                        self._sample(key, stop_id, None, prev_order, tracked, snapshot_ts)
+                self.trip_order[key] = order_now
                 if self.stops_of_interest:
                     grp = grp[grp["stop_id"].isin(self.stops_of_interest)]
+                has_ext = "train_id" in grp.columns
                 for row in grp.itertuples(index=False):
                     if row.arrival_ts is None or pd.isna(row.arrival_ts):
                         continue
@@ -81,12 +97,22 @@ class ArrivalTracker:
                             direction=row.direction, stop_id=row.stop_id, first_seen_ts=snapshot_ts,
                             last_seen_ts=snapshot_ts, first_pred_ts=float(row.arrival_ts),
                             last_pred_ts=float(row.arrival_ts),
-                            last_dep_ts=None if pd.isna(row.departure_ts) else float(row.departure_ts))
+                            last_dep_ts=None if pd.isna(row.departure_ts) else float(row.departure_ts),
+                            train_id=(row.train_id if has_ext and isinstance(row.train_id, str) else None),
+                            sched_track=(row.sched_track if has_ext and isinstance(row.sched_track, str) else None),
+                            actual_track=(row.actual_track if has_ext and isinstance(row.actual_track, str) else None))
                     else:
                         t.last_seen_ts = snapshot_ts
                         t.last_pred_ts = float(row.arrival_ts)
                         t.last_dep_ts = None if pd.isna(row.departure_ts) else float(row.departure_ts)
                         t.n_predictions += 1
+                        if has_ext:
+                            if isinstance(row.actual_track, str):
+                                t.actual_track = row.actual_track
+                            if isinstance(row.sched_track, str) and not t.sched_track:
+                                t.sched_track = row.sched_track
+                            if isinstance(row.train_id, str) and not t.train_id:
+                                t.train_id = row.train_id
         # Trips that vanished: their remaining stops were probably served (trip ended)
         # if their predicted time has passed; otherwise treat as cancelled.
         for key in list(self.state):
@@ -100,7 +126,35 @@ class ArrivalTracker:
                     emitted.append(self._emit(ts, snapshot_ts, source="trip_vanished"))
             del self.state[key]
             self.trip_last_seen.pop(key, None)
+            self.trip_order.pop(key, None)
         return pd.DataFrame(emitted, columns=ARRIVAL_COLUMNS)
+
+    def _sample(self, key: str, at_stop: str, served: TrackedStop | None, prev_order: list[str],
+                tracked: dict[str, TrackedStop], now: float | None = None) -> None:
+        """When the train serves ``at_stop``, record the ETA it was showing for the stops ahead."""
+        if at_stop not in prev_order:
+            return
+        i = prev_order.index(at_stop)
+        at_ts = served.last_pred_ts if served is not None else float(now)
+        route = served.route_id if served is not None else next((t.route_id for t in tracked.values()), None)
+        keep = self.sample_stops if self.sample_stops is not None else self.stops_of_interest
+        for k in SAMPLE_STOPS_AHEAD:
+            j = i + k
+            if j >= len(prev_order):
+                break
+            sid = prev_order[j]
+            if keep is not None and sid not in keep:
+                continue
+            t = tracked.get(sid)
+            if t is None:
+                continue
+            self.samples.append({"trip_key": key, "route_id": route, "stop_id": sid, "at_stop": at_stop, "at_ts": at_ts,
+                                 "stops_ahead": k, "eta_ts": t.last_pred_ts})
+
+    def take_samples(self) -> pd.DataFrame:
+        out = pd.DataFrame(self.samples, columns=ETA_SAMPLE_COLUMNS)
+        self.samples = []
+        return out
 
     def _emit(self, ts: TrackedStop, snapshot_ts: float, source: str) -> dict:
         arrival = min(ts.last_pred_ts, snapshot_ts)
@@ -123,6 +177,7 @@ class ArrivalTracker:
             "first_seen_ts": ts.first_seen_ts, "last_seen_ts": ts.last_seen_ts,
             "first_pred_ts": ts.first_pred_ts, "n_predictions": ts.n_predictions,
             "pred_drift_sec": ts.last_pred_ts - ts.first_pred_ts, "confidence": max(0.0, round(conf, 2)),
+            "train_id": ts.train_id, "sched_track": ts.sched_track, "actual_track": ts.actual_track,
         }
 
     def pending(self) -> int:
