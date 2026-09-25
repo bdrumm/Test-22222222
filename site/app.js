@@ -36,7 +36,7 @@ const dateTime = iso => { try { return new Date(iso).toLocaleString(undefined, {
 const pctChange = v => v == null ? "–" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
 
 // ---------------------------------------------------------------- routing
-const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage, model: modelPage, disruptions: disruptionsPage };
+const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage, model: modelPage, disruptions: disruptionsPage, line: linePage };
 async function render() {
   const [section = "", arg] = location.hash.replace(/^#\/?/, "").split("/");
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === (section || "home")));
@@ -352,6 +352,21 @@ async function live(idx) {
     tile(tiles, "Unplanned alerts", d.alerts.length);
 
     // Monitored stations: forecasts and downstream effects
+    const inc = (d.incidents_developing || []).filter(x => !x.error);
+    if (inc.length) {
+      h("h2", null, "Developing right now", root);
+      const card = h("div", "card", null, root); const ul = h("ul", "findings", null, card);
+      inc.forEach(x => { const li = h("li", `sev-${x.alerted ? "medium" : "high"}`, null, ul); h("span", "sev", x.alerted ? "alerted" : "no alert", li); routeBullet(x.route_id, li); li.append(` ${x.text} (since ${hhmm(x.first_seen_ts)})`); });
+      h("div", "small secondary", "Consecutive trains losing ≥2 min between the same two stops in the last 20 minutes: an incident in progress, whether or not an alert has been posted.", card);
+    }
+    if ((d.track_changes || []).length) {
+      h("h2", null, "Trains running on a different track than scheduled", root);
+      const card = h("div", "card", null, root); const row = h("div", "small", null, card);
+      d.track_changes.slice(0, 20).forEach(t => { const sp = h("span", null, null, row); sp.style.marginRight = ".8rem"; routeBullet(t.route_id, sp); sp.append(` ${t.train_id || t.trip_id} → ${t.next_stop_name || t.next_stop_id}`); });
+      h("div", "small secondary", "The feed's actual track differs from the scheduled one: express/local swaps and reroutes that the timetable does not know about.", card);
+    }
+    if (d.learned_model && d.learned_model.ready) h("div", "small secondary", `ETAs below use the learned arrival model (${fmt.compact(d.learned_model.n_train)} training rows${d.learned_model.mae_model != null ? `, ${d.learned_model.mae_model.toFixed(0)} s MAE` : ""}); see the Model page.`, root).style.marginTop = ".5rem";
+
     h("h2", null, "Monitored platforms: next arrivals and downstream effects", root);
     const grid = h("div", "grid-2", null, root);
     for (const s of d.stations) {
@@ -698,4 +713,58 @@ async function disruptionsPage(idx, routeSel) {
   h("li", null, "Base rates: the chance a new disruption starts on your line in the next hour is the heatmap cell for the current day and hour (events per week ÷ 1 week = expected events that hour of a typical week).", ul);
   h("li", null, "Durations are alert-thread lengths (first to last update), a lower bound on the service impact; the Stations and Routes pages measure the impact on actual trains.", ul);
   h("li", null, "Causes come from the alert text (signal, track, police/medical, mechanical, crowding, weather, ...).", ul);
+}
+
+
+// ---------------------------------------------------------------- line view (Marey chart + where time is lost)
+async function linePage(idx, arg) {
+  const root = app; root.replaceChildren();
+  const avail = idx.lines_view || [];
+  h("h1", null, "Line view: every train on the line", root);
+  if (!avail.length) { h("div", "empty", "No line views yet: they need network-wide arrivals (all-stops collection or the subwaydata.nyc backfill).", root); return; }
+  const [routeArg, dirArg] = (arg || "").split("_");
+  const filters = h("div", "filters", null, root);
+  h("label", "small secondary", "Line", filters); const sel = h("select", null, null, filters);
+  avail.forEach(l => { const o = h("option", null, `${l.route} ${l.direction === "N" ? "northbound" : "southbound"}`, sel); o.value = `${l.route}_${l.direction}`; });
+  const key = avail.some(l => `${l.route}_${l.direction}` === `${routeArg}_${dirArg}`) ? `${routeArg}_${dirArg}` : `${avail[0].route}_${avail[0].direction}`;
+  sel.value = key; sel.addEventListener("change", () => { location.hash = `#/line/${sel.value}`; });
+  let d;
+  try { d = await load(`lines/${key}.json`); } catch (e) { h("div", "empty", `No data for ${key}.`, root); return; }
+  const snap = d.snapshot, dev = d.deviation;
+  const route = snap.route;
+  const tiles = h("div", "tiles", null, root);
+  const lateNow = snap.live.filter(t => t.lateness != null).map(t => t.lateness);
+  tile(tiles, "Trains on the line", String(snap.live.filter(t => t.started).length), `${snap.actual.length} observed in the last 2 h`);
+  tile(tiles, "Median lateness now", lateNow.length ? lateTxt(lateNow.sort((a, b) => a - b)[Math.floor(lateNow.length / 2)]) : "–", lateNow.length ? `${lateNow.filter(v => v >= 300).length} trains ≥5 min late` : "");
+  const w = (dev.worst_stops || [])[0];
+  tile(tiles, "Where time is lost", w ? w.name : "–", w ? `+${w.mean_delta_sec.toFixed(0)} s per train on average (${dev.n_trips} trips)` : "not enough history");
+  tile(tiles, "Track changes", String(snap.live.filter(t => t.track_changed).length), "trains on a track other than scheduled");
+  h("h2", null, "Time-distance (Marey) chart", root);
+  const card = h("div", "card", null, root);
+  const legs = [{ stops: snap.stops, trains: [
+    ...snap.scheduled.map(t => ({ trip_id: t.trip_id, route_id: route, points: t.points, kind: "sched" })),
+    ...snap.actual.map(t => ({ trip_id: t.trip_id, train_id: t.train_id, route_id: route, points: t.points.map(p => [p[0], p[1]]), lateness_sec: t.last_lateness, kind: "actual" })),
+    ...snap.live.filter(t => t.started).map(t => ({ trip_id: t.trip_id, train_id: t.train_id, route_id: route, points: t.points, lateness_sec: t.lateness, kind: "live" })),
+  ] }];
+  stringline(card, { title: `${route} ${snap.direction === "N" ? "northbound" : "southbound"}: last 2 hours and the next hour`, subtitle: "solid: observed arrivals (green on time, amber ≥2 min late, red ≥5 min); dashed: the feed's projection for trains under way; grey: the timetable",
+    legs, now: snap.now, horizonSec: 3600, backSec: 7200, highlight: new Set(), path: [], routeColor: () => ROUTE_COLORS[route] || null, rowH: 12 });
+  h("div", "small secondary", "Read it like a railway dispatcher: parallel lines are regular service, converging lines are bunching, a flat stretch is a hold, and a widening white band is a gap. Compare the slope of observed lines with the grey timetable to see where trains run slower than planned.", card).style.marginTop = ".4rem";
+  if ((dev.grid || []).length && dev.n_trips) {
+    h("h2", null, "Where the line loses time, by hour", root);
+    const c2 = h("div", "card", null, root);
+    heatmap(c2, { title: "Mean lateness change per stop vs the previous stop (seconds)", subtitle: `positive = time lost arriving at that stop; ${dev.n_trips} trips over the recent history`,
+      rows: dev.stops.map(s => s.name), cols: HOURS, values: dev.grid.map(r => r.map(v => v == null ? 0 : Math.max(0, v))), format: fmt.sec, colLabelEvery: 3, rowLabelEvery: 1 });
+    if ((dev.worst_stops || []).length) { const ul = h("ul", "small secondary", null, c2); dev.worst_stops.forEach(x => h("li", null, `${x.name}: +${x.mean_delta_sec.toFixed(0)} s per train`, ul)); }
+  }
+  try {
+    const trust = await load("eta_trust.json");
+    const tr = (trust.by_route || {})[route] || (trust.overall || []);
+    if (tr.length) {
+      h("h2", null, "How far ahead can the countdown clock be trusted?", root);
+      const c3 = h("div", "card", null, root);
+      barChart(c3, { title: `${route}: median and p90 absolute error of the feed's ETA by stops ahead`, subtitle: "error between the ETA shown when the train was k stops away and its actual arrival",
+        categories: tr.map(x => `${x.stops_ahead} stop${x.stops_ahead > 1 ? "s" : ""}`), series: [{ name: "median", values: tr.map(x => x.median_abs_err_sec) }, { name: "p90", values: tr.map(x => x.p90_abs_err_sec) }], format: fmt.sec, height: 220 });
+      h("div", "small secondary", `Bias (median signed error): ${tr.map(x => `${x.stops_ahead} stops ${x.bias_sec >= 0 ? "+" : "−"}${Math.abs(x.bias_sec).toFixed(0)} s`).join(" · ")}. Positive bias means trains arrive later than promised.`, c3);
+    }
+  } catch (e) { /* optional */ }
 }

@@ -25,6 +25,7 @@ from mta_delay_insights.realtime import build_live, fit_model
 from mta_delay_insights.realtime.journey import JourneyModel, fit_journey, resolve_journeys
 from mta_delay_insights.analysis.transfers import analyze_routes
 from mta_delay_insights.models import ArrivalModel, build_training_rows, train_arrival_model
+from mta_delay_insights.analysis import line_view
 from mta_delay_insights.sources.gtfs_static import NY_TZ, StaticGTFS
 from mta_delay_insights.sources.registry import as_records
 from mta_delay_insights.storage.db import Store
@@ -177,6 +178,41 @@ def fit_journeys(store: Store, static: StaticGTFS, targets: dict, alerts: pd.Dat
 
 
 TRAIN_ROWS_CAP = 1_500_000
+LINE_VIEW_ROUTES = ["1", "2", "3", "4", "5", "6", "7", "A", "C", "E", "B", "D", "F", "M", "G", "J", "Z", "L", "N", "Q", "R", "W", "SI"]
+
+
+def build_line_views(store: Store, static: StaticGTFS, context: dict, live: dict | None, out_data: Path, now: datetime) -> list[dict]:
+    """Per route/direction: Marey snapshot (last 2 h actual + live + schedule) and the deviation grid (last days)."""
+    net = context.get("_network_arrivals")
+    core = store.arrivals()
+    arr = pd.concat([core, net], ignore_index=True).drop_duplicates(["trip_key", "stop_id"]) if net is not None and not net.empty else core
+    if arr.empty:
+        return []
+    (out_data / "lines").mkdir(parents=True, exist_ok=True)
+    live_trains = []
+    if live is not None and context.get("_feed_bytes"):
+        try:
+            from mta_delay_insights.realtime.status import live_trains as _lt
+            live_trains = _lt(context["_feed_bytes"], static, now.timestamp())
+        except Exception as exc:
+            logging.warning("live trains for line view failed: %s", exc)
+    ts = now.timestamp()
+    recent = arr[arr["arrival_ts"] >= ts - 3 * 3600]
+    index = []
+    present = set(arr["route_id"].astype(str).unique())
+    for route in [r for r in LINE_VIEW_ROUTES if r in present]:
+        for direction in ("N", "S"):
+            try:
+                snap = line_view.line_snapshot(recent, static, route, direction, ts, live_trains)
+                grid = line_view.deviation_grid(arr, static, route, direction)
+                if not snap["stops"] or (not snap["actual"] and not snap["live"] and not grid.get("n_trips")):
+                    continue
+                (out_data / "lines" / f"{route}_{direction}.json").write_text(json.dumps({"snapshot": snap, "deviation": grid, "generated_at": now.isoformat()}, default=str))
+                index.append({"route": route, "direction": direction, "n_actual": len(snap["actual"]), "n_live": len(snap["live"]), "n_trips": grid.get("n_trips", 0),
+                              "worst": grid.get("worst_stops", [])[:1]})
+            except Exception as exc:
+                logging.warning("line view %s%s failed: %s", route, direction, exc)
+    return index
 
 
 def train_learned(store: Store, static: StaticGTFS, alerts: pd.DataFrame, context: dict, extra_arrivals: pd.DataFrame | None,
@@ -259,6 +295,16 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         logging.warning("climatology failed: %s", exc)
         clim = {"n_events": 0, "error": str(exc)[:200]}
     (out_data / "climatology.json").write_text(json.dumps(clim, default=str))
+    lines_index = build_line_views(store, static, context, live, out_data, now)
+    trust = {"n": 0}
+    try:
+        es = context.get("_eta_samples")
+        if es is not None and not es.empty:
+            allarr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True)
+            trust = line_view.eta_trust(es, allarr)
+    except Exception as exc:
+        logging.warning("eta trust failed: %s", exc)
+    (out_data / "eta_trust.json").write_text(json.dumps(trust, default=str))
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []
@@ -285,6 +331,7 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
               "gtfs": static.summary()}
     (out_data / "status.json").write_text(json.dumps(status, default=str))
     index = {"generated_at": now.isoformat(), "mode": mode, "targets": [e for e, _ in reports], "live": live is not None,
+             "lines_view": lines_index, "eta_trust_n": trust.get("n", 0),
              "learned_model": {k: learned.card.get(k) for k in ("status", "n_train", "n_test", "trained_at", "n_rows")} | (
                  {"mae_model": (learned.card.get("evaluation") or {}).get("mae_model"), "mae_schedule": (learned.card.get("evaluation") or {}).get("mae_schedule"),
                   "mae_feed": (learned.card.get("evaluation") or {}).get("mae_feed"), "coverage": (learned.card.get("evaluation") or {}).get("coverage_p10_p90")}),
@@ -322,6 +369,7 @@ def build_from_data(args) -> dict:
     context["_network_arrivals"] = lib.load_network_arrivals(data_dir, days=NETWORK_TRAIN_DAYS)
     context["_eta_samples"] = lib.load_eta_samples(data_dir, days=45)
     feed_bytes = {}
+    context["_feed_bytes"] = feed_bytes
     if not args.no_feeds:
         from mta_delay_insights import config
         from mta_delay_insights.sources import alerts as alerts_src
@@ -397,6 +445,7 @@ def build_synthetic(args) -> dict:
             if tu.trip.trip_id == held:
                 for x in tu.stop_time_update:
                     x.arrival.time += 360; x.departure.time += 360
+    context["_feed_bytes"] = {feed_key: data}
     alerts_live = sim.alerts.copy()
     unplanned_idx = alerts_live.index[~alerts_live["planned"]] if not alerts_live.empty else []
     if len(unplanned_idx):

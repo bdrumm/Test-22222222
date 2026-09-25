@@ -227,6 +227,13 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
     for t in targets:
         model = (models or {}).get(t["id"])
         stations.append(forecast_station(t, trains, static, model, now, alerts_now, learned=lctx))
+    incidents = []
+    if store is not None:
+        try:
+            from .incidents import developing_incidents
+            incidents = developing_incidents(store, static, now, alerts_now)
+        except Exception as exc:  # never break the snapshot
+            incidents = [{"error": str(exc)[:200]}]
     plans = []
     if journeys:
         from .journey import plan_journey
@@ -253,6 +260,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
                            "mae_feed": (learned.card.get("evaluation") or {}).get("mae_feed"),
                            "trained_at": learned.card.get("trained_at")} if lctx is not None else {"ready": False}),
         "track_changes": [t.as_dict(static) for t in trains if t.track_changed and t.started][:40],
+        "incidents_developing": incidents,
     }
 
 

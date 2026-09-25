@@ -345,6 +345,35 @@ excluded. Rates are events per week by route, by hour, by weekday and on a
 expected number of new disruptions on that line in the coming hour, a prior
 that the planner and the model can use before any live signal appears.
 
+## 9e. Line views, developing incidents, ETA trust
+
+**Marey chart.** For a route and direction, the canonical stop sequence is
+the y axis and time the x axis. Observed arrivals (network-wide collection
+plus backfill) over the last two hours are drawn per trip as solid lines
+coloured by the train's latest lateness; trains under way are continued with
+the feed's projected ETAs (dashed); the timetable's trips in the window are
+drawn faintly. Parallel lines are regular service, converging lines are
+bunching, a horizontal stretch is a hold, and a widening white band is a gap.
+
+**Where the line loses time.** For every observed trip, the lateness change
+between consecutive observed stops (clipped to −10…+15 min) is attributed to
+the arrival stop; the mean by stop and hour of day (cells with ≥ 3 trips)
+gives a stop × hour map of running-time loss; the five stops with the largest
+mean loss are listed.
+
+**Developing incidents.** Every few minutes the last 20 minutes of arrivals
+are scanned per (route, direction, segment): when at least two trains and at
+least 60% of the trains through the segment lost ≥ 2 minutes there, the
+segment is reported with the mean loss and the first affected train's time,
+marked "no alert yet" when no unplanned alert covers the route. This turns the
+collection into an early-warning signal that precedes the MTA's own alerts.
+
+**ETA trust.** ETA samples (the feed's prediction for a stop recorded when the
+train was 1/2/3/5/8/12 stops away) are joined with the observed arrival: the
+median and p90 absolute error and the signed bias by stops ahead, per route,
+say how far ahead the countdown clock can be believed and whether it is
+systematically optimistic.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4
