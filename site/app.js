@@ -36,7 +36,7 @@ const dateTime = iso => { try { return new Date(iso).toLocaleString(undefined, {
 const pctChange = v => v == null ? "–" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
 
 // ---------------------------------------------------------------- routing
-const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage };
+const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage, model: modelPage };
 async function render() {
   const [section = "", arg] = location.hash.replace(/^#\/?/, "").split("/");
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === (section || "home")));
@@ -593,3 +593,59 @@ async function routesPage(idx, routeId) {
 }
 const fmtSec = v => v == null ? "–" : `${(v / 60).toFixed(1)} min`;
 const cssVarJs = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+
+// ---------------------------------------------------------------- model card
+const secTxt = v => v == null ? "–" : `${v.toFixed(0)} s`;
+async function modelPage(idx) {
+  const root = app; root.replaceChildren();
+  h("h1", null, "Arrival model: how good are the predictions?", root);
+  let card;
+  try { card = await load("models/arrival.card.json"); } catch (e) { h("div", "empty", "No model card yet (data/models/arrival.card.json).", root); return; }
+  if (card.status !== "ok") { h("div", "empty", `Model not trained: ${card.status}${card.error ? ` (${card.error})` : ""}. Rows available: ${card.n_rows ?? "?"}; needed: ${card.min_rows ?? 500}. The hourly collection and the subwaydata.nyc backfill grow the training set.`, root); return; }
+  const ev = card.evaluation || {};
+  h("p", "secondary", "Gradient-boosted quantile models predict how much a train's lateness will change between the stop it just served and a stop 1–12 stops ahead, from its state, the traffic ahead, the segment's last few trains, the feed's own forecast, alerts, weather and events. Evaluated on the most recent 20% of the history, never seen in training.", root);
+  const tiles = h("div", "tiles", null, root);
+  tile(tiles, "Model error (MAE)", secTxt(ev.mae_model), `schedule ${secTxt(ev.mae_schedule)} · persistence ${secTxt(ev.mae_persistence)}`);
+  tile(tiles, "vs the MTA countdown ETA", ev.mae_feed != null ? `${((1 - ev.mae_model_on_feed_rows / ev.mae_feed) * 100).toFixed(0)}% better` : "collecting", ev.mae_feed != null ? `feed ${secTxt(ev.mae_feed)} vs model ${secTxt(ev.mae_model_on_feed_rows)} on ${fmt.compact(ev.n_with_feed)} sampled rows` : "needs ETA samples at the monitored stops");
+  tile(tiles, "80% range coverage", ev.coverage_p10_p90 != null ? `${(ev.coverage_p10_p90 * 100).toFixed(0)}%` : "–", `median band width ${secTxt(ev.range_width_median_sec)}${ev.range_scale ? ` · conformal scale ${ev.range_scale.toFixed(2)}` : ""}`);
+  tile(tiles, "Training set", fmt.compact(card.n_train), `${fmt.compact(card.n_test)} held out · ${card.routes_seen ? card.routes_seen.length : "?"} routes · fitted ${card.trained_at ? dateTime(new Date(card.trained_at * 1000).toISOString()) : ""}`);
+  if ((ev.by_k || []).length) {
+    h("h2", null, "Error by horizon (stops ahead)", root);
+    const card1 = h("div", "card", null, root);
+    barChart(card1, { title: "Mean absolute error of the predicted lateness change", subtitle: "lower is better; the schedule baseline assumes no change, persistence repeats the segment's recent excess",
+      categories: ev.by_k.map(b => `${b.k} stop${b.k > 1 ? "s" : ""}`),
+      series: [{ name: "model", values: ev.by_k.map(b => b.mae_model) }, { name: "schedule", values: ev.by_k.map(b => b.mae_schedule) }, { name: "persistence", values: ev.by_k.map(b => b.mae_persistence) },
+               ...(ev.by_k.some(b => b.mae_feed != null) ? [{ name: "MTA feed ETA", values: ev.by_k.map(b => b.mae_feed || 0) }] : [])],
+      format: fmt.sec, height: 240 });
+    const wrap = h("div", "table-wrap", null, card1); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
+    ["horizon", "n", "model", "schedule", "persistence", "feed", "coverage"].forEach((x, i) => h("th", i ? "num" : "", x, tr)); const tb = h("tbody", null, null, t);
+    ev.by_k.forEach(b => { const r = h("tr", null, null, tb); h("td", null, `${b.k} stops`, r); h("td", "num", fmt.compact(b.n), r); h("td", "num", secTxt(b.mae_model), r); h("td", "num", secTxt(b.mae_schedule), r); h("td", "num", secTxt(b.mae_persistence), r); h("td", "num", b.mae_feed == null ? "–" : secTxt(b.mae_feed), r); h("td", "num", `${(b.coverage * 100).toFixed(0)}%`, r); });
+  }
+  if ((ev.by_route || []).length) {
+    h("h2", null, "Error by route", root);
+    const c2 = h("div", "card", null, root);
+    barChart(c2, { title: "MAE by route: model vs schedule", categories: ev.by_route.map(b => b.route), series: [{ name: "model", values: ev.by_route.map(b => b.mae_model) }, { name: "schedule", values: ev.by_route.map(b => b.mae_schedule) }], format: fmt.sec, height: 220 });
+  }
+  if ((card.importance || []).length) {
+    h("h2", null, "What the model relies on", root);
+    const c3 = h("div", "card", null, root);
+    const imp = card.importance.filter(i => i.mae_increase > 0).slice(0, 12);
+    const short = { seg_recent_excess: "segment now", dest_recent_lateness: "dest. now", sched_headway_sec: "sched hw", gap_ahead_sec: "gap ahead", leader_lateness: "leader late", leader_same_route: "leader route", lateness_u: "lateness", sched_run_sec: "sched run", feed_excess: "feed ETA", track_changed: "track", hour_sin: "hour (sin)", hour_cos: "hour (cos)", route_code: "route", direction_code: "direction", cause_code: "cause", alert_active: "alert", planned_active: "planned", precip_mm: "rain", venue_event_w: "venue", street_event_w: "street", news_w: "news" };
+    barChart(c3, { title: "Permutation importance", subtitle: "increase in error when the feature is shuffled (seconds); full names in the table view", categories: imp.map(i => short[i.feature] || i.feature.replace(/_/g, " ")), series: [{ name: "MAE increase", values: imp.map(i => i.mae_increase) }], format: fmt.sec, height: 240, labelEvery: 1 });
+    if ((card.dropped_features || []).length) h("div", "small secondary", `Not usable yet (constant or missing in the training data): ${card.dropped_features.join(", ")}.`, c3);
+  }
+  if ((ev.calibration_by_width || []).length) {
+    h("h2", null, "Does a wide range mean real uncertainty?", root);
+    const c4 = h("div", "card", null, root);
+    const wrap = h("div", "table-wrap", null, c4); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
+    ["range quartile", "n", "median band", "actual error (MAE)"].forEach((x, i) => h("th", i ? "num" : "", x, tr)); const tb = h("tbody", null, null, t);
+    ev.calibration_by_width.forEach(b => { const r = h("tr", null, null, tb); h("td", null, ["narrowest", "narrow", "wide", "widest"][b.bucket] || String(b.bucket), r); h("td", "num", fmt.compact(b.n), r); h("td", "num", secTxt(b.width_median), r); h("td", "num", secTxt(b.mae), r); });
+    h("div", "small secondary", "Error should rise with the band width: then the range is informative, not just noise.", c4);
+  }
+  const det = h("details", null, null, root); det.style.marginTop = "1rem"; h("summary", null, "How it is used", det);
+  const ul = h("ul", "small secondary", null, det);
+  h("li", null, "Live page: each upcoming train's ETA and range come from this model when it is ready (source 'learned'); otherwise from the look-back calibration of the feed.", ul);
+  h("li", null, "Trip planner: ride times and the arrival at the boarding stop use the model for trains already under way; the feed's ETA is a feature when sampled, or blended in by inverse variance when not.", ul);
+  h("li", null, "The training table grows with every hourly run (all stops of every feed) and with the subwaydata.nyc backfill of recent days; the model is refitted at every site build on a strict time split.", ul);
+}

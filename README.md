@@ -52,6 +52,7 @@ log reports the HTTP status of the live URL.
 | page | what it shows |
 |---|---|
 | Plan a trip | trip-time planner for the configured journeys (e.g. 4 Av-9 St → 14 St-8 Av): leave-now arrival time with a range, every catchable option in the next hour with wait / walk / ride breakdown, typical time at this hour vs right now, and a time-distance (stringline) chart of the trains on the corridor with the recommended itinerary drawn on it |
+| Model | the learned arrival model's card: error by horizon and route vs the schedule, persistence and the MTA countdown ETA, range coverage and calibration, feature importance |
 | Routes | cross-line effects and full-route analysis for each configured journey: where the time goes by hour (origin wait, each ride, each transfer), connection waits vs schedule and missed-connection rates at each transfer station, the cost of a late feeder train, whether the two lines' lateness moves together (and which leads), and shared-track interaction (time lost behind another line's train) |
 | Live | holistic status now: every route/direction with trains in service, lateness, the largest gap forming and where, active unplanned alerts; for each monitored platform the next arrivals with feed ETA, look-back-calibrated ETA and range, predicted headways, and the *downstream effects* (gaps forming, late trains inbound with their expected lateness here, alert effects) |
 | Stations | one card per monitored platform: severity, verdict, focus hours, where / why, rider impact |
@@ -101,6 +102,9 @@ The scheduled collector is a convenience for review; for production, run
 | open data | Hourly Ridership, Stations | riders exposed per hour → passenger-minutes lost |
 | weather | Open-Meteo hourly (no key) | precipitation / snow / heat / wind correlation |
 | events | NYC permitted events (Open Data), Ticketmaster venue events (optional key), transit news RSS, federal holidays | journey-time model features (crowding / disruption context) |
+| history | subwaydata.nyc daily archives (whole network since 2021, with train ids and tracks) | backfill of arrival history for training and route analysis |
+| history | MTA Service Alerts archive (data.ny.gov 7kct-peq7, 520k alerts since 2020) | disruption base rates by line and hour, alert lifecycles |
+| context | NWS active alerts (api.weather.gov), MTA elevator/escalator outages | severe-weather and accessibility context |
 
 `mta-insights sources` prints the full catalog with URLs; see
 [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
@@ -166,6 +170,34 @@ The look-back model is fitted from the collected history: how much feed ETAs
 slip by lead time, how lateness upstream carries to the platform, how often
 gaps persist, and how much each alert cause adds. See
 [docs/METHODOLOGY.md](docs/METHODOLOGY.md#8-realtime-mode-and-the-look-back-propagation-model).
+
+## Learned arrival model
+
+`mta_delay_insights/models/` turns the collected history into a prediction
+model for train times: for a train that just served stop *u*, how much will
+its lateness change by a stop *k* stops ahead? Three gradient-boosted quantile
+regressors (p10 / p50 / p90, scikit-learn HistGradientBoosting) learn from the
+train's state (lateness, momentum, track change), the traffic ahead (gap to and
+lateness of the leader), the segment's last few trains, the destination's
+recent lateness, the feed's own ETA when sampled, and context (time, alerts and
+their cause, planned work, precipitation, heat, events, news, holidays). The
+range is conformally scaled so 80% of held-out targets fall inside it, and the
+model card (`data/models/arrival.card.json`) reports MAE by horizon and route
+against the schedule, persistence and the MTA feed's ETA at the same moments.
+Live forecasts and the trip planner use the model as soon as it is ready
+(`model_source: "learned"`), blending with the feed by inverse variance when
+the feed feature is unavailable.
+
+The training set is fed by three streams: the hourly collection at every stop
+of every feed (`collect.all_stops` in `pipeline/targets.json`, files under
+`arrivals_all/` with a rolling retention), ETA samples recorded when a train
+is 1/2/3/5/8/12 stops from a monitored platform (`eta_samples/`, the benchmark
+for the feed's own predictions), and a **backfill from subwaydata.nyc**
+(`pipeline/backfill.py`, daily archives of the whole network since 2021, a few
+days fetched per run). Dwell lower bounds from vehicle positions land in
+`dwells/`. The NYCT feed extension (train id, scheduled and actual track) is
+parsed without generated code (`sources/nyct_ext.py`), so track changes and
+physical train runs are available to every analysis.
 
 ## Trip planner and the journey-time model
 

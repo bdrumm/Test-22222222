@@ -294,6 +294,44 @@ the trip planner shows the top findings for the journey being planned and
 flags tight connections (< 90 s margin) and trains whose feed stop list omits
 the destination (reroutes / skip-stop service).
 
+## 9c. Learned arrival model
+
+**Rows.** For every observed trip and every pair of its observed stops (*u*,
+*d*) with *d* exactly *k* ∈ {1, 2, 3, 5, 8, 12} stops later, a row records what
+was knowable when the train served *u* at time *t*: route and direction, *k*
+and the scheduled run time *u → d*, lateness at *u* and its change over the
+previous 1 and 3 stops, whether the train is on a track other than scheduled,
+the gap to the previous train at *u* and that train's lateness and route,
+the scheduled headway, the mean excess of the last three trains that completed
+*u → d* before *t* (segment state), the mean lateness at *d* over the previous
+15 minutes, the feed's ETA for *d* at that moment when an ETA sample exists
+(expressed as excess over schedule + current lateness), and context: hour
+(sine/cosine), weekend, peak, unplanned alert on the route and its cause,
+planned work, daily precipitation and heat, holiday, venue / street events and
+news weights. Target: lateness at *d* minus lateness at *u*, clipped to
+[−15, +60] minutes. Every feature is computed with merge-as-of joins on time
+so nothing from after *t* leaks in.
+
+**Model.** Three `HistGradientBoostingRegressor`s with quantile loss (0.1, 0.5,
+0.9), early stopping, native handling of missing values and categorical
+codes. The p10–p90 band is conformally scaled by the factor that gives 80%
+coverage on the held-out rows. Columns that are constant or entirely missing
+in the training window are dropped and listed on the card.
+
+**Evaluation.** Strict time split (last 20% of rows). MAE by horizon and by
+route against three baselines: the schedule (no change), persistence (the
+segment's recent excess) and, on rows with an ETA sample, the feed's own
+forecast; range coverage and median width; error by predicted-range quartile
+(a wider band should mean a larger error); permutation importance.
+
+**Serving.** For a live train the state is rebuilt from the store's recent
+arrivals (last served stop, momentum, leader at that stop, segment and
+destination state) and the feed's current ETA. When the feed feature was not
+learnable, the model's and the feed's estimates are combined by inverse
+variance, the feed's variance coming from the look-back calibration of its
+errors by horizon. The trip planner applies the same model to the boarding
+stop and the destination of each leg.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

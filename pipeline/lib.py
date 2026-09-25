@@ -266,7 +266,7 @@ def prune_daily(data_dir: Path, sub: str, keep_days: int) -> list[str]:
     d = Path(data_dir) / sub
     if not d.exists() or keep_days <= 0:
         return []
-    files = sorted(d.glob("*.csv.gz"))
+    files = sorted(f for f in d.glob("*.csv.gz") if f.name[:4].isdigit())
     removed = []
     for f in files[:-keep_days] if len(files) > keep_days else []:
         f.unlink()

@@ -24,6 +24,7 @@ from mta_delay_insights.sources.alerts import alert_kind
 from mta_delay_insights.realtime import build_live, fit_model
 from mta_delay_insights.realtime.journey import JourneyModel, fit_journey, resolve_journeys
 from mta_delay_insights.analysis.transfers import analyze_routes
+from mta_delay_insights.models import ArrivalModel, build_training_rows, train_arrival_model
 from mta_delay_insights.sources.gtfs_static import NY_TZ, StaticGTFS
 from mta_delay_insights.sources.registry import as_records
 from mta_delay_insights.storage.db import Store
@@ -34,6 +35,7 @@ MIN_BASELINE_HOURS = 36
 
 
 ROUTE_WINDOW_DAYS = 14
+NETWORK_TRAIN_DAYS = 10
 
 
 def _windows(arrivals: pd.DataFrame, now: datetime) -> tuple[datetime, datetime, datetime, datetime, dict]:
@@ -174,15 +176,40 @@ def fit_journeys(store: Store, static: StaticGTFS, targets: dict, alerts: pd.Dat
     return specs, models
 
 
+TRAIN_ROWS_CAP = 1_500_000
+
+
+def train_learned(store: Store, static: StaticGTFS, alerts: pd.DataFrame, context: dict, extra_arrivals: pd.DataFrame | None,
+                  eta_samples: pd.DataFrame | None, out_models: Path) -> ArrivalModel:
+    """Build training rows from the core store plus network-wide arrivals, fit, evaluate, publish model + card."""
+    frames = [store.arrivals()]
+    if extra_arrivals is not None and not extra_arrivals.empty:
+        frames.append(extra_arrivals)
+    arr = pd.concat(frames, ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
+    rows = build_training_rows(arr, static, alerts, context.get("weather_daily"), context.get("events"), eta_samples)
+    if len(rows) > TRAIN_ROWS_CAP:
+        rows = rows.sample(TRAIN_ROWS_CAP, random_state=1).sort_values("t")
+    model = train_arrival_model(rows)
+    model.card["n_rows"] = int(len(rows)); model.card["n_arrivals"] = int(len(arr))
+    try:
+        model.save(out_models / "arrival.joblib")
+    except Exception as exc:
+        logging.warning("model save failed: %s", exc)
+    (out_models / "arrival.card.json").write_text(json.dumps(model.card, default=str, indent=1))
+    logging.info("learned model: %s", {k: model.card.get(k) for k in ("status", "n_train", "n_test")})
+    return model
+
+
 def live_snapshot(static: StaticGTFS, resolved: list[dict], models: dict, alerts: pd.DataFrame, now: datetime,
                   feed_bytes: dict[str, bytes] | None, journeys: list | None = None, journey_models: dict | None = None,
-                  context: dict | None = None) -> dict | None:
+                  context: dict | None = None, learned: ArrivalModel | None = None, store: Store | None = None) -> dict | None:
     if not feed_bytes:
         return None
     try:
         ctx = context or {}
         return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot",
-                          journeys=journeys, journey_models=journey_models, weather_daily=ctx.get("weather_daily"), events_df=ctx.get("events"))
+                          journeys=journeys, journey_models=journey_models, weather_daily=ctx.get("weather_daily"), events_df=ctx.get("events"),
+                          learned=learned, store=store)
     except Exception as exc:
         logging.warning("live snapshot failed: %s", exc)
         return None
@@ -203,7 +230,13 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     specs, jmodels = fit_journeys(store, static, targets, alerts, context, now, data_dir if mode == "live" else None)
     for jid, m in jmodels.items():
         (out_data / "models" / f"journey_{jid}.json").write_text(json.dumps(m.to_dict(), default=str))
-    live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context)
+    try:
+        learned = train_learned(store, static, alerts, context, context.get("_network_arrivals"), context.get("_eta_samples"), out_data / "models")
+    except Exception as exc:
+        logging.warning("learned model failed: %s", exc)
+        learned = ArrivalModel()
+        (out_data / "models" / "arrival.card.json").write_text(json.dumps({"status": "error", "error": str(exc)[:300]}))
+    live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context, learned, store)
     routes_out = {"routes": [], "transfers": []}
     if specs:
         try:
@@ -241,6 +274,9 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
               "gtfs": static.summary()}
     (out_data / "status.json").write_text(json.dumps(status, default=str))
     index = {"generated_at": now.isoformat(), "mode": mode, "targets": [e for e, _ in reports], "live": live is not None,
+             "learned_model": {k: learned.card.get(k) for k in ("status", "n_train", "n_test", "trained_at", "n_rows")} | (
+                 {"mae_model": (learned.card.get("evaluation") or {}).get("mae_model"), "mae_schedule": (learned.card.get("evaluation") or {}).get("mae_schedule"),
+                  "mae_feed": (learned.card.get("evaluation") or {}).get("mae_feed"), "coverage": (learned.card.get("evaluation") or {}).get("coverage_p10_p90")}),
              "models": {tid: {"n_arrivals": m.n_arrivals, "n_days": m.n_days} for tid, m in models.items()},
              "journeys": [{"id": sp.id, "label": sp.label, "legs": [l.as_dict() for l in sp.legs],
                            "n_samples": jmodels[sp.id].n_samples if sp.id in jmodels else 0} for sp in specs],
@@ -268,6 +304,8 @@ def build_from_data(args) -> dict:
     context = {k: lib.load_context(data_dir, k) for k in
                ("trains_delayed", "delay_incidents", "major_incidents", "customer_journey", "ridership_profile", "weather_daily")}
     context["events"] = lib.load_events(data_dir)
+    context["_network_arrivals"] = lib.load_network_arrivals(data_dir, days=NETWORK_TRAIN_DAYS)
+    context["_eta_samples"] = lib.load_eta_samples(data_dir, days=45)
     feed_bytes = {}
     if not args.no_feeds:
         from mta_delay_insights import config

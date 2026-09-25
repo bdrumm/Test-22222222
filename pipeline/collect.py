@@ -69,6 +69,15 @@ def main(argv=None) -> int:
                     logging.warning("journey model %s unreadable: %s", jf, exc)
         weather_daily = lib.load_context(data_dir, "weather_daily")
         events_df = lib.load_events(data_dir)
+        learned = None
+        lf = Path(args.models_dir) / "arrival.joblib"
+        if lf.exists():
+            try:
+                from mta_delay_insights.models import ArrivalModel
+                learned = ArrivalModel.load(lf)
+                logging.info("learned model loaded (n_train=%s)", learned.n_train)
+            except Exception as exc:
+                logging.warning("learned model unreadable: %s", exc)
         for t in resolved:
             rr = lib.resolve_target(static, t); t["upstream"], t["terminals"] = rr["upstream"], rr["terminals"]
             mf = Path(args.models_dir) / f"{t['id']}.json"
@@ -84,7 +93,8 @@ def main(argv=None) -> int:
                 return
             alerts_df = alerts_src.alerts_frame(c.last_alerts) if c.last_alerts else c.store.alerts()
             live = build_live(dict(c.last_feed_bytes), alerts_df, static, resolved, models, now, source="pipeline-snapshot",
-                              journeys=journeys, journey_models=jmodels, weather_daily=weather_daily, events_df=events_df)
+                              journeys=journeys, journey_models=jmodels, weather_daily=weather_daily, events_df=events_df,
+                              learned=learned, store=store)
             Path(args.live_out).write_text(json.dumps(live, default=str))
             state["last"], state["n"] = now, state["n"] + 1
             logging.info("live snapshot %d: %d trains, %s", state["n"], live["trains_total"], live["summary"])

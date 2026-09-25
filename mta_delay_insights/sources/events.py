@@ -31,7 +31,7 @@ from .gtfs_static import NY_TZ
 
 EVENT_COLUMNS = ["ts_start", "ts_end", "kind", "title", "source", "borough", "lat", "lon", "routes", "weight"]
 
-NYC_EVENTS_DATASET = "tvpn-ykxb"            # NYC Permitted Event Information (upcoming)
+NYC_EVENTS_DATASET = "tvpp-9vvx"            # NYC Permitted Event Information (upcoming)
 NYC_EVENTS_DOMAIN = "data.cityofnewyork.us"
 
 # Major venues -> (lat, lon, routes that serve them, default crowd weight)

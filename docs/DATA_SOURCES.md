@@ -68,7 +68,7 @@ rain, snowfall, wind speed and weather code for Central Park. Flags: heavy rain
 
 | source | endpoint | use |
 |---|---|---|
-| NYC permitted events | `https://data.cityofnewyork.us/resource/tvpn-ykxb.json` (no key; app token optional) | parades, races, street fairs, festivals → `street_event_w` (0.8 for parade / marathon / festival, 0.3 default, 0.2 for closures) within ±2 h of the event |
+| NYC permitted events | `https://data.cityofnewyork.us/resource/tvpp-9vvx.json` (no key; app token optional) | parades, races, street fairs, festivals → `street_event_w` (0.8 for parade / marathon / festival, 0.3 default, 0.2 for closures) within ±2 h of the event |
 | Venue events | Ticketmaster Discovery API (`TICKETMASTER_API_KEY`), 15-mile radius of Midtown | events at Barclays Center, MSG, Yankee Stadium, Citi Field, USTA, Radio City, Beacon Theatre… mapped to the routes that serve the venue → `venue_event_w` |
 | Local transit news | RSS: Gothamist, NY1 (no key) | items mentioning subway/MTA/train; route letters/numbers extracted ("F train", "L line"); weight 0.6 when the item mentions delays / suspensions / derailments / signal problems, else 0.2, for the publication day → `news_w` |
 | Federal holidays | computed (`us_federal_holidays`) | `holiday` flag (schedule and demand differ) |
@@ -76,6 +76,32 @@ rain, snowfall, wind speed and weather code for Central Park. Flags: heavy rain
 All are best-effort: a failing source is logged in `runs.json` and the model
 simply sees zeros for that feature. Rows accumulate in `context/events.csv.gz`
 for 120 days.
+
+## Arrival history backfill
+
+| source | endpoint | use |
+|---|---|---|
+| Subway Data NYC | `https://subwaydata.nyc/data/subwaydatanyc_YYYY-MM-DD_csv.tar.xz` (≈1.4 MB/day, published ~7 am for the previous day, since 2021-04-01) | `trips.csv` (trip_uid, trip_id, route_id, direction_id, start_time, vehicle_id = NYCT train id, …) and `stop_times.csv` (trip_uid, stop_id, track, arrival_time, departure_time, last_observed, marked_past) → normalised to the arrivals table with `source=subwaydata`, confidence 0.95 when `marked_past` is set |
+
+The archive is derived from the same GTFS-Realtime feeds (stop drop-off
+timing), so its rows and ours are comparable; our own rows win on the same
+(trip, stop) when both exist. `pipeline/backfill.py` fetches only missing days
+within the retention window, a few per run.
+
+## MTA Service Alerts archive
+
+`https://data.ny.gov/resource/7kct-peq7.json` (MTA Service Alerts: Beginning
+April 2020; ~520k rows, refreshed monthly): alert_id, event_id, update_number,
+date, agency, status_label (delays, some-delays, cancellations, planned-work,
+part-suspended, local-to-express, stops-skipped, reroute, slow-speeds, …),
+affected (routes, `A | H`), header, description. Grouping by `event_id` gives
+each disruption's first and last update, hence its duration. Used for
+disruption base rates by line, hour and weekday, and alert lifecycles.
+
+## Other context feeds
+
+* **NWS active alerts** `https://api.weather.gov/alerts/active?zone=NYZ072,NYZ073,NYZ074,NYZ075,NYZ176` (GeoJSON, no key): flood, heat, wind and winter advisories for the five boroughs.
+* **MTA elevator / escalator outages** `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fnyct_ene.json`: station, equipment, serving, outage and estimated return times, reason.
 
 ## Other feeds worth adding
 

@@ -45,6 +45,8 @@ class LiveTrain:
     sched_matched: bool = False
     service_date: date | None = None
     started: bool = True                   # False for scheduled trips the feed lists before departure
+    track_changed: float = 0.0             # 1.0 when the feed's actual track differs from the scheduled one
+    train_id: str | None = None
 
     def eta_at(self, stop_id: str) -> float | None:
         for s, t in self.stops:
@@ -63,7 +65,7 @@ class LiveTrain:
         return {"trip_id": self.trip_id, "route_id": self.route_id, "direction": self.direction, "feed": self.feed,
                 "next_stop_id": self.next_stop_id, "next_stop_name": name(self.next_stop_id),
                 "next_eta_ts": self.next_eta_ts, "lateness_sec": self.lateness_sec, "sched_matched": self.sched_matched,
-                "started": self.started, "stops_ahead": len(self.stops)}
+                "started": self.started, "stops_ahead": len(self.stops), "track_changed": bool(self.track_changed), "train_id": self.train_id}
 
 
 def _service_date(start_date: str | None, now: float) -> date:
@@ -95,6 +97,11 @@ def live_trains(feed_bytes: dict[str, bytes], static: StaticGTFS | None, now: fl
             train = LiveTrain(trip_id=trip_id, route_id=str(g["route_id"].iloc[0]), direction=direction,
                               start_date=start_date, feed=feed_key, stops=stops, next_stop_id=stops[0][0],
                               next_eta_ts=stops[0][1], service_date=_service_date(start_date, now))
+            if "actual_track" in g.columns:
+                tr = g[["sched_track", "actual_track"]].dropna()
+                train.track_changed = float(bool(len(tr) and (tr["sched_track"] != tr["actual_track"]).any()))
+                tid = g["train_id"].dropna()
+                train.train_id = str(tid.iloc[0]) if len(tid) else None
             if static is not None:
                 sched = static.scheduled_arrival(trip_id, train.next_stop_id, train.service_date)
                 if sched is not None:
@@ -204,23 +211,28 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
 def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, static: StaticGTFS,
                targets: list[dict], models: dict[str, PropagationModel] | None, now: float | None = None,
                source: str = "live", journeys: list | None = None, journey_models: dict | None = None,
-               weather_daily: pd.DataFrame | None = None, events_df: pd.DataFrame | None = None) -> dict:
+               weather_daily: pd.DataFrame | None = None, events_df: pd.DataFrame | None = None,
+               learned=None, store=None) -> dict:
     """Assemble the full live snapshot. ``targets`` are resolved target dicts (see pipeline.lib.resolve_target);
     ``journeys`` are JourneySpec objects with optional fitted ``journey_models``."""
     now = float(now or datetime.now(NY_TZ).timestamp())
     trains = live_trains(feed_bytes, static, now)
     alerts_now = active_alerts(alerts_df, now)
     routes = route_status(trains, alerts_now, static, now)
+    lctx = None
+    if learned is not None and getattr(learned, "ready", False):
+        from .learned import LearnedContext
+        lctx = LearnedContext(learned, store, static, now, alerts_df, weather_daily, events_df)
     stations = []
     for t in targets:
         model = (models or {}).get(t["id"])
-        stations.append(forecast_station(t, trains, static, model, now, alerts_now))
+        stations.append(forecast_station(t, trains, static, model, now, alerts_now, learned=lctx))
     plans = []
     if journeys:
         from .journey import plan_journey
         for spec in journeys:
             try:
-                plans.append(plan_journey(spec, (journey_models or {}).get(spec.id), trains, static, now, alerts_df, weather_daily, events_df))
+                plans.append(plan_journey(spec, (journey_models or {}).get(spec.id), trains, static, now, alerts_df, weather_daily, events_df, learned=lctx))
             except Exception as exc:  # planning must never break the snapshot
                 plans.append({"id": spec.id, "label": spec.label, "error": str(exc)[:200], "options": [], "legs": [l.as_dict() for l in spec.legs]})
     unplanned = alerts_now[alerts_now["kind"] == "delay"] if not alerts_now.empty else alerts_now
@@ -236,6 +248,11 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
         "feeds": sorted(feed_bytes.keys()), "trains_total": len(started), "trains_scheduled_not_started": len(trains) - len(started),
         "trains_matched": sum(1 for t in started if t.sched_matched),
         "summary": n_by_status, "routes": routes, "alerts": alerts_out, "stations": stations, "journeys": plans,
+        "learned_model": ({"ready": True, "n_train": getattr(learned, "n_train", 0),
+                           "mae_model": (learned.card.get("evaluation") or {}).get("mae_model"),
+                           "mae_feed": (learned.card.get("evaluation") or {}).get("mae_feed"),
+                           "trained_at": learned.card.get("trained_at")} if lctx is not None else {"ready": False}),
+        "track_changes": [t.as_dict(static) for t in trains if t.track_changed and t.started][:40],
     }
 
 

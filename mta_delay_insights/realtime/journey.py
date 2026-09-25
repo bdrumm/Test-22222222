@@ -393,7 +393,7 @@ def _leg_candidates(leg: LegSpec, trains: list, now: float, earliest_board: floa
 
 def plan_journey(spec: JourneySpec, model: JourneyModel | None, trains: list, static: StaticGTFS, now: float,
                  alerts_df: pd.DataFrame | None = None, weather_daily: pd.DataFrame | None = None,
-                 events_df: pd.DataFrame | None = None, horizon_sec: float = 3600.0, max_options: int = 6) -> dict:
+                 events_df: pd.DataFrame | None = None, horizon_sec: float = 3600.0, max_options: int = 6, learned=None) -> dict:
     """Enumerate catchable itineraries now and estimate each one's arrival window."""
     model = model or JourneyModel(spec.id, [LegModel(l.from_stop, l.to_stop, list(l.routes)) for l in spec.legs])
     local = datetime.fromtimestamp(now, NY_TZ)
@@ -438,6 +438,19 @@ def plan_journey(spec: JourneySpec, model: JourneyModel | None, trains: list, st
             else:
                 ride = ride_feed or ride_model or 600.0
             p10, p90 = lm.spread(route, period)
+            learned_used = False
+            if learned is not None and t_cur is not None and t_cur.started:
+                try:
+                    lp_to = learned.predict(t_cur, leg.to_stop, feed_spread=240.0)
+                    lp_from = learned.predict(t_cur, leg.from_stop, feed_spread=180.0) if t_cur.stops_until(leg.from_stop) not in (None, 0) else None
+                except Exception:
+                    lp_to = lp_from = None
+                if lp_to is not None:
+                    if lp_from is not None and li == 0:
+                        dep = max(now, lp_from["eta_ts"]); wait = dep - now
+                    ride = max(60.0, lp_to["eta_ts"] - dep)
+                    p10, p90 = lp_to["lo_ts"] - lp_to["eta_ts"], lp_to["hi_ts"] - lp_to["eta_ts"]
+                    src, learned_used = "learned", True
             dest_in_feed = bool(t_cur is not None and t_cur.eta_at(leg.to_stop) is not None)
             warning = None
             if t_cur is not None and not dest_in_feed:
@@ -455,7 +468,7 @@ def plan_journey(spec: JourneySpec, model: JourneyModel | None, trains: list, st
                              "sched_ride_sec": sched, "excess_pred_sec": excess, "ride_source": src, "ride_lo_sec": ride + p10, "ride_hi_sec": ride + p90,
                              "train_lateness_sec": (t_cur.lateness_sec if t_cur and t_cur.started else None),
                              "train_now_at": static.stop_name(t_cur.next_stop_id) if t_cur and t_cur.next_stop_id else None,
-                             "features": feats})
+                             "features": feats, "learned": learned_used})
             lo_total += p10; hi_total += p90
             board_ts = dep + ride
         total = board_ts - now

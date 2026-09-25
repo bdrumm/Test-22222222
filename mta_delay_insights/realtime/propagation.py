@@ -227,7 +227,7 @@ GAP_FLAG_HORIZON_SEC = 1800.0   # gaps are only called within 30 min: later trip
 
 def forecast_station(target: dict, trains: list, static: StaticGTFS, model: PropagationModel | None,
                      now: float, alerts_now: pd.DataFrame | None = None, horizon_sec: float = 3600.0,
-                     defaults: config.AnalysisDefaults = config.DEFAULTS) -> dict:
+                     defaults: config.AnalysisDefaults = config.DEFAULTS, learned=None) -> dict:
     """Next arrivals at the target with calibrated ETAs, predicted headways and downstream effects."""
     stop_id, routes = target["stop_id"], [str(r) for r in target["routes"]]
     model = model or PropagationModel(target["id"], stop_id, routes)
@@ -255,6 +255,14 @@ def forecast_station(target: dict, trains: list, static: StaticGTFS, model: Prop
             if e > extra:
                 extra, n_alert = e, n
         model_eta = eta + bias + extra
+        eta_lo, eta_hi, source = eta + p10, eta + p90 + extra, "lookback"
+        if learned is not None and t.started:
+            try:
+                lp = learned.predict(t, stop_id, feed_spread=(p90 - p10) if n_cal else 240.0)
+            except Exception:
+                lp = None
+            if lp is not None:
+                model_eta, eta_lo, eta_hi, source = lp["eta_ts"], lp["lo_ts"], lp["hi_ts"], "learned"
         sched = static.scheduled_arrival(t.trip_id, stop_id, t.service_date) if t.service_date else None
         k = t.stops_until(stop_id)
         carry = None
@@ -263,7 +271,8 @@ def forecast_station(target: dict, trains: list, static: StaticGTFS, model: Prop
             carry = {"lateness_sec": float(slope * t.lateness_sec + intercept), "std_sec": float(resid), "n": n_c, "k": int(k)}
         arrivals.append({
             "trip_id": t.trip_id, "route_id": t.route_id, "feed_eta_ts": eta, "model_eta_ts": model_eta,
-            "eta_lo_ts": eta + p10, "eta_hi_ts": eta + p90 + extra, "minutes_away": round(h / 60, 1),
+            "eta_lo_ts": eta_lo, "eta_hi_ts": eta_hi, "minutes_away": round(h / 60, 1), "model_source": source,
+            "track_changed": bool(t.track_changed),
             "sched_ts": sched, "feed_lateness_sec": (eta - sched) if sched else None,
             "model_lateness_sec": (model_eta - sched) if sched else None,
             "now_at_stop": t.next_stop_id, "now_at_stop_name": name(t.next_stop_id) if t.next_stop_id else None,
