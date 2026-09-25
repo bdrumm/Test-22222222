@@ -415,6 +415,11 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
              "alerts_active": sum(1 for a in json.loads((out_data / "alerts.json").read_text())["alerts"] if a["active_now"]),
              "status": {k: status[k] for k in ("arrivals_total", "days_with_data")}}
     (out_data / "index.json").write_text(json.dumps(index, default=str))
+    try:
+        from .digest import build_digest
+        build_digest(out_data, now)
+    except Exception as exc:
+        logging.warning("digest failed: %s", exc)
     (out / ".nojekyll").write_text("")
     return index
 

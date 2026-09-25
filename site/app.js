@@ -123,6 +123,15 @@ async function home(idx) {
       link(`#/routes/${r.id}`, "Route analysis →", row, "small"); link(`#/plan/${r.id}`, "Plan this trip →", row, "small");
     }
   }
+  try {
+    const dg = await load("digest.json");
+    if (dg && (dg.items || []).length) {
+      h("h2", null, "This week in one paragraph", app);
+      const card = h("div", "card", null, app); const ul = h("ul", "findings", null, card);
+      dg.items.slice(0, 6).forEach(it => { const li = h("li", null, null, ul); h("span", "sev", it.kind, li); li.append(" " + it.text); });
+      link(DATA + "digest.md", "Markdown brief for sharing →", card, "small");
+    }
+  } catch (e) { /* optional */ }
   if (idx.mode === "synthetic") h("p", "small muted", "This preview was built from the synthetic corridor with an injected signal failure and missing trips; the pipeline replaces it with live MTA data on each run.", app);
 }
 function tile(parent, label, value, delta) { const t = h("div", "tile", null, parent); h("div", "label", label, t); h("div", "value", value, t); if (delta) h("div", "delta", delta, t); return t; }

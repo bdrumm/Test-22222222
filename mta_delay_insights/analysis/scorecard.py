@@ -45,7 +45,7 @@ def scorecard(arrivals: pd.DataFrame, static: StaticGTFS, routes: list[str] | No
             continue
         by_trip = g.groupby("trip_key").agg(first_lat=("lat", "first"), last_lat=("lat", "last"), loss=("delta", lambda s: float(np.clip(s.dropna(), 0, None).sum())))
         seg = g.dropna(subset=["delta"]).groupby("stop_id")["delta"].agg(["mean", "count"])
-        seg = seg[seg["count"] >= 10].sort_values("mean", ascending=False)
+        seg = seg[(seg["count"] >= 10) & (seg["mean"] > 0)].sort_values("mean", ascending=False)
         worst = seg.index[0] if len(seg) else None
         busiest = g["stop_id"].value_counts().index[0]
         hw = g[g["stop_id"] == busiest].sort_values("arrival_ts")
