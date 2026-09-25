@@ -141,7 +141,8 @@ def build_leg_training(store: Store, static: StaticGTFS, leg: LegSpec, alerts_df
     local = pd.to_datetime(j["arrival_ts"], unit="s", utc=True).dt.tz_convert(NY_TZ)
     j["hour"] = local.dt.hour
     j["dow"] = local.dt.dayofweek
-    feats = [features_at(t, str(r), lat, alerts_df, weather_daily, events_df)
+    ctx = context_index(alerts_df, weather_daily, events_df)
+    feats = [features_at(t, str(r), lat, alerts_df, weather_daily, events_df, ctx)
              for t, r, lat in zip(j["arrival_ts"], j["route_id"], j["lateness_sec"])]
     fdf = pd.DataFrame(feats, index=j.index)
     j = pd.concat([j, fdf], axis=1)
@@ -150,28 +151,92 @@ def build_leg_training(store: Store, static: StaticGTFS, leg: LegSpec, alerts_df
     return j[cols].reset_index(drop=True)
 
 
+class ContextIndex:
+    """Alerts, weather and events pre-indexed so per-ride feature lookups are cheap."""
+
+    def __init__(self, alerts_df: pd.DataFrame | None, weather_daily: pd.DataFrame | None, events_df: pd.DataFrame | None):
+        self.a_start = np.zeros(0); self.a_end = np.zeros(0); self.a_routes: list[set | None] = []
+        if alerts_df is not None and not alerts_df.empty:
+            a = alerts_df
+            kinds = np.array([alerts_src.alert_kind(t, h) for t, h in zip(a["alert_type"], a["header"])])
+            keep = kinds == "delay"
+            start = pd.to_numeric(a["active_start"], errors="coerce").fillna(-np.inf).values
+            upd = pd.to_numeric(a.get("updated_at", pd.Series(index=a.index, dtype=float)), errors="coerce")
+            end = pd.to_numeric(a["active_end"], errors="coerce").fillna(upd.fillna(pd.Series(start, index=a.index)) + 3 * 3600).values
+            self.a_start, self.a_end = start[keep].astype(float), end[keep].astype(float)
+            self.a_routes = [None if not isinstance(rs, (list, tuple, set)) or not len(rs) else {str(x) for x in rs}
+                             for rs in a["routes"].values[keep]]
+        self.weather: dict[str, tuple[float, float]] = {}
+        if weather_daily is not None and not weather_daily.empty:
+            for r in weather_daily.itertuples(index=False):
+                d = getattr(r, "date", None)
+                if d is None:
+                    continue
+                precip = float(getattr(r, "precip_mm", 0) or 0)
+                tmax = float(getattr(r, "temp_max_c", 0) or 0)
+                self.weather[str(d)[:10]] = (min(precip, 30.0), float(tmax >= 32))
+        self.events = events_df if events_df is not None and not events_df.empty else None
+        if self.events is not None:
+            e = self.events
+            self.e_start = pd.to_numeric(e["ts_start"], errors="coerce").values.astype(float)
+            self.e_end = pd.to_numeric(e["ts_end"], errors="coerce").fillna(pd.Series(self.e_start) + 3 * 3600).values.astype(float)
+            self.e_kind = e["kind"].astype(str).values
+            self.e_w = pd.to_numeric(e["weight"], errors="coerce").fillna(0.0).values.astype(float)
+            self.e_routes = [None if not isinstance(rs, (list, tuple, set)) or not len(rs) else {str(x) for x in rs} for rs in e["routes"].values]
+
+    def alert_active(self, ts: float, route: str) -> float:
+        if not len(self.a_start):
+            return 0.0
+        on = np.flatnonzero((self.a_start <= ts) & (self.a_end >= ts))
+        return float(any(self.a_routes[i] is None or route in self.a_routes[i] for i in on))
+
+    def event_feats(self, ts: float, route: str) -> dict:
+        f = {"holiday": 0.0, "venue_event_w": 0.0, "street_event_w": 0.0, "news_w": 0.0}
+        if self.events is None:
+            return f
+        on = np.flatnonzero((self.e_start <= ts + 7200) & (self.e_end >= ts - 7200))
+        for i in on:
+            rs = self.e_routes[i]
+            if rs is not None and route not in rs:
+                continue
+            k, w = self.e_kind[i], self.e_w[i]
+            if k == "holiday":
+                f["holiday"] = 1.0
+            elif k == "venue_event":
+                f["venue_event_w"] += w
+            elif k == "news":
+                f["news_w"] += w
+            else:
+                f["street_event_w"] += w
+        return f
+
+
+_CTX_CACHE: dict[tuple, ContextIndex] = {}
+
+
+def context_index(alerts_df, weather_daily, events_df) -> ContextIndex:
+    key = (id(alerts_df), id(weather_daily), id(events_df), len(alerts_df) if alerts_df is not None else 0,
+           len(events_df) if events_df is not None else 0)
+    ctx = _CTX_CACHE.get(key)
+    if ctx is None:
+        _CTX_CACHE.clear()
+        ctx = _CTX_CACHE[key] = ContextIndex(alerts_df, weather_daily, events_df)
+    return ctx
+
+
 def features_at(ts: float, route: str, lateness_sec: float | None, alerts_df: pd.DataFrame | None,
-                weather_daily: pd.DataFrame | None, events_df: pd.DataFrame | None) -> dict:
+                weather_daily: pd.DataFrame | None, events_df: pd.DataFrame | None, ctx: ContextIndex | None = None) -> dict:
+    ctx = ctx or context_index(alerts_df, weather_daily, events_df)
     local = datetime.fromtimestamp(ts, NY_TZ)
-    f = {"lateness_at_from_min": float(np.clip((lateness_sec or 0.0) / 60.0, -5, 30)) if lateness_sec is not None and np.isfinite(lateness_sec) else 0.0,
-         "alert_active": 0.0, "holiday": 0.0, "weekend": float(local.weekday() >= 5), "peak": float(local.hour in PEAK_HOURS and local.weekday() < 5),
+    lat_ok = lateness_sec is not None and np.isfinite(lateness_sec)
+    f = {"lateness_at_from_min": float(np.clip(lateness_sec / 60.0, -5, 30)) if lat_ok else 0.0,
+         "alert_active": ctx.alert_active(ts, str(route)), "holiday": 0.0, "weekend": float(local.weekday() >= 5),
+         "peak": float(local.hour in PEAK_HOURS and local.weekday() < 5),
          "venue_event_w": 0.0, "street_event_w": 0.0, "news_w": 0.0, "precip_mm": 0.0, "heat": 0.0}
-    if alerts_df is not None and not alerts_df.empty:
-        a = alerts_df
-        kinds = [alerts_src.alert_kind(t, h) for t, h in zip(a["alert_type"], a["header"])]
-        start = a["active_start"].fillna(-np.inf)
-        end = a["active_end"].fillna(a["updated_at"].fillna(a["active_start"]) + 3 * 3600)
-        on = (start <= ts) & (end >= ts) & np.array([k == "delay" for k in kinds]) & a["routes"].map(lambda rs: (not rs) or route in [str(x) for x in rs])
-        f["alert_active"] = float(on.any())
-    if weather_daily is not None and not weather_daily.empty:
-        day = local.date().isoformat()
-        w = weather_daily[weather_daily["date"].astype(str) == day]
-        if not w.empty:
-            f["precip_mm"] = float(min(float(w.iloc[0].get("precip_mm", 0) or 0), 30.0))
-            f["heat"] = float((w.iloc[0].get("temp_max_c", 0) or 0) >= 32)
-    if events_df is not None and not events_df.empty:
-        ef = events_src.event_features(events_df, ts, [route])
-        f.update({k: float(ef[k]) for k in ("holiday", "venue_event_w", "street_event_w", "news_w")})
+    w = ctx.weather.get(local.date().isoformat())
+    if w:
+        f["precip_mm"], f["heat"] = w
+    f.update(ctx.event_feats(ts, str(route)))
     return f
 
 

@@ -211,12 +211,18 @@ def cmd_serve(args):
     from mta_delay_insights.realtime.server import serve
     from pipeline import lib
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from mta_delay_insights.realtime.journey import resolve_journeys
     g = _load_static(args.gtfs)
-    _, feeds, resolved = lib.stops_and_feeds(g, lib.load_targets(args.targets))
+    targets = lib.load_targets(args.targets)
+    _, feeds, resolved = lib.stops_and_feeds(g, targets)
     for t in resolved:
         rr = lib.resolve_target(g, t); t["upstream"], t["terminals"] = rr["upstream"], rr["terminals"]
     store = Store(args.db) if args.db and Path(args.db).exists() else None
-    serve(args.site, g, resolved, feeds, store, port=args.port, interval=args.interval)
+    try:
+        journeys = resolve_journeys(g, targets)
+    except Exception as exc:
+        logging.warning("journeys not resolved: %s", exc); journeys = []
+    serve(args.site, g, resolved, feeds, store, journeys, port=args.port, interval=args.interval)
 
 
 def cmd_demo(args):

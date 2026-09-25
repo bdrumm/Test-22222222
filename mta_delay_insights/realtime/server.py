@@ -28,11 +28,13 @@ log = logging.getLogger(__name__)
 
 class LiveState:
     def __init__(self, static: StaticGTFS, targets: list[dict], feeds: list[str],
-                 store: Store | None = None, refit_every_sec: float = 1800.0):
+                 store: Store | None = None, refit_every_sec: float = 1800.0, journeys: list | None = None):
         self.static, self.targets, self.feeds = static, targets, feeds
         self.store = store
         self.refit_every = refit_every_sec
         self.models: dict[str, PropagationModel] = {}
+        self.journeys = journeys or []
+        self.journey_models: dict = {}
         self.payload: bytes = json.dumps({"status": "starting"}).encode()
         self.alerts_df = None
         self._last_fit = 0.0
@@ -46,6 +48,14 @@ class LiveState:
                 self.models[t["id"]] = fit_model(self.store, self.static, t, now)
             except Exception as exc:
                 log.warning("fit %s failed: %s", t["id"], exc)
+        if self.journeys:
+            from .journey import fit_journey
+            weather = self.store.get_frame("weather_daily") if self.store is not None else None
+            for spec in self.journeys:
+                try:
+                    self.journey_models[spec.id], _ = fit_journey(self.store, self.static, spec, self.store.alerts(), weather, None, now)
+                except Exception as exc:
+                    log.warning("journey fit %s failed: %s", spec.id, exc)
         self._last_fit = now
 
     def tick(self) -> None:
@@ -62,7 +72,8 @@ class LiveState:
             self.alerts_df = alerts_src.alerts_frame(alerts_src.fetch_alerts_json())
         except Exception as exc:
             log.warning("alerts failed: %s", exc)
-        live = build_live(feed_bytes, self.alerts_df, self.static, self.targets, self.models, now, source="local-realtime")
+        live = build_live(feed_bytes, self.alerts_df, self.static, self.targets, self.models, now, source="local-realtime",
+                          journeys=self.journeys, journey_models=self.journey_models)
         with self.lock:
             self.payload = json.dumps(live, default=str).encode()
 
@@ -104,9 +115,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         log.debug(fmt, *args)
 
 
-def serve(site_dir: str | Path, static: StaticGTFS, targets: list[dict], feeds: list[str], store: Store | None,
+def serve(site_dir: str | Path, static: StaticGTFS, targets: list[dict], feeds: list[str], store: Store | None, journeys: list | None = None,
           port: int = 8000, interval: float = 30.0) -> None:
-    state = LiveState(static, targets, feeds, store)
+    state = LiveState(static, targets, feeds, store, journeys=journeys)
     stop = threading.Event()
     th = threading.Thread(target=state.loop, args=(interval, stop), daemon=True)
     th.start()
