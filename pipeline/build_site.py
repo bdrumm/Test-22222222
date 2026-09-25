@@ -295,6 +295,12 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         logging.warning("learned model failed: %s", exc)
         learned = ArrivalModel()
         (out_data / "models" / "arrival.card.json").write_text(json.dumps({"status": "error", "error": str(exc)[:300]}))
+    hz = context.get("_holds")
+    if hz is not None and not hz.empty:
+        # the snapshot's "holds in the last hour" reads the store; the build's store has no dwells of its own
+        recent = hz[hz["stopped_from_ts"] >= now.timestamp() - 2 * 3600]
+        if not recent.empty:
+            store.insert_dwells(recent)
     live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context, learned, store)
     try:
         from mta_delay_insights.realtime.client_export import export_client_schedule

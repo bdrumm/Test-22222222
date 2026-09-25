@@ -62,7 +62,10 @@ def test_hold_summary_and_alert_latency(static, tmp_path):
     six = m[m["stop_id"] == "633N"]
     assert six["alert_latency_sec"].notna().all() and set(six["alert_latency_sec"].round()) == {480.0, -420.0}
     assert m[m["route_id"] == "4"]["alert_id"].isna().all(), "planned work is not an alert for a hold"
-    s = hold_summary(holds, alerts, static)
+    origin = static.canonical_stop_sequence("6", "N")[0]
+    terminal_wait = pd.DataFrame([{"trip_key": "t|0", "route_id": "6", "direction": "N", "stop_id": origin, "stopped_from_ts": T0 + 100, "stopped_to_ts": T0 + 1000, "dwell_sec": 900, "polls": 30}])
+    s = hold_summary(pd.concat([holds, terminal_wait], ignore_index=True), alerts, static)
+    assert s["n_terminal"] == 1 and all(x["stop_id"] != origin for x in s["by_stop"]), "waiting at the origin terminal is not a hold"
     assert s["n"] == len(holds) and s["days"] == 3 and s["per_day"] == len(holds) / 3
     assert s["by_stop"][0]["stop_id"] == "625N" and s["by_stop"][0]["name"] == static.stop_name("625N") and s["by_stop"][0]["n"] == 36
     assert {r["route"] for r in s["by_route"]} == {"6", "4"} and abs(sum(s["by_hour"]) - len(holds) / 3) < 1e-6

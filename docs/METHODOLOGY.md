@@ -559,7 +559,8 @@ the match to unplanned delay alerts naming the same route: an alert counts if
 it was active within 30 minutes before the hold began or started within an
 hour after; *alert latency* is the alert's start minus the hold's start, and
 the share of long holds that never got an alert is reported alongside.
-Terminals and relay points hold trains by design, so the stop table is read
+Waits at a route's origin terminal are left out (counted separately as
+terminal waits); other relay points still appear, so the stop table is read
 against the line's topology.
 
 ## 10. Validation

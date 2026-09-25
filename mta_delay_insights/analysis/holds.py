@@ -58,13 +58,33 @@ def match_holds_to_alerts(holds: pd.DataFrame, alerts: pd.DataFrame | None) -> p
     return out
 
 
+def origin_terminals(static: StaticGTFS | None, routes) -> set[str]:
+    """First stop of each route/direction's canonical sequence: trains wait there by design."""
+    out: set[str] = set()
+    if static is None:
+        return out
+    for r in routes:
+        for d in ("N", "S"):
+            try:
+                seq = static.canonical_stop_sequence(str(r), d)
+            except Exception:
+                seq = []
+            if seq:
+                out.add(seq[0])
+    return out
+
+
 def hold_summary(holds: pd.DataFrame | None, alerts: pd.DataFrame | None, static: StaticGTFS | None,
                  hold_sec: float = HOLD_SEC, long_sec: float = LONG_HOLD_SEC) -> dict:
+    empty = {"n": 0, "days": 0, "by_stop": [], "by_route": [], "by_hour": [0] * 24, "long": None, "longest": [], "n_terminal": 0}
     if holds is None or holds.empty:
-        return {"n": 0, "days": 0, "by_stop": [], "by_route": [], "by_hour": [0] * 24, "long": None, "longest": []}
+        return empty
     h = holds[holds["dwell_sec"] >= hold_sec].copy()
+    origins = origin_terminals(static, h["route_id"].dropna().unique())
+    n_terminal = int(h["stop_id"].isin(origins).sum())
+    h = h[~h["stop_id"].isin(origins)]
     if h.empty:
-        return {"n": 0, "days": 0, "by_stop": [], "by_route": [], "by_hour": [0] * 24, "long": None, "longest": []}
+        return {**empty, "n_terminal": n_terminal}
     name = static.stop_name if static is not None else (lambda s: s)
     days = max(1, int(pd.to_datetime(h["stopped_from_ts"], unit="s", utc=True).dt.tz_convert("America/New_York").dt.date.nunique()))
     h["hour"] = h["stopped_from_ts"].map(_hour)
@@ -97,6 +117,6 @@ def hold_summary(holds: pd.DataFrame | None, alerts: pd.DataFrame | None, static
                    for r in top.itertuples(index=False)]
     else:
         longest = []
-    return {"n": int(len(h)), "days": days, "per_day": round(len(h) / days, 1), "hold_sec": hold_sec, "long_sec": long_sec,
+    return {"n": int(len(h)), "n_terminal": n_terminal, "days": days, "per_day": round(len(h) / days, 1), "hold_sec": hold_sec, "long_sec": long_sec,
             "median_sec": round(float(h["dwell_sec"].median())), "by_stop": by_stop[:25], "by_route": by_route, "by_hour": by_hour,
             "long": long_out, "longest": longest}

@@ -963,7 +963,7 @@ async function holdsSection(root) {
     if (hs && hs.n) {
       h("h2", null, "Where trains get held, from the vehicle positions", root);
       const ch = h("div", "card", null, root);
-      h("p", "small secondary", `${fmt.compact(hs.n)} holds (a train reported stopped at a station for ≥ ${(hs.hold_sec / 60).toFixed(1)} min) at every stop of the polled feeds over ${hs.days} day${hs.days === 1 ? "" : "s"}: ${hs.per_day} per day, median ${(hs.median_sec / 60).toFixed(1)} min. Holds are the first visible symptom of most incidents.`, ch);
+      h("p", "small secondary", `${fmt.compact(hs.n)} holds (a train reported stopped at a station for ≥ ${(hs.hold_sec / 60).toFixed(1)} min) at every stop of the polled feeds over ${hs.days} day${hs.days === 1 ? "" : "s"}, origin terminals excluded${hs.n_terminal ? ` (${fmt.compact(hs.n_terminal)} terminal waits left out)` : ""}: ${hs.per_day} per day, median ${(hs.median_sec / 60).toFixed(1)} min. Holds are the first visible symptom of most incidents.`, ch);
       const tiles = h("div", "tiles", null, ch);
       tile(tiles, "Holds per day", hs.per_day, `median ${(hs.median_sec / 60).toFixed(1)} min`);
       if (hs.long) {

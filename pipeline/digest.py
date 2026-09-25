@@ -79,7 +79,7 @@ def build_digest(out_data: Path, now: datetime) -> dict:
     if hs.get("n"):
         lg = hs.get("long") or {}
         top = hs.get("by_stop", [])[:3]
-        txt = (f"{hs['per_day']:.0f} holds per day (trains stopped ≥ {hs['hold_sec'] / 60:.1f} min at a station, terminals included) over {hs['days']} days; most held minutes at "
+        txt = (f"{hs['per_day']:.0f} holds per day (trains stopped ≥ {hs['hold_sec'] / 60:.1f} min at a station, origin terminals excluded) over {hs['days']} days; most held minutes at "
                + ", ".join(f"{x['name']} ({x['routes'] and '/'.join(x['routes'])})" for x in top))
         if lg.get("n"):
             txt += (f". Of {lg['n']} long holds (≥ {hs['long_sec'] / 60:.0f} min), {lg['share_with_alert']:.0%} had an unplanned alert for the line"
