@@ -337,6 +337,25 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         logging.warning("scorecard failed: %s", exc)
         sc = {"rows": [], "error": str(exc)[:200]}
     (out_data / "scorecard.json").write_text(json.dumps(sc, default=str))
+    try:
+        from mta_delay_insights.analysis.dwell import dwell_profile, dwell_ridership_elasticity
+        dw = dwell_profile(context.get("_dwells"), static)
+        stop_to_target = {t["stop_id"]: t["id"] for t in resolved}
+        dw["elasticity"] = dwell_ridership_elasticity(dw, context.get("ridership_profile"), stop_to_target)
+        dw["generated_at"] = now.isoformat()
+    except Exception as exc:
+        logging.warning("dwell analysis failed: %s", exc)
+        dw = {"n": 0, "stops": [], "error": str(exc)[:200]}
+    (out_data / "dwell.json").write_text(json.dumps(dw, default=str))
+    try:
+        from mta_delay_insights.analysis.train_runs import terminal_recovery
+        tr_arr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
+        trr = terminal_recovery(tr_arr, static)
+        trr["generated_at"] = now.isoformat()
+    except Exception as exc:
+        logging.warning("terminal recovery failed: %s", exc)
+        trr = {"n_pairs": 0, "error": str(exc)[:200]}
+    (out_data / "train_runs.json").write_text(json.dumps(trr, default=str))
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []

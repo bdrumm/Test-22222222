@@ -209,6 +209,22 @@ async function station(idx, id) {
   Object.entries(r.coverage).forEach(([k, v]) => h("li", null, `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`, cov));
   (r.caveats || []).forEach(c => h("li", null, `caveat: ${c}`, cov));
   h("div", "tiny muted", `Sources: ${r.sources_used.join(", ")}`, det);
+
+  try {
+    const dw = await load("dwell.json");
+    const mine = (dw.stops || []).find(x => x.stop_id === (r.target?.stop_id || r.stop_id || ""));
+    if (mine) {
+      h("h2", null, "Dwell time at this platform", app);
+      const card = h("div", "card", null, app);
+      const tiles = h("div", "tiles", null, card);
+      tile(tiles, "Median dwell", `${mine.median_sec.toFixed(0)} s`, `p90 ${mine.p90_sec.toFixed(0)} s · ${mine.n} stops observed`);
+      tile(tiles, "Peak vs off-peak", mine.peak_median_sec != null && mine.offpeak_median_sec != null ? `${mine.peak_median_sec.toFixed(0)} / ${mine.offpeak_median_sec.toFixed(0)} s` : "–", "weekday peak median / other");
+      tile(tiles, "Dwells over 90 s", `${(mine.share_over_90s * 100).toFixed(0)}%`, "holds, crowding or door problems");
+      const el = (dw.elasticity || []).find(x => x.stop_id === mine.stop_id);
+      tile(tiles, "Crowding link", el ? `ρ ${el.correlation.toFixed(2)}` : "–", el ? el.reading : "needs hourly ridership");
+      barChart(card, { title: "Median dwell by hour (seconds, lower bound from 30-second polls)", categories: HOURS, series: [{ name: "median dwell", values: mine.by_hour.map(v => v == null ? 0 : v) }], format: fmt.sec, labelEvery: 3, height: 200 });
+    }
+  } catch (e) { /* optional */ }
 }
 function comparisonTable(comps, parent) {
   const wrap = h("div", "table-wrap card", null, parent);
@@ -237,6 +253,24 @@ async function lines(idx, line) {
         h("td", "num", `${(r.share_trips_grew_3min * 100).toFixed(0)}%`, row); h("td", "small", r.worst_segment_stop ? `${r.worst_segment_stop} (+${r.worst_segment_loss_sec.toFixed(0)} s)` : "–", row);
         const sp = h("td", null, null, row); sparkline(sp, r.hourly_mean_lateness.map(v => v == null ? 0 : v), { width: 110, height: 26 }); });
       h("div", "small secondary", "Headway CV: standard deviation ÷ mean of headways at the line's busiest observed stop (0.3 is regular, 0.6+ is bunched). Time lost per trip sums the positive lateness changes along the trip. Sparkline: mean lateness by hour of day.", app);
+    }
+    const tr = await load("train_runs.json");
+    if (tr && tr.n_pairs && tr.overall) {
+      h("h2", null, "Do terminals absorb delays? Lateness carried into the next trip", app);
+      const card = h("div", "card", null, app);
+      const o = tr.overall;
+      const tiles = h("div", "tiles", null, card);
+      tile(tiles, "Terminal turns matched", fmt.compact(tr.n_pairs), `median layover ${o.median_layover_min.toFixed(0)} min`);
+      tile(tiles, "Arrived ≥5 min late", `${(o.share_late_in * 100).toFixed(0)}%`, "of inbound trips at the terminal");
+      tile(tiles, "…and left late again", o.share_late_out_given_late_in != null ? `${(o.share_late_out_given_late_in * 100).toFixed(0)}%` : "–", o.median_recovered_sec != null ? `median ${(o.median_recovered_sec / 60).toFixed(1)} min recovered at the terminal` : "");
+      tile(tiles, "Carry-over slope", o.carry_slope != null ? o.carry_slope.toFixed(2) : "–", "extra seconds late departing per second late arriving");
+      if ((tr.by_terminal || []).length) {
+        const wrap = h("div", "table-wrap", null, card); const t = h("table", null, null, wrap); const trh = h("tr", null, null, h("thead", null, null, t));
+        ["line", "terminal", "turns", "layover", "late in", "late out | late in", "recovered"].forEach((x, i) => h("th", i >= 2 ? "num" : "", x, trh)); const tb = h("tbody", null, null, t);
+        tr.by_terminal.slice(0, 20).forEach(x => { const r = h("tr", null, null, tb); routeBullet(x.route, h("td", null, null, r)); h("td", null, x.terminal_name, r); h("td", "num", String(x.n), r); h("td", "num", `${x.median_layover_min.toFixed(0)} min`, r);
+          h("td", "num", `${(x.share_late_in * 100).toFixed(0)}%`, r); h("td", "num", x.share_late_out_given_late_in == null ? "–" : `${(x.share_late_out_given_late_in * 100).toFixed(0)}%`, r); h("td", "num", x.median_recovered_sec == null ? "–" : `${(x.median_recovered_sec / 60).toFixed(1)} min`, r); });
+      }
+      h("div", "small secondary", "Trips are chained first-in-first-out at each terminal (a trip ending at the station is matched with the next trip of the same line leaving it the other way within 40 min). A high 'late out | late in' share means the scheduled recovery time is too short for the delays that actually arrive.", card);
     }
   } catch (e) { /* scorecard is optional */ }
   const data = await load("lines.json");

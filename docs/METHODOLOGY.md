@@ -419,6 +419,25 @@ climatology rate for the route at that weekday and hour (expected unplanned
 disruptions per hour from the alert archive), a prior for the model before
 any live symptom appears.
 
+## 9i. Dwell times and terminal recovery
+
+**Dwell.** Vehicle positions report `STOPPED_AT` a stop; the first and last
+poll in that state bound the dwell from below (30-second polling). Per stop:
+median and p90, share over 90 s, weekday-peak vs other medians, medians by
+hour. For monitored platforms the hourly dwell profile is correlated with the
+complex's hourly ridership: a strong positive correlation means dwell is
+crowding-driven (a capacity problem); none means long dwells are holds,
+dispatching or merges.
+
+**Terminal recovery.** NYCT train ids change every trip, so physical runs are
+chained by terminal turns: a trip ending at station Y is matched first-in-
+first-out with the next trip of the same route leaving Y in the opposite
+direction within 60 s – 40 min. Lateness at the end of the inbound trip vs the
+start of the outbound one gives the carry-over slope, the share of late
+arrivals that leave late again and the median time recovered, per route and
+terminal, which says whether the timetable's recovery allowance matches the
+delays that actually reach the terminal.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4
