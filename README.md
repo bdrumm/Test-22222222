@@ -236,6 +236,15 @@ Live forecasts and the trip planner use the model as soon as it is ready
 (`model_source: "learned"`), blending with the feed by inverse variance when
 the feed feature is unavailable.
 
+The live forecasts are scored too. Every snapshot's predicted arrivals at the
+monitored platforms (the feed's ETA, the model ETA and the forward
+simulation's projection) are kept, matched to the arrival observed afterwards
+and saved to the data branch (`forecast_eval/`); the Model page reports the
+resulting error by horizon, how often the model and the simulation beat the
+feed, and the corroboration check (when a train's position said the feed was
+optimistic, did it really arrive later?). `mta-insights serve` does the same
+continuously and exposes it at `/api/forecast_eval`.
+
 Backfilled history is not only for the model: rows at the monitored platforms
 and journey stops are loaded into the analysis store too (with full-day
 coverage), so station reports, journeys and transfer analyses have weeks of

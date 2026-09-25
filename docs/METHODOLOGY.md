@@ -504,6 +504,24 @@ synthetic snapshot and checks they agree with the Python parser and position
 rules. The synthetic preview ships its recorded feed next to the site so the
 mode can be exercised offline.
 
+## 9k. Scoring the live forecasts
+
+Every live snapshot records, for each predicted arrival at a monitored
+platform, the feed's ETA, the model ETA shown on the Live page, the forward
+simulation's baseline projection (and the `hold_persists` one where a train
+was held), the train's position state and corroboration, and the horizon
+(`feed_eta − made`). At the end of a collection run (and every 10 minutes in
+`serve` mode) each record is joined to the observed arrival of the same train
+at the same platform; arrivals observed before the forecast was made are
+discarded as a different visit. Errors are prediction − actual, so a negative
+bias means trains arrived later than predicted. The published summary
+(`data/forecast_eval.json`, last 14 days) reports MAE, bias and p90 by
+horizon bucket for the three predictors, the share of paired rows where the
+model / the simulation is closer than the feed, a breakdown by corroboration
+verdict (the `feed_optimistic` rows should show a strongly negative feed bias
+and a better model and simulation) and the held-train subset with the
+`hold_persists` scenario's error.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

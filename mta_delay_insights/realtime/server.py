@@ -53,6 +53,10 @@ class LiveState:
         self.alerts_df = None
         self._last_fit = 0.0
         self.lock = threading.Lock()
+        # forecasts made by each snapshot, scored against the arrivals the collector observes later
+        self.projections: list[dict] = []
+        self.forecast_eval = None
+        self._last_eval = 0.0
 
     def refit(self, now: float) -> None:
         if self.store is None:
@@ -113,9 +117,35 @@ class LiveState:
         self.polls += 1
         live = build_live(feed_bytes, self.alerts_df, self.static, self.targets, self.models, now, source="local-realtime",
                           journeys=self.journeys, journey_models=self.journey_models, learned=self.learned, store=self.store)
+        self._record_forecasts(live, now)
         with self.lock:
             self.last_live = live
             self.payload = json.dumps(live, default=str).encode()
+
+    def _record_forecasts(self, live: dict, now: float, every_sec: float = 600.0) -> None:
+        """Keep every snapshot's predicted arrivals; every 10 minutes score the ones whose train has since arrived."""
+        try:
+            import pandas as pd
+            from .evaluate import evaluate_projections, projections_from_live
+            self.projections.extend(projections_from_live(live))
+            if self.store is None or now - self._last_eval < every_sec or not self.projections:
+                return
+            ev = evaluate_projections(pd.DataFrame(self.projections), self.store.arrivals(None, now - 3 * 3600, now))
+            scored = set(zip(ev["made_ts"], ev["trip_id"], ev["stop_id"])) if not ev.empty else set()
+            # unscored projections stay until their train is two hours overdue
+            self.projections = [x for x in self.projections if (x["made_ts"], x["trip_id"], x["stop_id"]) not in scored and x["feed_eta_ts"] > now - 7200]
+            with self.lock:
+                if not ev.empty:
+                    self.forecast_eval = ev if self.forecast_eval is None else pd.concat([self.forecast_eval, ev], ignore_index=True).tail(50000)
+            self._last_eval = now
+        except Exception as exc:
+            log.warning("forecast evaluation failed: %s", exc)
+
+    def forecast_eval_summary(self) -> dict:
+        from .evaluate import summarize_forecast_eval
+        with self.lock:
+            df = self.forecast_eval
+        return summarize_forecast_eval(df)
 
     def loop(self, interval: float, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -147,6 +177,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with self.state.lock:
                 body = self.state.payload
             return self._json(body)
+        if path in ("/api/forecast_eval", "/data/forecast_eval.json"):
+            summary = self.state.forecast_eval_summary()
+            if summary["n"] or path == "/api/forecast_eval":
+                return self._json(summary)
+            # nothing scored yet in this process: fall through to the site's published summary, if any
         if path.startswith("/api/"):
             with self.state.lock:
                 live = self.state.last_live

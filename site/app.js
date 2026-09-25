@@ -857,6 +857,31 @@ async function modelPage(idx) {
     ev.calibration_by_width.forEach(b => { const r = h("tr", null, null, tb); h("td", null, ["narrowest", "narrow", "wide", "widest"][b.bucket] || String(b.bucket), r); h("td", "num", fmt.compact(b.n), r); h("td", "num", secTxt(b.width_median), r); h("td", "num", secTxt(b.mae), r); });
     h("div", "small secondary", "Error should rise with the band width: then the range is informative, not just noise.", c4);
   }
+  try {
+    const fe = await load("forecast_eval.json");
+    if (fe && fe.n) {
+      h("h2", null, "Live forecasts scored against what happened", root);
+      const c5 = h("div", "card", null, root);
+      h("p", "small secondary", `${fmt.compact(fe.n)} predicted arrivals at the monitored platforms from ${fmt.compact(fe.n_snapshots)} live snapshots over ${fe.days} day${fe.days === 1 ? "" : "s"}, each matched to the arrival observed afterwards. Error = prediction − actual; a negative bias means trains arrived later than predicted.`, c5);
+      const o = fe.overall || {};
+      const tiles = h("div", "tiles", null, c5);
+      tile(tiles, "MTA feed ETA", secTxt(o.feed && o.feed.mae_sec), o.feed && o.feed.bias_sec != null ? `bias ${o.feed.bias_sec > 0 ? "+" : ""}${o.feed.bias_sec.toFixed(0)} s · p90 ${secTxt(o.feed.p90_abs_sec)}` : "");
+      tile(tiles, "Model ETA (Live page)", secTxt(o.model && o.model.mae_sec), o.model_beats_feed_share != null ? `closer than the feed ${(o.model_beats_feed_share * 100).toFixed(0)}% of the time` : "");
+      tile(tiles, "Forward simulation", secTxt(o.sim && o.sim.mae_sec), o.sim_beats_feed_share != null ? `closer than the feed ${(o.sim_beats_feed_share * 100).toFixed(0)}% of the time · n ${fmt.compact(o.sim && o.sim.n)}` : "");
+      if ((fe.by_horizon || []).length) {
+        const lab = b => b.horizon_hi_sec ? `${b.horizon_lo_sec / 60}–${b.horizon_hi_sec / 60} min` : `${b.horizon_lo_sec / 60}+ min`;
+        barChart(c5, { title: "MAE by forecast horizon", subtitle: "how far ahead the arrival was predicted", categories: fe.by_horizon.map(lab),
+          series: [{ name: "feed", values: fe.by_horizon.map(b => b.feed.mae_sec || 0) }, { name: "model", values: fe.by_horizon.map(b => b.model.mae_sec || 0) }, { name: "simulation", values: fe.by_horizon.map(b => b.sim.mae_sec || 0) }], format: fmt.sec, height: 220 });
+      }
+      if ((fe.corroboration || []).length) {
+        const wrap = h("div", "table-wrap", null, c5); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
+        ["position says", "n", "feed bias", "feed MAE", "model MAE", "simulation MAE", "arrived >1 min after the feed's ETA"].forEach((x, i) => h("th", i ? "num" : "", x, tr)); const tb = h("tbody", null, null, t);
+        fe.corroboration.forEach(r => { const row = h("tr", null, null, tb); h("td", null, r.corroboration.replace(/_/g, " "), row); h("td", "num", fmt.compact(r.n), row); h("td", "num", r.feed_bias_sec == null ? "–" : `${r.feed_bias_sec > 0 ? "+" : ""}${r.feed_bias_sec.toFixed(0)} s`, row); h("td", "num", secTxt(r.feed_mae_sec), row); h("td", "num", secTxt(r.model_mae_sec), row); h("td", "num", secTxt(r.sim_mae_sec), row); h("td", "num", `${(r.share_arrived_later_than_feed * 100).toFixed(0)}%`, row); });
+        h("div", "small secondary", "The corroboration check: when a train's reported position said the feed was optimistic, the feed's error should be strongly negative (the train arrived later than promised) and the position-corrected model and simulation should do better.", c5);
+      }
+      if (fe.held && fe.held.n) h("div", "small secondary", `Trains that were holding or stalled when predicted (${fe.held.n}): feed MAE ${secTxt(fe.held.feed.mae_sec)}, simulation baseline ${secTxt(fe.held.sim.mae_sec)}${fe.held.hold_persists && fe.held.hold_persists.n ? `, "hold persists" scenario ${secTxt(fe.held.hold_persists.mae_sec)}` : ""}.`, c5);
+    }
+  } catch (e) { /* optional */ }
   const det = h("details", null, null, root); det.style.marginTop = "1rem"; h("summary", null, "How it is used", det);
   const ul = h("ul", "small secondary", null, det);
   h("li", null, "Live page: each upcoming train's ETA and range come from this model when it is ready (source 'learned'); otherwise from the look-back calibration of the feed.", ul);

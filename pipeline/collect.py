@@ -94,7 +94,7 @@ def main(argv=None) -> int:
                     models[t["id"]] = PropagationModel.from_dict(json.loads(mf.read_text()))
                 except Exception as exc:
                     logging.warning("model %s unreadable: %s", mf, exc)
-        state = {"last": 0.0, "n": 0}
+        state = {"last": 0.0, "n": 0, "proj": []}
 
         def on_poll(c: Collector, now: float) -> None:
             if now - state["last"] < args.live_every or not c.last_feed_bytes:
@@ -104,6 +104,11 @@ def main(argv=None) -> int:
                               journeys=journeys, journey_models=jmodels, weather_daily=weather_daily, events_df=events_df,
                               learned=learned, store=store, nws_df=nws_df, climatology=climatology)
             Path(args.live_out).write_text(json.dumps(live, default=str))
+            try:
+                from mta_delay_insights.realtime.evaluate import projections_from_live
+                state["proj"].extend(projections_from_live(live))
+            except Exception as exc:
+                logging.warning("projection record failed: %s", exc)
             state["last"], state["n"] = now, state["n"] + 1
             logging.info("live snapshot %d: %d trains, %s", state["n"], live["trains_total"], live["summary"])
             if args.live_publish:
@@ -125,10 +130,21 @@ def main(argv=None) -> int:
     n_dwells = lib.save_dwells(data_dir, store.dwells(stops))
     logging.info("eta samples: %s, dwells: %s", n_samples, n_dwells)
     n_alerts = lib.save_alerts(data_dir, alerts, time.time())
+    n_eval = 0
+    if args.live_every > 0 and state["proj"]:
+        try:
+            import pandas as pd
+            from mta_delay_insights.realtime.evaluate import evaluate_projections
+            ev = evaluate_projections(pd.DataFrame(state["proj"]), arrivals)
+            n_eval = int(len(ev))
+            lib.save_forecast_eval(data_dir, ev)
+            logging.info("forecast evaluation: %d of %d projections matched to an observed arrival", n_eval, len(state["proj"]))
+        except Exception as exc:
+            logging.warning("forecast evaluation failed: %s", exc)
     stats = store.snapshot_stats()
     record = {
         "kind": "collect", "feeds": feeds, "polls": len(summaries), "errors": int(sum(s["errors"] for s in summaries)),
-        "arrivals": int(len(arrivals)), "flushed": int(flushed), "alerts": int(n_alerts),
+        "arrivals": int(len(arrivals)), "flushed": int(flushed), "alerts": int(n_alerts), "forecast_eval": n_eval,
         "duration_sec": round(time.time() - t0), "written": written,
         "per_feed": stats.to_dict(orient="records") if not stats.empty else [],
     }

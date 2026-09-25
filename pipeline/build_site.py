@@ -396,7 +396,14 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         per_day = arr_all["arrival_ts"].map(lib.local_date).value_counts().sort_index().to_dict()
     net = context.get("_network_arrivals")
     es_samples = context.get("_eta_samples")
+    fe = context.get("_forecast_eval")
+    try:
+        from mta_delay_insights.realtime.evaluate import summarize_forecast_eval
+        (out_data / "forecast_eval.json").write_text(json.dumps(summarize_forecast_eval(fe), default=str))
+    except Exception as exc:
+        logging.warning("forecast evaluation summary failed: %s", exc)
     datasets = {"core_arrivals": int(len(arr_all)),
+                "forecast_eval": int(len(fe)) if fe is not None else 0,
                 "network_arrivals": int(len(net)) if net is not None else 0,
                 "network_days": int(pd.to_datetime(net["arrival_ts"], unit="s").dt.date.nunique()) if net is not None and not net.empty else 0,
                 "network_sources": (net["source"].value_counts().to_dict() if net is not None and not net.empty and "source" in net else {}),
@@ -471,6 +478,7 @@ def build_from_data(args) -> dict:
     context["_network_arrivals"] = network
     context["_eta_samples"] = lib.load_eta_samples(data_dir, days=45)
     context["_dwells"] = lib.load_dwells(data_dir, days=45)
+    context["_forecast_eval"] = lib.load_forecast_eval(data_dir, days=14)
     context["_backfill_manifest"] = {"n_days": len(backfill_days), "days": backfill_days}
     feed_bytes = {}
     context["_feed_bytes"] = feed_bytes

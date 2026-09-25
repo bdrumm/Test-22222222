@@ -17,6 +17,10 @@ class _Stub:
         self.payload = json.dumps(live).encode()
         self.polls = 3; self.started_at = 1.0; self.learned = None; self.feeds = ["1234567S"]; self.store = None; self.models = {}
 
+    def forecast_eval_summary(self):
+        from mta_delay_insights.realtime.evaluate import summarize_forecast_eval
+        return summarize_forecast_eval(None)
+
 
 def _get(port, path):
     with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as r:
@@ -37,6 +41,7 @@ def test_api_endpoints(tmp_path):
         assert _get(port, "/api/station?id=gc-n")[1]["id"] == "gc-n"
         assert _get(port, "/api/plan?journey=j1")[1]["plan"]["id"] == "j1"
         assert _get(port, "/api/incidents")[1]["incidents"] == []
+        fe = _get(port, "/api/forecast_eval"); assert fe[0] == 200 and fe[1]["n"] == 0 and "by_horizon" in fe[1]
         for bad in ("/api/plan?journey=nope", "/api/station?id=nope", "/api/whatever"):
             try:
                 urllib.request.urlopen(f"http://127.0.0.1:{port}{bad}")
