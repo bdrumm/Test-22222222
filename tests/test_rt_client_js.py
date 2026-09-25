@@ -18,7 +18,7 @@ from tests.test_positions import _snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = """
-import { parseFeed, computeBoard, tripSuffix, lineBoard } from "%s";
+import { parseFeed, computeBoard, tripSuffix, lineBoard, planJourneys, journeyFeeds } from "%s";
 import { readFileSync } from "node:fs";
 const schedule = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const lines = JSON.parse(readFileSync(process.argv[2].replace("client_schedule", "client_lines"), "utf8")).lines;
@@ -26,6 +26,7 @@ const feeds = {}; for (const [key, path] of Object.entries(JSON.parse(process.ar
 const now = Number(process.argv[4]);
 const board = computeBoard(schedule, feeds, now);
 board.line = lineBoard(schedule, lines["6_N"] || [], feeds, "6", "N", now);
+board.plan = planJourneys(schedule, feeds, now); board.journey_feeds = journeyFeeds(schedule);
 const parsed = Object.fromEntries(Object.entries(feeds).map(([k, f]) => [k, { timestamp: f.timestamp, trips: f.trips.length, vehicles: f.vehicles.length,
   sample: f.trips[0] && { trip_id: f.trips[0].trip.trip_id, route: f.trips[0].trip.route_id, n_stops: f.trips[0].stops.length, first: f.trips[0].stops[0] } }]));
 console.log(JSON.stringify({ board, parsed, suffix: tripSuffix("AFA25GEN-1038-Sunday-00_000600_1..S03R") }));
@@ -34,9 +35,13 @@ console.log(JSON.stringify({ board, parsed, suffix: tripSuffix("AFA25GEN-1038-Su
 
 def _run_board(static, tmp_path, hold_sec=0.0):
     sim, now, feeds, held = _snapshot(static, hold_sec=hold_sec)
-    targets = {"targets": [{"id": "gc", "station": "Grand Central", "direction": "N", "routes": ["6", "4"]}], "upstream_stops": 3}
+    targets = {"targets": [{"id": "gc", "station": "Grand Central", "direction": "N", "routes": ["6", "4"]}], "upstream_stops": 3,
+               "journeys": [{"id": "usq-59", "label": "Union Sq to 59 St", "legs": [
+                   {"from": {"station": "14 St-Union Sq", "direction": "N", "routes": ["6"]}, "to": {"station": "Grand Central", "direction": "N", "routes": ["6"]}},
+                   {"transfer_min": 1, "from": {"station": "Grand Central", "direction": "N", "routes": ["4"]}, "to": {"station": "59 St", "direction": "N", "routes": ["4"]}}]}]}
     _, feed_keys, resolved = lib.stops_and_feeds(static, targets)
-    export_client_schedule(static, resolved, [], tmp_path, datetime.fromtimestamp(now, NY_TZ), list(feeds))
+    from mta_delay_insights.realtime.journey import resolve_journeys
+    export_client_schedule(static, resolved, resolve_journeys(static, targets), tmp_path, datetime.fromtimestamp(now, NY_TZ), list(feeds))
     paths = {}
     for k, data in feeds.items():
         (tmp_path / f"{k}.pb").write_bytes(data); paths[k] = str(tmp_path / f"{k}.pb")
@@ -92,3 +97,20 @@ def test_js_line_board_places_every_train(static, tmp_path):
     assert sum(1 for t in trains if t["lateness_sec"] is not None) >= len(trains) * 0.8, "line schedule should give lateness"
     h = next(t for t in trains if t["trip_id"] == held)
     assert h["position"]["holding"] and h["corroboration"] == "feed_optimistic" and lb["n_holding"] >= 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_js_planner_chains_legs_from_the_feed(static, tmp_path):
+    res, now, feeds, held = _run_board(static, tmp_path, hold_sec=400)
+    plan = res["board"]["plan"]
+    assert res["board"]["journey_feeds"] == ["1234567S"]
+    j = plan["journeys"][0]
+    assert j["id"] == "usq-59" and j["options"] and j["best"]
+    b = j["best"]
+    assert len(b["legs"]) == 2 and b["legs"][0]["route"] == "6" and b["legs"][1]["route"] == "4"
+    l1, l2 = b["legs"]
+    assert now <= l1["board_ts"] < l1["arrive_ts"] and l1["arrive_ts"] + 60 <= l2["board_ts"] < l2["arrive_ts"] == b["arrive_ts"]
+    assert b["total_sec"] == b["arrive_ts"] - now and 300 < b["total_sec"] < 3600
+    assert j["options"] == sorted(j["options"], key=lambda o: o["arrive_ts"])
+    if any(l["trip_id"] == held for o in j["options"] for l in o["legs"]):
+        assert any(l["holding"] for o in j["options"] for l in o["legs"] if l["trip_id"] == held)

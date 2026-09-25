@@ -221,7 +221,10 @@ below it still carries the model forecasts and downstream effects. The same
 toggle on the Line view draws every train of the line from the feeds every
 30 seconds: reported positions as dots on the Marey chart (green moving, amber
 stopped, red holding or stalled), the feed's projections, and a table with
-each train's position, lateness and flags.
+each train's position, lateness and flags. On the trip planner it chains the
+configured journeys straight from the feeds (next train at the origin, its
+own ETA at the leg's destination, the transfer walk, the next train there)
+and flags legs whose train is holding or stalled right now.
 
 ## Learned arrival model
 

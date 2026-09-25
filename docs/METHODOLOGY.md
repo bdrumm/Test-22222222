@@ -508,9 +508,14 @@ nearest scheduled trip of the same route within 15 minutes (shown with a
 derive the schedule at any stop from the canonical running times, and draws
 every started train of the line: its reported position as a dot (between
 stops when in transit), the feed's projected trajectory, and holds, stalls
-and feed-optimistic corrections. `tests/test_rt_client_js.py` runs the
-decoder and both boards under Node against a synthetic snapshot and checks
-they agree with the Python parser and position rules. The synthetic preview
+and feed-optimistic corrections. The trip planner's live section chains each configured journey from the
+feeds alone: the next train of the leg's routes at the origin (started trains
+only), its own ETA at the leg's destination, the transfer walk, then the next
+train at the transfer stop; legs whose train is holding or stalled and
+connections under two minutes are flagged. It carries no model calibration,
+which the snapshot's planner adds. `tests/test_rt_client_js.py` runs the
+decoder, both boards and the planner under Node against a synthetic snapshot
+and checks they agree with the Python parser and position rules. The synthetic preview
 ships its recorded feed next to the site so the mode can be exercised
 offline; against real feeds (G and L, 3:48 AM) the decoder matched the Python
 parser entity for entity.

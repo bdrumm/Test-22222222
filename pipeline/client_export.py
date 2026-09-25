@@ -73,6 +73,9 @@ def export_client_schedule(static: StaticGTFS, resolved: list[dict], journeys: l
     out = {"generated_at": now.isoformat(), "service_date": sd.isoformat(), "targets": targets, "lines": lines,
            "feeds": {k: (feed_urls or {}).get(k) or config.rt_feed_url(k) for k in feed_keys}, "target_feeds": target_feeds,
            "route_feeds": {r: k for k, rs in config.SUBWAY_FEED_ROUTES.items() for r in rs},
+           "journeys": [{"id": j.id, "label": j.label, "legs": [{"from_stop": l.from_stop, "to_stop": l.to_stop, "routes": [str(r) for r in l.routes],
+                                                                  "from_name": l.from_name, "to_name": l.to_name, "transfer_min": l.transfer_min} for l in j.legs]}
+                        for j in (journeys or [])],
            "alerts_url": config.rt_feed_url("subway_alerts_json"),
            "demo_now": demo_now,
            "constants": {"hold_sec": HOLD_SEC, "stall_slack_sec": STALL_SLACK_SEC, "past_slack_sec": 90, "gap_ratio": config.DEFAULTS.gap_ratio, "bunching_ratio": config.DEFAULTS.bunching_ratio,

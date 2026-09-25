@@ -1,5 +1,5 @@
 import { barChart, lineChart, heatmap, sparkline, stringline, fmt, seriesColor } from "./charts.js";
-import { createClientLive, lineBoard } from "./rt-client.js";
+import { createClientLive, lineBoard, planJourneys, journeyFeeds } from "./rt-client.js";
 
 const app = document.getElementById("app");
 // Where the JSON lives. Normally next to the page (built site). When GitHub Pages serves the
@@ -633,18 +633,44 @@ async function live(idx) {
 
 // ---------------------------------------------------------------- plan (trip time planner)
 const minTxt = s => s == null ? "–" : `${(s / 60).toFixed(0)} min`;
+function renderPlanLive(box, board, schedule, feeds) {
+  const plan = planJourneys(schedule, feeds, board.now), now = board.now;
+  box.replaceChildren();
+  const card = h("div", "card", null, box);
+  const hd = h("div", "row between", null, card);
+  h("h3", null, "Live from the MTA feeds: leave now", hd);
+  h("span", "small secondary", `${board.demo ? "recorded snapshot replayed at" : "polled"} ${hhmmss(now)} ET · every 30 s`, hd);
+  if (!plan.journeys.length) { h("div", "small secondary", "No journeys in data/client_schedule.json (rebuild the site).", card); return; }
+  const wrap = h("div", "table-wrap", null, card); const t = h("table", "tiny", null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
+  [["journey", ""], ["first train in", "num"], ["arrive", "num"], ["total", "num"], ["itinerary", ""], ["next option", "num hide-sm"]].forEach(([x, cl]) => h("th", cl, x, tr)); const tb = h("tbody", null, null, t);
+  plan.journeys.forEach(j => { const row = h("tr", null, null, tb); const c0 = h("td", null, null, row); link(`#/plan/${j.id}`, j.label, c0, "small");
+    const b = j.best;
+    if (!b) { const td = h("td", "small secondary", "no catchable train in the feed for the first leg", row); td.colSpan = 5; return; }
+    h("td", "num", minTxt(b.legs[0].wait_sec), row); h("td", "num eta", hhmm(b.arrive_ts), row); h("td", "num", minTxt(b.total_sec), row);
+    const it = h("td", "small", null, row);
+    it.append(b.legs.map(l => `${l.route} ${(l.train_id || "").trim()}: board ${hhmm(l.board_ts)}${l.position ? ` (now ${posText(l.position)})` : ""}, ride ${minTxt(l.ride_sec)} to ${l.to_name}${l.transfer_sec ? ` after a ${minTxt(l.transfer_sec)} walk` : ""}`).join(" → "));
+    (b.warnings || []).forEach(x => { const c = h("span", "status-chip st-degraded", null, it); c.style.marginLeft = ".4rem"; h("span", "dot", null, c); c.append(x); });
+    const nx = j.options[1]; h("td", "num small hide-sm", nx ? `${minTxt(nx.legs[0].wait_sec)} → ${hhmm(nx.arrive_ts)}` : "–", row); });
+  h("div", "tiny muted", "Straight from the feed: the next train of the leg's routes at the origin, its own ETA at the leg's destination, the transfer walk, then the next train there. No model calibration; the snapshot below adds it. Trains holding or stalled right now are flagged.", card);
+}
+
 async function plan(idx, journeyId) {
-  const root = app;
+  const root0 = app; root0.replaceChildren();
+  const head = h("div", "row between", null, root0);
+  h("h1", null, "Trip planner: how long will it take right now?", head);
+  const ctl = h("div", "refresh small secondary", null, head);
+  const liveBox = h("div", null, null, root0);
+  const snapBox = h("div", null, null, root0);
+  setupClientLive(ctl, liveBox, { feedKeys: journeyFeeds, render: renderPlanLive });
   async function draw() {
+    const root = snapBox;
     let d;
     try { await dataReady; const r = await fetch(DATA + "live.json", { cache: "no-store" }); if (!r.ok) throw new Error(String(r.status)); d = await r.json(); }
-    catch (e) { root.replaceChildren(); h("h1", null, "Trip planner", root); h("div", "empty", "No live snapshot yet. The planner needs data/live.json (published by the collector, or served by mta-insights serve).", root); return; }
+    catch (e) { root.replaceChildren(); h("div", "empty", "No live snapshot yet. The planner needs data/live.json (published by the collector, or served by mta-insights serve); the live feeds toggle above works without it.", root); return; }
     const journeys = d.journeys || [];
     root.replaceChildren();
-    const head = h("div", "row between", null, root);
-    h("h1", null, "Trip planner: how long will it take right now?", head);
-    const rf = h("div", "refresh small secondary", null, head);
-    h("span", "age", `as of ${hhmm(d.generated_ts)} ET · ${ageText(Date.now() / 1000 - d.generated_ts)} · ${d.source}`, rf);
+    const rf = h("div", "refresh small secondary", null, root); rf.style.justifyContent = "flex-end";
+    h("span", "age", `model snapshot as of ${hhmm(d.generated_ts)} ET · ${ageText(Date.now() / 1000 - d.generated_ts)} · ${d.source}`, rf);
     const btn = h("button", "icon-btn", "↻", rf); btn.title = "Refresh"; btn.addEventListener("click", draw);
     if (!journeys.length) { h("div", "empty", "No journeys configured. Add them under \"journeys\" in pipeline/targets.json.", root); return; }
     // Route choice across alternatives for the same origin/destination

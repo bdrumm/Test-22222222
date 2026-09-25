@@ -241,6 +241,62 @@ export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
     n_feed_optimistic: trains.filter(t => t.corroboration === "feed_optimistic").length };
 }
 
+/** Feeds needed for the configured journeys. */
+export const journeyFeeds = schedule => [...new Set((schedule.journeys || []).flatMap(j => j.legs.flatMap(l => l.routes.map(r => (schedule.route_feeds || {})[r]))).filter(Boolean))];
+
+/** Itineraries for every configured journey straight from the feeds: board the next train of the leg's routes at the
+ *  origin, ride to the leg's destination using that train's own ETA there, walk the transfer, repeat. */
+export function planJourneys(schedule, feeds, now, maxOptions = 4) {
+  const C = { hold_sec: 150, stall_slack_sec: 120, ...(schedule.constants || {}) };
+  const trips = [], vehicles = new Map();
+  for (const fd of Object.values(feeds)) { for (const tu of fd.trips) if (tu.trip && tu.trip.trip_id && tu.stops.length) trips.push(tu); for (const v of fd.vehicles) if (v.trip && v.trip.trip_id) vehicles.set(vehKey(v.trip), v); }
+  const state = tu => {   // holding / stalled from the vehicle, if any
+    const veh = vehicles.get(vehKey(tu.trip)); if (!(veh && veh.stop_id && veh.timestamp && veh.timestamp <= now + 60)) return null;
+    const since = Math.max(0, now - veh.timestamp), status = veh.status || "IN_TRANSIT_TO";
+    const line = schedule.lines[`${tu.trip.route_id}_${(tu.stops[0].stop_id || "").slice(-1)}`]; const j = line ? line.stops.indexOf(veh.stop_id) : -1;
+    const run = j > 0 && line ? line.run_sec[j - 1] : null;
+    return { status, stop_id: veh.stop_id, stop_name: j >= 0 ? line.names[j] : veh.stop_id, since_sec: since, holding: status === "STOPPED_AT" && since >= C.hold_sec, stalled: status !== "STOPPED_AT" && run != null && since > run + C.stall_slack_sec };
+  };
+  // trains serving (from -> to) for a leg: [board_ts, arrive_ts, trip]
+  const rides = (leg, notBefore) => {
+    const out = [];
+    for (const tu of trips) {
+      if (!leg.routes.includes(tu.trip.route_id)) continue;
+      const i = tu.stops.findIndex(s => s.stop_id === leg.from_stop); if (i < 0) continue;
+      const k = tu.stops.findIndex((s, q) => q > i && s.stop_id === leg.to_stop); if (k < 0) continue;
+      const board = tu.stops[i].departure ?? tu.stops[i].arrival, arrive = tu.stops[k].arrival ?? tu.stops[k].departure;
+      if (board == null || arrive == null || board < notBefore) continue;
+      if (!(tu.trip.is_assigned === true || (vehicles.get(vehKey(tu.trip)) || {}).timestamp <= now + 60) && i > 0) continue;   // not yet departed and not at its origin
+      out.push({ board_ts: board, arrive_ts: arrive, tu });
+    }
+    return out.sort((a, b) => a.board_ts - b.board_ts);
+  };
+  const journeys = [];
+  for (const j of schedule.journeys || []) {
+    const options = [];
+    for (const first of rides(j.legs[0], now).slice(0, maxOptions)) {
+      const legs = []; let t = now, ok = true;
+      for (let li = 0; li < j.legs.length; li++) {
+        const leg = j.legs[li], transfer = li ? (leg.transfer_min || 0) * 60 : 0;
+        const ride = li === 0 ? first : rides(leg, t + transfer)[0];
+        if (!ride) { ok = false; break; }
+        const st = state(ride.tu), desc = ride.tu.trip;
+        legs.push({ route: desc.route_id, trip_id: desc.trip_id, train_id: desc.train_id, from_name: leg.from_name, to_name: leg.to_name, board_ts: ride.board_ts, arrive_ts: ride.arrive_ts,
+          wait_sec: ride.board_ts - t - transfer, transfer_sec: transfer, ride_sec: ride.arrive_ts - ride.board_ts, position: st, holding: !!(st && st.holding), stalled: !!(st && st.stalled),
+          connection_margin_sec: li ? ride.board_ts - t - transfer : null });
+        t = ride.arrive_ts;
+      }
+      if (!ok) continue;
+      const warnings = legs.filter(l => l.holding || l.stalled).map(l => `${l.route} train ${(l.train_id || l.trip_id).trim()} is ${l.holding ? "holding" : "stalled"} at ${l.position.stop_name}`);
+      const tight = legs.filter(l => l.connection_margin_sec != null && l.connection_margin_sec < 120).map(l => `tight connection at ${l.from_name}: ${Math.round(l.connection_margin_sec / 60)} min`);
+      options.push({ depart_ts: legs[0].board_ts, arrive_ts: t, total_sec: t - now, routes: legs.map(l => l.route), legs, warnings: warnings.concat(tight) });
+    }
+    options.sort((a, b) => a.arrive_ts - b.arrive_ts);
+    journeys.push({ id: j.id, label: j.label, options, best: options[0] || null });
+  }
+  return { now, journeys };
+}
+
 /** Poll the feeds every intervalMs and hand computed boards to onUpdate(board, schedule, feeds).
  *  feedKeys limits which feeds are polled (default: the feeds the monitored platforms need). */
 export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, fetchImpl = (u, o) => fetch(u, o), feedKeys = null }) {
