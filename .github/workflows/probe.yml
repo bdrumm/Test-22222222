@@ -1,0 +1,40 @@
+name: probe
+# Fetch candidate data sources from the Actions network (the development container cannot reach them)
+# and print headers plus the first bytes of each response, so new feeds can be evaluated before wiring them in.
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Whitespace-separated URLs to probe"
+        required: true
+      bytes:
+        description: "How many bytes of each body to print"
+        default: "3000"
+      script:
+        description: "Optional python snippet run after the probes (has requests, pandas)"
+        default: ""
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -q requests pandas
+      - name: Probe URLs
+        env:
+          URLS: ${{ inputs.urls }}
+          NBYTES: ${{ inputs.bytes }}
+        run: |
+          for u in $URLS; do
+            echo "=================== $u"
+            curl -sS -L --max-time 60 -D /tmp/h -o /tmp/b -w "status=%{http_code} size=%{size_download} type=%{content_type} time=%{time_total}s\n" "$u" || echo "curl failed"
+            grep -i -E "^(HTTP|content-type|content-length|last-modified|access-control|x-ratelimit)" /tmp/h | head -12
+            if file /tmp/b | grep -qi -E "gzip|xz|zip|tar"; then echo "[binary archive]"; file /tmp/b; (tar -tJf /tmp/b 2>/dev/null || tar -tzf /tmp/b 2>/dev/null || unzip -l /tmp/b 2>/dev/null) | head -20; else head -c "$NBYTES" /tmp/b; echo; fi
+          done
+      - name: Script
+        if: ${{ inputs.script != '' }}
+        env:
+          SCRIPT: ${{ inputs.script }}
+        run: python -c "$SCRIPT"
