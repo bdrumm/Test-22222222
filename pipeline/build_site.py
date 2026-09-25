@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from mta_delay_insights import __version__
@@ -178,6 +179,18 @@ def fit_journeys(store: Store, static: StaticGTFS, targets: dict, alerts: pd.Dat
 
 
 TRAIN_ROWS_CAP = 1_500_000
+MAX_TRAIN_ARRIVALS = 700_000
+
+
+def _cap_arrivals(arr: pd.DataFrame, cap: int, seed: int = 1) -> pd.DataFrame:
+    """Keep whole trips (so momentum, leaders and segment state stay consistent), sampling when over the cap."""
+    if len(arr) <= cap:
+        return arr
+    keys = arr["trip_key"].unique()
+    rng = np.random.default_rng(seed)
+    share = cap / len(arr)
+    keep = set(rng.choice(keys, size=int(len(keys) * share), replace=False))
+    return arr[arr["trip_key"].isin(keep)]
 LINE_VIEW_ROUTES = ["1", "2", "3", "4", "5", "6", "7", "A", "C", "E", "B", "D", "F", "M", "G", "J", "Z", "L", "N", "Q", "R", "W", "SI"]
 
 
@@ -222,6 +235,9 @@ def train_learned(store: Store, static: StaticGTFS, alerts: pd.DataFrame, contex
     if extra_arrivals is not None and not extra_arrivals.empty:
         frames.append(extra_arrivals)
     arr = pd.concat(frames, ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
+    n_all = len(arr)
+    arr = _cap_arrivals(arr, MAX_TRAIN_ARRIVALS)
+    logging.info("training arrivals: %d of %d", len(arr), n_all)
     rows = build_training_rows(arr, static, alerts, context.get("weather_daily"), context.get("events"), eta_samples,
                                nws_df=context.get("nws_alerts"), climatology=context.get("_climatology"))
     if len(rows) > TRAIN_ROWS_CAP:

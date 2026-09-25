@@ -38,7 +38,15 @@ def event_study(arrivals: pd.DataFrame, alerts: pd.DataFrame, static: StaticGTFS
     a = a.drop_duplicates("alert_id")
     if a.empty:
         return out
-    m = match_arrivals(arrivals, static).dropna(subset=["lateness_sec"])
+    # only arrivals within the study windows are matched (the network history can be millions of rows)
+    t0s = np.sort(a["created_at"].astype(float).values)
+    ts = arrivals["arrival_ts"].values.astype(float)
+    i = np.searchsorted(t0s, ts - 7500, side="left")          # first alert whose window could still contain ts
+    in_window = (i < len(t0s)) & (ts >= t0s[np.clip(i, 0, len(t0s) - 1)] - 3600)
+    sub = arrivals[in_window]
+    if sub.empty:
+        return out
+    m = match_arrivals(sub, static).dropna(subset=["lateness_sec"])
     m["route_id"] = m["route_id"].astype(str)
     m = m[(m["lateness_sec"] > -600) & (m["lateness_sec"] < 5400)]
     curves = []
