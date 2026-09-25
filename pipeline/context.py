@@ -79,6 +79,26 @@ def main(argv=None) -> int:
                     lib.save_context(data_dir, "ridership_profile", pd.concat(profiles, ignore_index=True))
     step("weather_daily", lambda: weather.daily_summary(weather.fetch_recent_hourly(args.days)))
 
+    # Historical service alerts (incremental), NWS alerts, elevator outages.
+    from mta_delay_insights.sources import alerts_archive, context_feeds
+    try:
+        old_arch = lib.load_alerts_archive(data_dir)
+        since = (date.today() - timedelta(days=400)).isoformat()
+        if old_arch is not None and not old_arch.empty:
+            since = pd.to_datetime(old_arch["ts"].max(), unit="s", utc=True).tz_convert("America/New_York").strftime("%Y-%m-%dT00:00:00")
+        new_arch = alerts_archive.fetch_archive(since, client)
+        arch = pd.concat([old_arch, new_arch], ignore_index=True) if old_arch is not None and not old_arch.empty else new_arch
+        arch = arch.drop_duplicates(["alert_id"], keep="last")
+        arch = arch[arch["ts"] >= (pd.Timestamp.now().timestamp() - 420 * 86400)]
+        out = arch.copy(); out["routes"] = out["routes"].map(lambda rs: json.dumps(list(rs) if isinstance(rs, (list, tuple)) else []))
+        lib.save_context(data_dir, "alerts_archive", out)
+        record["ok"].append(f"alerts_archive:{len(arch)}(+{len(new_arch)})")
+    except Exception as exc:
+        record["failed"]["alerts_archive"] = str(exc)[:300]
+        logging.warning("alerts_archive failed: %s", exc)
+    step("nws_alerts", context_feeds.fetch_nws_alerts)
+    step("elevator_outages", lambda: context_feeds.fetch_elevator_outages().assign(routes=lambda d: d["routes"].map(json.dumps)))
+
     # External signals for the journey model: permitted events, venue events, news, holidays.
     from mta_delay_insights.sources import events as events_src
     frames = []

@@ -248,6 +248,17 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
             logging.warning("route analysis failed: %s", exc)
             routes_out = {"routes": [], "transfers": [], "error": str(exc)[:200]}
     (out_data / "routes.json").write_text(json.dumps(routes_out, default=str))
+    clim = {"n_events": 0}
+    try:
+        from mta_delay_insights.sources import alerts_archive
+        arch = context.get("alerts_archive")
+        if arch is not None and not arch.empty:
+            clim = alerts_archive.climatology(alerts_archive.events(arch))
+            clim["generated_at"] = now.isoformat()
+    except Exception as exc:
+        logging.warning("climatology failed: %s", exc)
+        clim = {"n_events": 0, "error": str(exc)[:200]}
+    (out_data / "climatology.json").write_text(json.dumps(clim, default=str))
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []
@@ -280,6 +291,8 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
              "models": {tid: {"n_arrivals": m.n_arrivals, "n_days": m.n_days} for tid, m in models.items()},
              "journeys": [{"id": sp.id, "label": sp.label, "legs": [l.as_dict() for l in sp.legs],
                            "n_samples": jmodels[sp.id].n_samples if sp.id in jmodels else 0} for sp in specs],
+             "climatology": {"n_events": clim.get("n_events", 0), "weeks": clim.get("weeks"),
+                             "top_routes": [(x["route"], round(x["per_week"], 2)) for x in clim.get("by_route", [])[:5]]},
              "routes": [{"id": r["id"], "label": r["label"], "status": r["status"], "n_findings": len(r["findings"]),
                          "top": next((f["text"] for f in r["findings"] if f["severity"] in ("high", "medium")), None),
                          "dominant": r["decomposition"].get("dominant")} for r in routes_out.get("routes", [])],
@@ -304,6 +317,8 @@ def build_from_data(args) -> dict:
     context = {k: lib.load_context(data_dir, k) for k in
                ("trains_delayed", "delay_incidents", "major_incidents", "customer_journey", "ridership_profile", "weather_daily")}
     context["events"] = lib.load_events(data_dir)
+    context["alerts_archive"] = lib.load_alerts_archive(data_dir)
+    context["nws_alerts"] = lib.load_context(data_dir, "nws_alerts")
     context["_network_arrivals"] = lib.load_network_arrivals(data_dir, days=NETWORK_TRAIN_DAYS)
     context["_eta_samples"] = lib.load_eta_samples(data_dir, days=45)
     feed_bytes = {}

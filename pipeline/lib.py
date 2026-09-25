@@ -272,3 +272,13 @@ def prune_daily(data_dir: Path, sub: str, keep_days: int) -> list[str]:
         f.unlink()
         removed.append(f.name)
     return removed
+
+
+def load_alerts_archive(data_dir: Path) -> pd.DataFrame | None:
+    df = load_context(data_dir, "alerts_archive")
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+    df["routes"] = df["routes"].map(lambda v: json.loads(v) if isinstance(v, str) and v.startswith("[") else [])
+    df["planned"] = df["planned"].astype(bool)
+    return df

@@ -332,6 +332,19 @@ variance, the feed's variance coming from the look-back calibration of its
 errors by horizon. The trip planner applies the same model to the boarding
 stop and the destination of each leg.
 
+## 9d. Disruption climatology
+
+The MTA service-alert archive (data.ny.gov, since April 2020) is grouped by
+``event_id`` into disruption events: start = first update, end = last update,
+duration = the difference (a lower bound on service impact), routes from the
+``affected`` field, kind from ``status_label`` and cause from the header text
+using the same classifier as live alerts. Planned kinds (planned work,
+weekend/weekday service changes, station notices, boarding changes) are
+excluded. Rates are events per week by route, by hour, by weekday and on a
+7 × 24 grid per route; the grid cell for the current day and hour is the
+expected number of new disruptions on that line in the coming hour, a prior
+that the planner and the model can use before any live signal appears.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

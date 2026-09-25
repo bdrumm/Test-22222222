@@ -36,7 +36,7 @@ const dateTime = iso => { try { return new Date(iso).toLocaleString(undefined, {
 const pctChange = v => v == null ? "–" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
 
 // ---------------------------------------------------------------- routing
-const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage, model: modelPage };
+const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage, model: modelPage, disruptions: disruptionsPage };
 async function render() {
   const [section = "", arg] = location.hash.replace(/^#\/?/, "").split("/");
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === (section || "home")));
@@ -648,4 +648,54 @@ async function modelPage(idx) {
   h("li", null, "Live page: each upcoming train's ETA and range come from this model when it is ready (source 'learned'); otherwise from the look-back calibration of the feed.", ul);
   h("li", null, "Trip planner: ride times and the arrival at the boarding stop use the model for trains already under way; the feed's ETA is a feature when sampled, or blended in by inverse variance when not.", ul);
   h("li", null, "The training table grows with every hourly run (all stops of every feed) and with the subwaydata.nyc backfill of recent days; the model is refitted at every site build on a strict time split.", ul);
+}
+
+
+// ---------------------------------------------------------------- disruption climatology (historical alerts archive)
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+async function disruptionsPage(idx, routeSel) {
+  const root = app; root.replaceChildren();
+  h("h1", null, "Disruption climatology: when and where the subway breaks", root);
+  let c;
+  try { c = await load("climatology.json"); } catch (e) { h("div", "empty", "No climatology yet (data/climatology.json).", root); return; }
+  if (!c.n_events) { h("div", "empty", "The historical alerts archive (data.ny.gov, since 2020) has not been pulled yet; the hourly context step fetches it.", root); return; }
+  h("p", "secondary", `${fmt.compact(c.n_events)} unplanned disruption events (delays, suspensions, reroutes, skipped stops, slow speeds) from the MTA service-alert archive over ${c.weeks.toFixed(0)} weeks (${new Date(c.first_ts * 1000).toLocaleDateString()} – ${new Date(c.last_ts * 1000).toLocaleDateString()}). Each event is one alert thread; its duration is the time from the first to the last update.`, root);
+  const tiles = h("div", "tiles", null, root);
+  const perWeek = c.n_events / c.weeks;
+  tile(tiles, "Disruption events", `${perWeek.toFixed(0)} / week`, `${(perWeek / 7).toFixed(1)} per day across the system`);
+  const top = c.by_route[0];
+  tile(tiles, "Most disrupted line", top ? top.route : "–", top ? `${top.per_week.toFixed(1)} events/week, median ${top.median_duration_min.toFixed(0)} min` : "");
+  const worstH = c.per_week_by_hour.indexOf(Math.max(...c.per_week_by_hour));
+  tile(tiles, "Worst hour", `${String(worstH).padStart(2, "0")}:00`, `${c.per_week_by_hour[worstH].toFixed(1)} events/week start then`);
+  const bc = c.by_cause[0];
+  tile(tiles, "Top cause", bc ? causeName(bc.cause) : "–", bc ? `${(bc.share * 100).toFixed(0)}% of events, median ${bc.median_duration_min.toFixed(0)} min` : "");
+  h("h2", null, "Events per week by line", root);
+  const c1 = h("div", "card", null, root);
+  const br = c.by_route.slice(0, 26);
+  barChart(c1, { title: "Unplanned disruption events per week", subtitle: "a line appears in every event that names it", categories: br.map(r => r.route), series: [{ name: "events/week", values: br.map(r => r.per_week) }], format: fmt.num1, height: 240, labelEvery: 1 });
+  h("h2", null, "When disruptions start", root);
+  const c2 = h("div", "card", null, root); const two = h("div", "two", null, c2);
+  barChart(h("div", null, null, two), { title: "By hour of day", categories: HOURS, series: [{ name: "events/week", values: c.per_week_by_hour }], format: fmt.num1, labelEvery: 3, height: 200 });
+  barChart(h("div", null, null, two), { title: "By day of week", categories: DOW, series: [{ name: "events/week", values: c.per_week_by_dow }], format: fmt.num1, height: 200 });
+  const routesAvail = Object.keys(c.grid_by_route || {}).sort();
+  if (routesAvail.length) {
+    h("h2", null, "Line heatmap: day × hour", root);
+    const c3 = h("div", "card", null, root);
+    const filters = h("div", "filters", null, c3); h("label", "small secondary", "Line", filters);
+    const sel = h("select", null, null, filters); routesAvail.forEach(r => { const o = h("option", null, r, sel); o.value = r; });
+    sel.value = routeSel && routesAvail.includes(routeSel) ? routeSel : (top && routesAvail.includes(top.route) ? top.route : routesAvail[0]);
+    sel.addEventListener("change", () => { location.hash = `#/disruptions/${sel.value}`; });
+    const g = c.grid_by_route[sel.value];
+    heatmap(c3, { title: `${sel.value}: disruption events per week starting in each hour`, rows: DOW, cols: HOURS, values: g, format: fmt.num1, colLabelEvery: 3 });
+  }
+  h("h2", null, "Causes and how long they last", root);
+  const c4 = h("div", "card", null, root); const wrap = h("div", "table-wrap", null, c4); const t = h("table", null, null, wrap);
+  const tr = h("tr", null, null, h("thead", null, null, t)); ["cause", "events", "share", "median duration", "p90 duration"].forEach((x, i) => h("th", i ? "num" : "", x, tr));
+  const tb = h("tbody", null, null, t);
+  c.by_cause.forEach(x => { const r = h("tr", null, null, tb); h("td", null, causeName(x.cause), r); h("td", "num", fmt.compact(x.n), r); h("td", "num", `${(x.share * 100).toFixed(0)}%`, r); h("td", "num", `${x.median_duration_min.toFixed(0)} min`, r); h("td", "num", `${x.p90_duration_min.toFixed(0)} min`, r); });
+  const det = h("details", null, null, root); det.style.marginTop = "1rem"; h("summary", null, "How to use this", det);
+  const ul = h("ul", "small secondary", null, det);
+  h("li", null, "Base rates: the chance a new disruption starts on your line in the next hour is the heatmap cell for the current day and hour (events per week ÷ 1 week = expected events that hour of a typical week).", ul);
+  h("li", null, "Durations are alert-thread lengths (first to last update), a lower bound on the service impact; the Stations and Routes pages measure the impact on actual trains.", ul);
+  h("li", null, "Causes come from the alert text (signal, track, police/medical, mechanical, crowding, weather, ...).", ul);
 }
