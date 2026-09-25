@@ -69,6 +69,14 @@ def main(argv=None) -> int:
                     logging.warning("journey model %s unreadable: %s", jf, exc)
         weather_daily = lib.load_context(data_dir, "weather_daily")
         events_df = lib.load_events(data_dir)
+        nws_df = lib.load_context(data_dir, "nws_alerts")
+        clim_path = Path(args.models_dir).parent / "climatology.json"
+        climatology = None
+        if clim_path.exists():
+            try:
+                climatology = json.loads(clim_path.read_text())
+            except Exception:
+                climatology = None
         learned = None
         lf = Path(args.models_dir) / "arrival.joblib"
         if lf.exists():
@@ -94,7 +102,7 @@ def main(argv=None) -> int:
             alerts_df = alerts_src.alerts_frame(c.last_alerts) if c.last_alerts else c.store.alerts()
             live = build_live(dict(c.last_feed_bytes), alerts_df, static, resolved, models, now, source="pipeline-snapshot",
                               journeys=journeys, journey_models=jmodels, weather_daily=weather_daily, events_df=events_df,
-                              learned=learned, store=store)
+                              learned=learned, store=store, nws_df=nws_df, climatology=climatology)
             Path(args.live_out).write_text(json.dumps(live, default=str))
             state["last"], state["n"] = now, state["n"] + 1
             logging.info("live snapshot %d: %d trains, %s", state["n"], live["trains_total"], live["summary"])

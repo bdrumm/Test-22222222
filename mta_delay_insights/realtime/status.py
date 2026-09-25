@@ -212,7 +212,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
                targets: list[dict], models: dict[str, PropagationModel] | None, now: float | None = None,
                source: str = "live", journeys: list | None = None, journey_models: dict | None = None,
                weather_daily: pd.DataFrame | None = None, events_df: pd.DataFrame | None = None,
-               learned=None, store=None) -> dict:
+               learned=None, store=None, nws_df=None, climatology: dict | None = None) -> dict:
     """Assemble the full live snapshot. ``targets`` are resolved target dicts (see pipeline.lib.resolve_target);
     ``journeys`` are JourneySpec objects with optional fitted ``journey_models``."""
     now = float(now or datetime.now(NY_TZ).timestamp())
@@ -222,7 +222,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
     lctx = None
     if learned is not None and getattr(learned, "ready", False):
         from .learned import LearnedContext
-        lctx = LearnedContext(learned, store, static, now, alerts_df, weather_daily, events_df)
+        lctx = LearnedContext(learned, store, static, now, alerts_df, weather_daily, events_df, nws_df, climatology)
     stations = []
     for t in targets:
         model = (models or {}).get(t["id"])

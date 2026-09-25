@@ -29,6 +29,8 @@ class LearnedContext:
     alerts_df: pd.DataFrame | None = None
     weather_daily: pd.DataFrame | None = None
     events_df: pd.DataFrame | None = None
+    nws_df: pd.DataFrame | None = None
+    climatology: dict | None = None
     _recent: pd.DataFrame | None = None
 
     def recent(self) -> pd.DataFrame:
@@ -108,7 +110,7 @@ class LearnedContext:
         sched_hw = None
         row = live_features(train.route_id, train.direction, int(k), float(sched_run), lat_u, mom1, mom3, gap, leader_lat, same, sched_hw,
                             seg, dest, feed_excess, float(getattr(train, "track_changed", 0.0) or 0.0), self.now,
-                            self.alerts_df, self.weather_daily, self.events_df)
+                            self.alerts_df, self.weather_daily, self.events_df, self.nws_df, self.climatology)
         row["_sched_d"] = sched_d; row["_lat_u"] = lat_u; row["_u"] = u
         return row
 

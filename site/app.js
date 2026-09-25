@@ -222,6 +222,23 @@ function comparisonTable(comps, parent) {
 
 // ---------------------------------------------------------------- lines
 async function lines(idx, line) {
+  try {
+    const sc = await load("scorecard.json");
+    if ((sc.rows || []).length) {
+      h("h2", null, "Network scorecard (observed trains, recent history)", app);
+      h("p", "small secondary", `${fmt.compact(sc.n_arrivals)} observed stop arrivals over ${sc.days.toFixed(0)} days, from the all-stops collection and the subwaydata.nyc backfill. Sorted by share of arrivals ≥5 min late and running-time loss.`, app);
+      const wrap = h("div", "table-wrap card", null, app); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
+      ["line", "dir", "trips/day", "mean late", "p90 late", "≥5 min late", "time lost / trip", "headway CV peak / off", "grew ≥3 min", "worst segment", "by hour"].forEach((x, i) => h("th", i >= 2 && i <= 8 ? "num" : "", x, tr));
+      const tb = h("tbody", null, null, t);
+      sc.rows.forEach(r => { const row = h("tr", null, null, tb); routeBullet(r.route, h("td", null, null, row)); h("td", null, r.direction === "N" ? "N" : "S", row);
+        h("td", "num", r.trips_per_day.toFixed(0), row); h("td", "num", lateTxt(r.mean_lateness_sec), row); h("td", "num", lateTxt(r.p90_lateness_sec), row);
+        h("td", "num", `${(r.share_late_5min * 100).toFixed(0)}%`, row); h("td", "num", `${(r.loss_per_trip_sec / 60).toFixed(1)} min`, row);
+        h("td", "num", `${r.headway_cv_peak == null ? "–" : r.headway_cv_peak.toFixed(2)} / ${r.headway_cv_offpeak == null ? "–" : r.headway_cv_offpeak.toFixed(2)}`, row);
+        h("td", "num", `${(r.share_trips_grew_3min * 100).toFixed(0)}%`, row); h("td", "small", r.worst_segment_stop ? `${r.worst_segment_stop} (+${r.worst_segment_loss_sec.toFixed(0)} s)` : "–", row);
+        const sp = h("td", null, null, row); sparkline(sp, r.hourly_mean_lateness.map(v => v == null ? 0 : v), { width: 110, height: 26 }); });
+      h("div", "small secondary", "Headway CV: standard deviation ÷ mean of headways at the line's busiest observed stop (0.3 is regular, 0.6+ is bunched). Time lost per trip sums the positive lateness changes along the trip. Sparkline: mean lateness by hour of day.", app);
+    }
+  } catch (e) { /* scorecard is optional */ }
   const data = await load("lines.json");
   h("h1", null, "Line trends from MTA Open Data", app);
   h("p", "secondary", "Monthly trains delayed by reported cause, month-over-month and year-over-year change, category over-index versus the system, and customer journey metrics.", app);

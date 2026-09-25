@@ -36,7 +36,8 @@ CATEGORICAL = ["route_code", "direction_code", "cause_code"]
 NUMERIC = ["k", "sched_run_sec", "lateness_u", "mom1", "mom3", "gap_ahead_sec", "leader_lateness", "leader_same_route",
            "sched_headway_sec", "seg_recent_excess", "dest_recent_lateness", "feed_excess", "track_changed",
            "hour_sin", "hour_cos", "weekend", "peak", "alert_active", "planned_active",
-           "precip_mm", "heat", "holiday", "venue_event_w", "street_event_w", "news_w"]
+           "precip_mm", "heat", "holiday", "venue_event_w", "street_event_w", "news_w",
+           "nws_any", "nws_severe", "clim_rate"]
 FEATURES = CATEGORICAL + NUMERIC
 CAUSES = ["none", "signal", "track", "police", "medical", "mechanical", "crowding", "weather", "other"]
 ROUTES = ["1", "2", "3", "4", "5", "6", "6X", "7", "7X", "A", "B", "C", "D", "E", "F", "FX", "G", "J", "L", "M", "N", "Q", "R", "S", "SI", "W", "Z", "FS", "GS", "H"]
@@ -88,9 +89,37 @@ def _alert_feats(idx, ts: float, route: str) -> tuple[float, float, int]:
     return active, planned_on, cause
 
 
+def _nws_arrays(nws: pd.DataFrame | None):
+    if nws is None or nws.empty:
+        return None
+    on = pd.to_numeric(nws["onset_ts"], errors="coerce").fillna(-1e12).values.astype(float)
+    off = pd.to_numeric(nws["ends_ts"], errors="coerce").fillna(1e12).values.astype(float)
+    sev = nws["severity"].isin(["Severe", "Extreme"]).values
+    return on, off, sev
+
+
+def nws_at(arrs, ts: float) -> tuple[float, float]:
+    if arrs is None:
+        return 0.0, 0.0
+    on, off, sev = arrs
+    m = (on <= ts) & (off >= ts)
+    return float(m.any()), float((m & sev).any())
+
+
+def clim_rate_at(clim: dict | None, route: str, ts: float) -> float:
+    if not clim:
+        return float("nan")
+    grid = clim.get("grid_by_route", {}).get(str(route))
+    if not grid:
+        return float("nan")
+    local = datetime.fromtimestamp(ts, NY_TZ)
+    return float(grid[local.weekday()][local.hour])
+
+
 def build_training_rows(arrivals: pd.DataFrame, static: StaticGTFS, alerts_df: pd.DataFrame | None = None,
                         weather_daily: pd.DataFrame | None = None, events_df: pd.DataFrame | None = None,
-                        eta_samples: pd.DataFrame | None = None, k_set=K_SET, min_confidence: float = 0.6) -> pd.DataFrame:
+                        eta_samples: pd.DataFrame | None = None, k_set=K_SET, min_confidence: float = 0.6,
+                        nws_df: pd.DataFrame | None = None, climatology: dict | None = None) -> pd.DataFrame:
     """Vectorised construction of the training table from observed arrivals."""
     if arrivals is None or arrivals.empty:
         return pd.DataFrame(columns=["trip_key", "route_id", "u", "d", "t", "delta_sec"] + FEATURES)
@@ -180,6 +209,11 @@ def build_training_rows(arrivals: pd.DataFrame, static: StaticGTFS, alerts_df: p
     ef = [ctx.event_feats(t, r) for t, r in zip(rows["t"].values, rows["route_id"].values)] if ctx.events is not None else None
     for key in ("holiday", "venue_event_w", "street_event_w", "news_w"):
         rows[key] = [e[key] for e in ef] if ef else 0.0
+    nws_arr = _nws_arrays(nws_df)
+    nw = [nws_at(nws_arr, t) for t in rows["t"].values] if nws_arr is not None else None
+    rows["nws_any"] = [x[0] for x in nw] if nw else 0.0
+    rows["nws_severe"] = [x[1] for x in nw] if nw else 0.0
+    rows["clim_rate"] = [clim_rate_at(climatology, r, t) for r, t in zip(rows["route_id"].values, rows["t"].values)] if climatology else np.nan
     rows["route_code"] = rows["route_id"].map(lambda r: ROUTE_CODE.get(str(r), len(ROUTES)))
     rows["direction_code"] = rows["direction"].map({"N": 0, "S": 1}).fillna(2).astype(int)
     keep = ["trip_key", "route_id", "u", "d", "t", "t_d", "sched_d", "delta_sec"] + FEATURES
@@ -189,8 +223,11 @@ def build_training_rows(arrivals: pd.DataFrame, static: StaticGTFS, alerts_df: p
 def live_features(route_id: str, direction: str | None, k: int, sched_run_sec: float, lateness_u: float, mom1: float | None,
                   mom3: float | None, gap_ahead_sec: float | None, leader_lateness: float | None, leader_same_route: float | None,
                   sched_headway_sec: float | None, seg_recent_excess: float | None, dest_recent_lateness: float | None,
-                  feed_excess: float | None, track_changed: float, t: float, alerts_df=None, weather_daily=None, events_df=None) -> dict:
+                  feed_excess: float | None, track_changed: float, t: float, alerts_df=None, weather_daily=None, events_df=None,
+                  nws_df=None, climatology: dict | None = None) -> dict:
     """A single feature row for serving, mirroring build_training_rows."""
+    nws_any, nws_severe = nws_at(_nws_arrays(nws_df), t)
+    clim = clim_rate_at(climatology, str(route_id), t)
     local = datetime.fromtimestamp(t, NY_TZ)
     hour = local.hour + local.minute / 60.0
     aidx = _alert_index(alerts_df)
@@ -208,4 +245,5 @@ def live_features(route_id: str, direction: str | None, k: int, sched_run_sec: f
             "hour_sin": math.sin(2 * math.pi * hour / 24), "hour_cos": math.cos(2 * math.pi * hour / 24),
             "weekend": float(local.weekday() >= 5), "peak": float(local.hour in PEAK_HOURS and local.weekday() < 5),
             "alert_active": active, "planned_active": planned, "precip_mm": w[0] if w else 0.0, "heat": w[1] if w else 0.0,
-            "holiday": ef["holiday"], "venue_event_w": ef["venue_event_w"], "street_event_w": ef["street_event_w"], "news_w": ef["news_w"]}
+            "holiday": ef["holiday"], "venue_event_w": ef["venue_event_w"], "street_event_w": ef["street_event_w"], "news_w": ef["news_w"],
+            "nws_any": nws_any, "nws_severe": nws_severe, "clim_rate": clim}

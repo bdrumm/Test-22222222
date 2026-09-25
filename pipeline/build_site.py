@@ -222,7 +222,8 @@ def train_learned(store: Store, static: StaticGTFS, alerts: pd.DataFrame, contex
     if extra_arrivals is not None and not extra_arrivals.empty:
         frames.append(extra_arrivals)
     arr = pd.concat(frames, ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
-    rows = build_training_rows(arr, static, alerts, context.get("weather_daily"), context.get("events"), eta_samples)
+    rows = build_training_rows(arr, static, alerts, context.get("weather_daily"), context.get("events"), eta_samples,
+                               nws_df=context.get("nws_alerts"), climatology=context.get("_climatology"))
     if len(rows) > TRAIN_ROWS_CAP:
         rows = rows.sample(TRAIN_ROWS_CAP, random_state=1).sort_values("t")
     model = train_arrival_model(rows)
@@ -245,7 +246,7 @@ def live_snapshot(static: StaticGTFS, resolved: list[dict], models: dict, alerts
         ctx = context or {}
         return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot",
                           journeys=journeys, journey_models=journey_models, weather_daily=ctx.get("weather_daily"), events_df=ctx.get("events"),
-                          learned=learned, store=store)
+                          learned=learned, store=store, nws_df=ctx.get("nws_alerts"), climatology=ctx.get("_climatology"))
     except Exception as exc:
         logging.warning("live snapshot failed: %s", exc)
         return None
@@ -263,6 +264,12 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     models, resolved = fit_models(store, static, targets, now)
     for tid, m in models.items():
         (out_data / "models" / f"{tid}.json").write_text(json.dumps(m.to_dict(), default=str))
+    try:
+        from mta_delay_insights.sources import alerts_archive as _aa
+        arch0 = context.get("alerts_archive")
+        context["_climatology"] = _aa.climatology(_aa.events(arch0)) if arch0 is not None and not arch0.empty else None
+    except Exception as exc:
+        logging.warning("climatology (for features) failed: %s", exc); context["_climatology"] = None
     specs, jmodels = fit_journeys(store, static, targets, alerts, context, now, data_dir if mode == "live" else None)
     for jid, m in jmodels.items():
         (out_data / "models" / f"journey_{jid}.json").write_text(json.dumps(m.to_dict(), default=str))
@@ -284,16 +291,8 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
             logging.warning("route analysis failed: %s", exc)
             routes_out = {"routes": [], "transfers": [], "error": str(exc)[:200]}
     (out_data / "routes.json").write_text(json.dumps(routes_out, default=str))
-    clim = {"n_events": 0}
-    try:
-        from mta_delay_insights.sources import alerts_archive
-        arch = context.get("alerts_archive")
-        if arch is not None and not arch.empty:
-            clim = alerts_archive.climatology(alerts_archive.events(arch))
-            clim["generated_at"] = now.isoformat()
-    except Exception as exc:
-        logging.warning("climatology failed: %s", exc)
-        clim = {"n_events": 0, "error": str(exc)[:200]}
+    clim = dict(context.get("_climatology") or {"n_events": 0})
+    clim["generated_at"] = now.isoformat()
     (out_data / "climatology.json").write_text(json.dumps(clim, default=str))
     lines_index = build_line_views(store, static, context, live, out_data, now)
     trust = {"n": 0}
@@ -313,6 +312,15 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         logging.warning("event study failed: %s", exc)
         es = {"n_alerts": 0, "error": str(exc)[:200]}
     (out_data / "event_study.json").write_text(json.dumps(es, default=str))
+    try:
+        from mta_delay_insights.analysis.scorecard import scorecard
+        sc_arr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
+        sc = scorecard(sc_arr, static)
+        sc["generated_at"] = now.isoformat()
+    except Exception as exc:
+        logging.warning("scorecard failed: %s", exc)
+        sc = {"rows": [], "error": str(exc)[:200]}
+    (out_data / "scorecard.json").write_text(json.dumps(sc, default=str))
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []

@@ -401,6 +401,24 @@ of the baseline). Averaged per cause and overall, this gives the *detection
 lag* (how long trains showed the problem before the MTA posted), the *peak
 excess* and the *recovery time*, and a mean curve for the Alerts page.
 
+## 9h. Network scorecard and context features
+
+Per route and direction over the recent network-wide history: trips per day,
+mean and p90 lateness over observed stop arrivals, the share ≥ 5 minutes late
+and the share early, running-time loss per trip (sum of positive lateness
+changes between consecutive observed stops), the share of trips whose
+lateness grew by ≥ 3 minutes between first and last observed stop, headway
+regularity as the coefficient of variation of headways at the line's busiest
+observed stop in weekday peaks and otherwise, the worst segment (largest mean
+lateness change at its arrival stop, ≥ 10 trips) and mean lateness by hour.
+
+Two context features join the learned model: NWS severe-weather alerts for
+the five boroughs (any active advisory, and any Severe/Extreme one, at the
+moment of the row, from the accumulated alert history) and the disruption
+climatology rate for the route at that weekday and hour (expected unplanned
+disruptions per hour from the alert archive), a prior for the model before
+any live symptom appears.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

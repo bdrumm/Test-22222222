@@ -81,3 +81,14 @@ def test_event_study_curves(static):
     assert 0 <= o["bins"][peak_i] <= 40           # the injected 20-45 min episodes peak shortly after the alert
     assert o["recovery_min"] is not None and o["recovery_min"] > o["bins"][peak_i]
     assert es["by_cause"][0]["cause"] == "signal"
+
+
+def test_scorecard_rows(static):
+    from mta_delay_insights.analysis.scorecard import scorecard
+    sim, store, sc = _sim(static, days=8)
+    sc_ = scorecard(sim.arrivals, static)
+    assert sc_["n_arrivals"] > 1000 and len(sc_["rows"]) == 2
+    r6 = next(r for r in sc_["rows"] if r["route"] == "6")
+    assert r6["direction"] == "N" and r6["n_trips"] > 100 and 0 <= r6["share_late_5min"] <= 1
+    assert r6["headway_cv_peak"] is not None and r6["loss_per_trip_sec"] >= 0 and len(r6["hourly_mean_lateness"]) == 24
+    assert r6["worst_segment_stop"] in ("33 St", "28 St", "Grand Central-42 St")

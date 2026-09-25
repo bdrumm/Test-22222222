@@ -96,7 +96,17 @@ def main(argv=None) -> int:
     except Exception as exc:
         record["failed"]["alerts_archive"] = str(exc)[:300]
         logging.warning("alerts_archive failed: %s", exc)
-    step("nws_alerts", context_feeds.fetch_nws_alerts)
+    try:
+        nws = context_feeds.fetch_nws_alerts()
+        old_nws = lib.load_context(data_dir, "nws_alerts")
+        if old_nws is not None and not old_nws.empty:
+            nws = pd.concat([old_nws, nws], ignore_index=True).drop_duplicates("id", keep="last")
+            nws = nws[pd.to_numeric(nws["ends_ts"], errors="coerce").fillna(pd.Timestamp.now().timestamp()) >= pd.Timestamp.now().timestamp() - 120 * 86400]
+        lib.save_context(data_dir, "nws_alerts", nws)
+        record["ok"].append(f"nws_alerts:{len(nws)}")
+    except Exception as exc:
+        record["failed"]["nws_alerts"] = str(exc)[:300]
+        logging.warning("nws_alerts failed: %s", exc)
     step("elevator_outages", lambda: context_feeds.fetch_elevator_outages().assign(routes=lambda d: d["routes"].map(json.dumps)))
 
     # External signals for the journey model: permitted events, venue events, news, holidays.
