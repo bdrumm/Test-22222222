@@ -114,14 +114,14 @@ function describePosition(veh, line, targetStop, schedTarget, now, C) {
   const stops = line ? line.stops : [], names = line ? line.names : [];
   const j = stops.indexOf(veh.stop_id), k = stops.indexOf(targetStop);
   let holding = false, stalled = false, expectedRun = null, positionLateness = null;
-  if (veh.status === "STOPPED_AT") holding = since != null && since >= C.hold_sec;
+  if (veh.status === "STOPPED_AT") holding = since != null && since >= C.hold_sec && j !== 0;   // waiting at the origin terminal is not a hold
   else if (since != null && j > 0 && line.run_sec[j - 1] != null) { expectedRun = line.run_sec[j - 1]; stalled = since > expectedRun + C.stall_slack_sec; }
   if (schedTarget != null && j >= 0 && k >= 0 && j <= k) {
     // scheduled time at the position stop ~ scheduled time at the target minus the canonical running time in between
     let run = 0, ok = true; for (let q = j; q < k; q++) { if (line.run_sec[q] == null) { ok = false; break; } run += line.run_sec[q]; }
     if (ok) { const remaining = veh.status === "STOPPED_AT" ? 0 : (expectedRun != null ? Math.max(0, expectedRun - since) : 0); positionLateness = now + remaining - (schedTarget - run); }
   }
-  return { status: veh.status, stop_id: veh.stop_id, stop_name: j >= 0 ? names[j] : veh.stop_id, since_sec: since, holding, stalled, expected_run_sec: expectedRun, position_lateness_sec: positionLateness };
+  return { status: veh.status, stop_id: veh.stop_id, stop_name: j >= 0 ? names[j] : veh.stop_id, since_sec: since, holding, stalled, at_origin: j === 0, expected_run_sec: expectedRun, position_lateness_sec: positionLateness };
 }
 
 /** Build the board for every monitored platform from parsed feeds ({feedKey: parsedFeed}). */
@@ -226,7 +226,7 @@ export function lineBoard(schedule, lineSched, feeds, route, direction, now) {
     if (hasPos) {
       const pj = idx.get(veh.stop_id), since = Math.max(0, now - veh.timestamp);
       let holding = false, stalled = false, expectedRun = null, plate = null;
-      if (veh.status === "STOPPED_AT") holding = since >= C.hold_sec;
+      if (veh.status === "STOPPED_AT") holding = since >= C.hold_sec && pj !== 0;
       else if (pj != null && pj > 0 && line.run_sec[pj - 1] != null) { expectedRun = line.run_sec[pj - 1]; stalled = since > expectedRun + C.stall_slack_sec; }
       if (sched != null && pj != null && pj <= j) { const run = runBetween(line, pj, j); if (run != null) { const remaining = veh.status === "STOPPED_AT" ? 0 : (expectedRun != null ? Math.max(0, expectedRun - since) : 0); plate = now + remaining - (sched - run); } }
       pos = { status: veh.status, stop_id: veh.stop_id, stop_idx: pj ?? null, stop_name: pj != null ? line.names[pj] : veh.stop_id, since_sec: since, holding, stalled, expected_run_sec: expectedRun, position_lateness_sec: plate };
@@ -255,7 +255,7 @@ export function planJourneys(schedule, feeds, now, maxOptions = 4) {
     const since = Math.max(0, now - veh.timestamp), status = veh.status || "IN_TRANSIT_TO";
     const line = schedule.lines[`${tu.trip.route_id}_${(tu.stops[0].stop_id || "").slice(-1)}`]; const j = line ? line.stops.indexOf(veh.stop_id) : -1;
     const run = j > 0 && line ? line.run_sec[j - 1] : null;
-    return { status, stop_id: veh.stop_id, stop_name: j >= 0 ? line.names[j] : veh.stop_id, since_sec: since, holding: status === "STOPPED_AT" && since >= C.hold_sec, stalled: status !== "STOPPED_AT" && run != null && since > run + C.stall_slack_sec };
+    return { status, stop_id: veh.stop_id, stop_name: j >= 0 ? line.names[j] : veh.stop_id, since_sec: since, holding: status === "STOPPED_AT" && since >= C.hold_sec && j !== 0, stalled: status !== "STOPPED_AT" && run != null && since > run + C.stall_slack_sec };
   };
   // trains serving (from -> to) for a leg: [board_ts, arrive_ts, trip]
   const rides = (leg, notBefore) => {

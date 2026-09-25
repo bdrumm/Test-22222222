@@ -543,6 +543,8 @@ async function live(idx) {
     const tiles = h("div", "tiles", null, root);
     tile(tiles, "Trains in service", d.trains_total, `${d.trains_matched} matched to schedule${d.trains_scheduled_not_started ? ` · ${d.trains_scheduled_not_started} scheduled, not yet departed` : ""}`);
     if (d.positions) tile(tiles, "Holding or stalled", (d.positions.holding || 0) + (d.positions.stalled || 0), `${d.positions.n_with_position} trains with a position · feed optimistic for ${d.positions.feed_optimistic}`);
+    const hl = d.holds_last_hour;
+    if (hl && hl.n != null) tile(tiles, "Holds in the last hour", hl.n, hl.n ? `${hl.minutes} min held · ${Object.entries(hl.by_route).slice(0, 4).map(([r, n]) => `${r}: ${n}`).join(", ")}${hl.top_stops[0] ? ` · most at ${hl.top_stops[0].name}` : ""}` : "no train held ≥ 2.5 min outside a terminal");
     tile(tiles, "Routes good", d.summary.good); tile(tiles, "Routes degraded", d.summary.degraded); tile(tiles, "Routes disrupted", d.summary.disrupted);
     tile(tiles, "Unplanned alerts", d.alerts.length);
 

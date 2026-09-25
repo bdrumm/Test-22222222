@@ -55,8 +55,9 @@ class LiveTrain:
     pos_ts: float | None = None            # feed timestamp of the current position state
     since_update_sec: float | None = None  # time in the current state (dwell so far, or run so far)
     expected_run_sec: float | None = None  # scheduled run time into pos_stop_id (IN_TRANSIT_TO)
-    holding: bool = False                  # stopped at a station much longer than a normal dwell
+    holding: bool = False                  # stopped at a station much longer than a normal dwell (not at its origin terminal)
     stalled: bool = False                  # between stations much longer than the scheduled run
+    at_origin: bool = False                # stopped at the route's origin terminal: waiting to depart is not a hold
     position_lateness_sec: float | None = None   # lateness implied by the position alone
     corroboration: str | None = None       # feed ETA vs position: agree | feed_optimistic | position_unknown
 
@@ -123,19 +124,19 @@ def _fuse_position(train: "LiveTrain", veh: dict, static: StaticGTFS | None, now
     if static is None or not train.pos_stop_id or train.service_date is None:
         return
     sched_here = _sched_at(static, train, train.pos_stop_id)
+    try:
+        seq = static.canonical_stop_sequence(train.route_id, train.direction or "N")
+    except Exception:
+        seq = []
+    train.at_origin = bool(seq) and train.pos_stop_id == seq[0]
     if train.pos_status == "STOPPED_AT":
         if train.since_update_sec is not None:
-            train.holding = train.since_update_sec >= HOLD_SEC
+            train.holding = train.since_update_sec >= HOLD_SEC and not train.at_origin
         if sched_here is not None:
             train.position_lateness_sec = float(now - sched_here)          # still here: at least this late
     elif train.pos_status in ("IN_TRANSIT_TO", "INCOMING_AT"):
-        prev = None
-        try:
-            seq = static.canonical_stop_sequence(train.route_id, train.direction or "N")
-            i = seq.index(train.pos_stop_id) if train.pos_stop_id in seq else -1
-            prev = seq[i - 1] if i > 0 else None
-        except Exception:
-            prev = None
+        i = seq.index(train.pos_stop_id) if train.pos_stop_id in seq else -1
+        prev = seq[i - 1] if i > 0 else None
         if prev is not None and sched_here is not None:
             sched_prev = _sched_at(static, train, prev)
             if sched_prev is not None:
@@ -314,6 +315,37 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
     return out
 
 
+def recent_holds(store, static: StaticGTFS | None, now: float, window_sec: float = 3600.0) -> dict | None:
+    """Holds (dwell >= HOLD_SEC) observed anywhere in the last hour, excluding origin terminals where waiting is by design."""
+    if store is None:
+        return None
+    try:
+        dw = store.dwells(None, now - window_sec, now)
+    except Exception:
+        return None
+    if dw is None or dw.empty:
+        return {"n": 0, "window_sec": window_sec, "by_route": {}, "top_stops": [], "minutes": 0.0}
+    hh = dw[dw["dwell_sec"] >= HOLD_SEC].copy()
+    if static is not None and not hh.empty:
+        origins = set()
+        for r in hh["route_id"].dropna().unique():
+            for d in ("N", "S"):
+                try:
+                    seq = static.canonical_stop_sequence(str(r), d)
+                    if seq:
+                        origins.add(seq[0])
+                except Exception:
+                    pass
+        hh = hh[~hh["stop_id"].isin(origins)]
+    name = static.stop_name if static is not None else (lambda s: s)
+    top = []
+    for sid, g in hh.groupby("stop_id"):
+        top.append({"stop_id": sid, "name": name(sid), "n": int(len(g)), "max_sec": float(g["dwell_sec"].max()), "routes": sorted({str(x) for x in g["route_id"].dropna()})})
+    top.sort(key=lambda x: (-x["n"], -x["max_sec"]))
+    return {"n": int(len(hh)), "window_sec": window_sec, "minutes": round(float(hh["dwell_sec"].sum()) / 60, 1),
+            "by_route": {str(k): int(v) for k, v in hh.groupby("route_id").size().sort_values(ascending=False).head(8).items()}, "top_stops": top[:6]}
+
+
 def _scrub_nan(obj):
     """NaN is not valid JSON: browsers reject the whole snapshot. Replace it with null everywhere."""
     if isinstance(obj, float):
@@ -430,6 +462,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
         "route_choice": comparisons, "leave_by": leave_by_out,
         "simulation": [x for x in sims if "error" not in x],
         "simulation_error": next((x["error"] for x in sims if "error" in x), None),
+        "holds_last_hour": recent_holds(store, static, now),
         "positions": {"n_with_position": sum(1 for t in trains if t.pos_status and t.started),
                       "holding": sum(1 for t in trains if t.holding and t.started), "stalled": sum(1 for t in trains if t.stalled and t.started),
                       "feed_optimistic": sum(1 for t in trains if t.corroboration == "feed_optimistic" and t.started)},

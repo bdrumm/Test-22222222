@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+import pandas as pd
+
 from mta_delay_insights import synthetic
 from mta_delay_insights.realtime import build_live, live_trains
 from google.transit import gtfs_realtime_pb2 as pb
@@ -88,3 +90,28 @@ def test_unmatched_trip_id_falls_back_to_the_nearest_scheduled_trip(static):
     assert t.sched_matched and t.sched_method == "nearest" and t.sched_trip_id and t.lateness_sec is not None and abs(t.lateness_sec) < 900
     if t.pos_status:
         assert t.corroboration in ("agree", "feed_optimistic")
+
+
+def test_waiting_at_the_origin_terminal_is_not_a_hold(static):
+    sim, now, feeds, _ = _snapshot(static)
+    key, data = next(iter(feeds.items()))
+    msg = rt.parse_feed(data)
+    origin = static.canonical_stop_sequence("6", "N")[0]
+    victim = None
+    for ent in msg.entity:
+        if ent.HasField("vehicle") and ent.vehicle.trip.route_id == "6" and ent.vehicle.current_status == pb.VehiclePosition.VehicleStopStatus.Value("STOPPED_AT"):
+            ent.vehicle.stop_id = origin; ent.vehicle.timestamp = int(now - 900); victim = ent.vehicle.trip.trip_id
+            break
+    assert victim
+    trains = {t.trip_id: t for t in live_trains({key: msg.SerializeToString()}, static, now)}
+    t = trains[victim]
+    assert t.at_origin and t.since_update_sec >= 900 and not t.holding
+    from mta_delay_insights.storage.db import Store
+    from mta_delay_insights.realtime import build_live
+    store = Store(":memory:")
+    store.insert_dwells(pd.DataFrame([
+        {"trip_key": "a|x", "route_id": "6", "direction": "N", "stop_id": "633N", "stopped_from_ts": now - 1200, "stopped_to_ts": now - 900, "dwell_sec": 300, "polls": 10},
+        {"trip_key": "b|y", "route_id": "6", "direction": "N", "stop_id": origin, "stopped_from_ts": now - 1500, "stopped_to_ts": now - 600, "dwell_sec": 900, "polls": 30}]))
+    live = build_live({key: msg.SerializeToString()}, None, static, [], {}, now, store=store)
+    hl = live["holds_last_hour"]
+    assert hl["n"] == 1 and hl["top_stops"][0]["stop_id"] == "633N" and hl["by_route"] == {"6": 1}, "the terminal wait is excluded"

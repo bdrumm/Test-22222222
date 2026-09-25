@@ -158,7 +158,9 @@ def station_scenarios(sims: list[dict], stop_id: str, now: float, n: int = 4) ->
     if worst:
         he = worst["hold_effect"]
         lead = f"If the hold on the {worst['route']} persists {he['hold_extra_sec'] / 60:.0f} more minutes, "
-        if he["extra_sec"]:
+        if he["extra_sec"] and max(he["extra_sec"]) < 60:
+            headline = lead + f"the next {worst['route']} trains here are unaffected (the held train is behind them)"
+        elif he["extra_sec"]:
             headline = lead + f"the next {worst['route']} trains here arrive {'/'.join(f'{d / 60:.0f}' for d in he['extra_sec'][:3])} min later"
             if he.get("max_headway_sec"):
                 headline += f" and the gap grows to {he['max_headway_sec'] / 60:.0f} min"

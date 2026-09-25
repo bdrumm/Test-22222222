@@ -450,7 +450,9 @@ NYCT feed sets to the time the train *entered* that state. Hence
 `since_update_sec = now − vehicle.timestamp` is how long the train has been
 stopped at, or running toward, that stop.
 
-* *Holding*: STOPPED_AT for ≥ `HOLD_SEC` (150 s; a normal dwell is 30–60 s).
+* *Holding*: STOPPED_AT for ≥ `HOLD_SEC` (150 s; a normal dwell is 30–60 s),
+  except at the route's origin terminal, where waiting to depart is by design
+  (the wait still counts toward the train's position lateness).
 * *Stalled*: IN_TRANSIT_TO for longer than the scheduled run from the previous
   stop of the route's canonical sequence plus `STALL_SLACK_SEC` (120 s).
 * *Position lateness*: the schedule says when the train should have been at
@@ -466,6 +468,8 @@ stopped at, or running toward, that stop.
   the learned model receives the effective lateness as its state.
 
 Holding trains stopped for ≥ 2 × HOLD_SEC and stalled trains are listed with
+the developing incidents, and the snapshot carries the holds observed anywhere
+in the last hour (`holds_last_hour`, origin terminals excluded); they are listed with
 the developing incidents (kind `holding` / `stalled`), with a note when no
 alert has been posted for the route yet.
 
