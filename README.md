@@ -60,7 +60,7 @@ log reports the HTTP status of the live URL.
 | Stations | one card per monitored platform: severity, verdict, focus hours, where / why, rider impact |
 | Station report | what changed (with CIs), problem rate and lateness by hour, day × hour heatmap, daily trend, ranked locations and causes with evidence, recommendations |
 | Lines | monthly trains delayed by reported cause per line (MTA Open Data), month-over-month / year-over-year change, cause mix vs system, customer journey metrics, major incidents |
-| Alerts | alerts seen in the last 24 h with cause tags |
+| Alerts | alerts seen in the last 24 h with cause tags; the *event study*: mean lateness of the route's trains from 60 min before to 120 min after an unplanned alert is posted, detection lag, peak excess and recovery time, overall and by cause |
 | Data | collection coverage, pipeline runs, source catalog |
 
 **How the data gets there.** `.github/workflows/pipeline.yml` runs hourly (and

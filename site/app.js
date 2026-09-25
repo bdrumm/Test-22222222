@@ -297,6 +297,23 @@ async function alerts() {
         h("td", "small", a.active_start ? new Date(a.active_start * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "–", row); h("td", null, a.header, row); });
   };
   sel.addEventListener("change", draw); search.addEventListener("input", draw); draw();
+
+  try {
+    const es = await load("event_study.json");
+    if (es && es.n_alerts && es.overall) {
+      h("h2", null, "What happens around an alert", app);
+      const card = h("div", "card", null, app);
+      const o = es.overall;
+      const tiles = h("div", "tiles", null, card);
+      tile(tiles, "Alerts studied", String(es.n_alerts), "unplanned alerts with observed trains");
+      tile(tiles, "Detection lag", o.detection_lag_min != null ? `${o.detection_lag_min.toFixed(0)} min` : "–", o.share_with_onset_before != null ? `${(o.share_with_onset_before * 100).toFixed(0)}% of alerts: lateness rose ≥2 min before the post` : "");
+      tile(tiles, "Peak excess", o.peak_excess_sec != null ? `${(o.peak_excess_sec / 60).toFixed(1)} min` : "–", "median over alerts vs the pre-alert level");
+      tile(tiles, "Recovery", o.recovery_min != null ? `${o.recovery_min.toFixed(0)} min` : "–", o.share_recovered != null ? `${(o.share_recovered * 100).toFixed(0)}% recovered within 2 h` : "");
+      const series = [{ name: "all causes", values: o.mean_curve }, ...es.by_cause.slice(0, 4).map(c => ({ name: causeName(c.cause), values: c.mean_curve }))];
+      lineChart(card, { title: "Mean lateness of the route's trains around the alert (minutes before/after it was posted)", x: o.bins.map(b => `${b >= 0 ? "+" : ""}${b}`), series, format: fmt.sec, labelEvery: 4, yMin: 0 });
+      h("div", "small secondary", "0 is the moment the MTA posted the alert. Lateness rising well before 0 means the trains showed the problem first; the tail after the peak is how long service takes to recover.", card);
+    }
+  } catch (e) { /* optional */ }
 }
 
 // ---------------------------------------------------------------- data / about
@@ -307,6 +324,14 @@ async function dataPage(idx) {
   const tiles = h("div", "tiles", null, app);
   tile(tiles, "Observed arrivals", fmt.compact(st.arrivals_total)); tile(tiles, "Days with data", st.days_with_data); tile(tiles, "Pipeline runs logged", (st.runs || []).length);
   tile(tiles, "Static GTFS", st.gtfs?.feed_version || "–", st.gtfs ? `${st.gtfs.stations} stations · ${st.gtfs.routes} routes` : "");
+  const ds = st.datasets || {};
+  if (Object.keys(ds).length) {
+    const t2 = h("div", "tiles", null, app); t2.style.marginTop = ".6rem";
+    tile(t2, "Network-wide arrivals", fmt.compact(ds.network_arrivals || 0), `${ds.network_days || 0} days · ${Object.entries(ds.network_sources || {}).map(([k, v]) => `${k} ${fmt.compact(v)}`).join(", ") || "own collection + subwaydata.nyc"}`);
+    tile(t2, "ETA samples", fmt.compact(ds.eta_samples || 0), "feed predictions at 1–12 stops ahead");
+    tile(t2, "Dwell estimates", fmt.compact(ds.dwells || 0), "from vehicle positions");
+    tile(t2, "Alert archive rows", fmt.compact(ds.alerts_archive_rows || 0), `${fmt.compact(ds.events_rows || 0)} event/news rows`);
+  }
   const days = Object.keys(st.arrivals_per_day || {}).sort();
   if (days.length) { const c = h("div", "card", null, app); c.style.marginTop = "1rem"; barChart(c, { title: "Observed arrivals per day", categories: days.map(d => d.slice(5)), series: [{ name: "arrivals", values: days.map(d => st.arrivals_per_day[d]) }], labelEvery: Math.max(1, Math.ceil(days.length / 12)) }); }
   h("h2", null, "Recent runs", app);

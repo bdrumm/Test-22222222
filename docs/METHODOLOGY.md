@@ -390,6 +390,17 @@ scheduled headway), the transfer walk, the scheduled ride plus the journey
 model's expected excess, and the p90 residual of that route and period. The
 typical trip uses the expected wait and no residual margin.
 
+## 9g. Alert event study
+
+For every unplanned alert with routes, the mean lateness of that route's
+observed arrivals is binned in 5-minute steps from 60 minutes before the
+alert's creation to 120 minutes after. Per alert: the pre-alert baseline
+(bins before −15 min), the onset (first bin before 0 at ≥ 2 min above the
+baseline), the peak and the recovery (first bin after the peak within 1 min
+of the baseline). Averaged per cause and overall, this gives the *detection
+lag* (how long trains showed the problem before the MTA posted), the *peak
+excess* and the *recovery time*, and a mean curve for the Alerts page.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

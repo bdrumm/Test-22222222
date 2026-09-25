@@ -305,6 +305,14 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     except Exception as exc:
         logging.warning("eta trust failed: %s", exc)
     (out_data / "eta_trust.json").write_text(json.dumps(trust, default=str))
+    try:
+        from mta_delay_insights.analysis.event_study import event_study
+        es_arr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
+        es = event_study(es_arr, alerts, static)
+    except Exception as exc:
+        logging.warning("event study failed: %s", exc)
+        es = {"n_alerts": 0, "error": str(exc)[:200]}
+    (out_data / "event_study.json").write_text(json.dumps(es, default=str))
     if live is not None:
         (out_data / "live.json").write_text(json.dumps(live, default=str))
     coverage = coverage_from_runs(runs) if mode == "live" else []
@@ -324,11 +332,22 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     per_day = {}
     if not arr_all.empty:
         per_day = arr_all["arrival_ts"].map(lib.local_date).value_counts().sort_index().to_dict()
+    net = context.get("_network_arrivals")
+    es_samples = context.get("_eta_samples")
+    datasets = {"core_arrivals": int(len(arr_all)),
+                "network_arrivals": int(len(net)) if net is not None else 0,
+                "network_days": int(pd.to_datetime(net["arrival_ts"], unit="s").dt.date.nunique()) if net is not None and not net.empty else 0,
+                "network_sources": (net["source"].value_counts().to_dict() if net is not None and not net.empty and "source" in net else {}),
+                "eta_samples": int(len(es_samples)) if es_samples is not None else 0,
+                "dwells": int(len(context.get("_dwells"))) if context.get("_dwells") is not None else 0,
+                "alerts_archive_rows": int(len(context.get("alerts_archive"))) if context.get("alerts_archive") is not None else 0,
+                "events_rows": int(len(context.get("events"))) if context.get("events") is not None else 0,
+                "backfill_days": (context.get("_backfill_manifest") or {}).get("n_days", 0)}
     status = {"generated_at": now.isoformat(), "mode": mode, "version": __version__,
               "arrivals_total": int(len(arr_all)), "arrivals_per_day": per_day,
               "days_with_data": len(per_day), "runs": runs[-60:],
-              "context": {k: (int(len(v)) if v is not None else 0) for k, v in context.items()},
-              "gtfs": static.summary()}
+              "context": {k: (int(len(v)) if v is not None and hasattr(v, "__len__") else 0) for k, v in context.items() if not k.startswith("_")},
+              "datasets": datasets, "gtfs": static.summary()}
     (out_data / "status.json").write_text(json.dumps(status, default=str))
     index = {"generated_at": now.isoformat(), "mode": mode, "targets": [e for e, _ in reports], "live": live is not None,
              "lines_view": lines_index, "eta_trust_n": trust.get("n", 0),
@@ -368,6 +387,13 @@ def build_from_data(args) -> dict:
     context["nws_alerts"] = lib.load_context(data_dir, "nws_alerts")
     context["_network_arrivals"] = lib.load_network_arrivals(data_dir, days=NETWORK_TRAIN_DAYS)
     context["_eta_samples"] = lib.load_eta_samples(data_dir, days=45)
+    context["_dwells"] = lib.load_dwells(data_dir, days=45)
+    mpath = data_dir / "arrivals_all" / "backfill_manifest.json"
+    if mpath.exists():
+        try:
+            mf = json.loads(mpath.read_text()); context["_backfill_manifest"] = {"n_days": sum(1 for v in mf.get("days", {}).values() if v.get("rows"))}
+        except Exception:
+            pass
     feed_bytes = {}
     context["_feed_bytes"] = feed_bytes
     if not args.no_feeds:

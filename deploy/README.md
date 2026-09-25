@@ -11,6 +11,10 @@ docker compose up -d --build          # http://localhost:8000  (app + /api/*)
 docker compose logs -f insights
 ```
 
+A prebuilt image is published by the `image` workflow on every change:
+`ghcr.io/bdrumm/mta-delay-insights:latest` (use it in `docker-compose.yml`
+with `image:` instead of `build:`).
+
 The container downloads the static GTFS on first start (and refreshes it
 daily), polls all realtime feeds every 30 s into `/data/mta.sqlite`, refits
 the propagation, journey and learned arrival models every 30 minutes from its

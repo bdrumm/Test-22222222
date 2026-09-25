@@ -68,3 +68,16 @@ def test_eta_trust_summary():
     assert t["n"] == 120 and len(t["overall"]) == 2 and "6" in t["by_route"]
     k3 = [x for x in t["overall"] if x["stops_ahead"] == 3][0]
     assert 10 <= k3["median_abs_err_sec"] <= 30 and k3["n"] == 60
+
+
+def test_event_study_curves(static):
+    from mta_delay_insights.analysis.event_study import event_study
+    sim, store, sc = _sim(static, days=16)
+    es = event_study(sim.arrivals, sim.alerts, static)
+    assert es["n_alerts"] >= 3
+    o = es["overall"]
+    assert len(o["mean_curve"]) == len(o["bins"]) and o["peak_excess_sec"] > 60
+    peak_i = max(range(len(o["bins"])), key=lambda i: (o["mean_curve"][i] or 0))
+    assert 0 <= o["bins"][peak_i] <= 40           # the injected 20-45 min episodes peak shortly after the alert
+    assert o["recovery_min"] is not None and o["recovery_min"] > o["bins"][peak_i]
+    assert es["by_cause"][0]["cause"] == "signal"
