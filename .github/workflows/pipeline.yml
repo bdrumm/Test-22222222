@@ -96,8 +96,16 @@ jobs:
           has_pages=$(curl -sS "https://api.github.com/repos/${{ github.repository }}" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("has_pages"))')
           echo "has_pages=$has_pages"
           sleep 45
-          code=$(curl -sS -o /dev/null -w "%{http_code}" "${URL}data/index.json" || echo "000")
-          echo "published site ${URL} -> HTTP ${code}"
-          if [ "$code" != "200" ]; then
-            echo "::warning::Site not served yet (HTTP ${code}). Enable Pages: Settings > Pages > Source 'Deploy from a branch' (gh-pages, /) or 'GitHub Actions'."
+          root=$(curl -sSL -o /tmp/root.html -w "%{http_code}" "${URL}" || echo "000")
+          data=$(curl -sS -o /dev/null -w "%{http_code}" "${URL}data/index.json" || echo "000")
+          site=$(curl -sS -o /dev/null -w "%{http_code}" "${URL}site/index.html" || echo "000")
+          echo "published site ${URL} -> root HTTP ${root}, data/index.json HTTP ${data}, site/index.html HTTP ${site}"
+          if [ "$data" = "200" ]; then
+            echo "mode: built site (gh-pages branch or Actions deployment); the app loads data from the same origin"
+          elif [ "$site" = "200" ]; then
+            echo "mode: source branch; the app is served via site/ and loads data from the gh-pages branch (raw.githubusercontent.com)"
+            echo "::notice::Pages is publishing the source branch. For same-origin data switch Settings > Pages > Source to the gh-pages branch (/) or to GitHub Actions."
+          else
+            echo "::warning::Site not served yet (root HTTP ${root}). Enable Pages: Settings > Pages > Source 'Deploy from a branch' (gh-pages, /) or 'GitHub Actions'."
           fi
+          grep -o "<title>[^<]*</title>" /tmp/root.html | head -1 || true

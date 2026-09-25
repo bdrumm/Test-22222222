@@ -1,9 +1,23 @@
 import { barChart, lineChart, heatmap, sparkline, fmt, seriesColor } from "./charts.js";
 
 const app = document.getElementById("app");
-const DATA = "data/";
+// Where the JSON lives. Normally next to the page (built site). When GitHub Pages serves the
+// repository's source branch instead of the built site, fall back to the published gh-pages
+// branch through raw.githubusercontent.com. `?data=<base url>` overrides both (local dev).
+let DATA = "data/";
+let dataSource = "same-origin";
+async function resolveDataBase() {
+  const override = new URLSearchParams(location.search).get("data");
+  if (override) { DATA = override.endsWith("/") ? override : override + "/"; dataSource = "override"; return; }
+  try { const r = await fetch("data/index.json", { cache: "no-cache", method: "HEAD" }); if (r.ok) return; } catch {}
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
+  const repo = location.pathname.split("/").filter(Boolean)[0];
+  if (m && repo) { DATA = `https://raw.githubusercontent.com/${m[1]}/${repo}/gh-pages/data/`; dataSource = "gh-pages (raw)"; }
+}
+const dataReady = resolveDataBase();
 const cache = new Map();
 async function load(path) {
+  await dataReady;
   if (!cache.has(path)) cache.set(path, fetch(DATA + path, { cache: "no-cache" }).then(r => { if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.json(); }));
   return cache.get(path);
 }
@@ -29,7 +43,7 @@ async function render() {
   app.replaceChildren(); h("p", "muted", "Loading…", app);
   try {
     const idx = await load("index.json");
-    document.getElementById("generated").textContent = `updated ${dateTime(idx.generated_at)}${idx.mode === "synthetic" ? " · synthetic preview" : ""}`;
+    document.getElementById("generated").textContent = `updated ${dateTime(idx.generated_at)}${idx.mode === "synthetic" ? " · synthetic preview" : ""}${dataSource !== "same-origin" ? ` · data: ${dataSource}` : ""}`;
     app.replaceChildren();
     await (routes[section] || home)(idx, arg);
     window.scrollTo(0, 0);
@@ -306,7 +320,7 @@ async function live(idx) {
   const root = app;
   async function draw() {
     let d;
-    try { const r = await fetch(DATA + "live.json", { cache: "no-store" }); if (!r.ok) throw new Error(String(r.status)); d = await r.json(); }
+    try { await dataReady; const r = await fetch(DATA + "live.json", { cache: "no-store" }); if (!r.ok) throw new Error(String(r.status)); d = await r.json(); }
     catch (e) { root.replaceChildren(); h("h1", null, "Live status", root); const em = h("div", "empty", null, root); h("div", null, "No live snapshot is available yet.", em); h("div", "small muted", "The pipeline publishes data/live.json during each collection run; for continuous 30-second updates run `mta-insights serve` locally.", em); return; }
     if (!d.generated_ts) { root.replaceChildren(); h("div", "empty", "Live snapshot is starting…", root); return; }
     const now = Date.now() / 1000, age = now - d.generated_ts;
