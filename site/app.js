@@ -645,10 +645,10 @@ function renderPlanLive(box, board, schedule, feeds) {
   [["journey", ""], ["first train in", "num"], ["arrive", "num"], ["total", "num"], ["itinerary", ""], ["next option", "num hide-sm"]].forEach(([x, cl]) => h("th", cl, x, tr)); const tb = h("tbody", null, null, t);
   plan.journeys.forEach(j => { const row = h("tr", null, null, tb); const c0 = h("td", null, null, row); link(`#/plan/${j.id}`, j.label, c0, "small");
     const b = j.best;
-    if (!b) { const td = h("td", "small secondary", "no catchable train in the feed for the first leg", row); td.colSpan = 5; return; }
+    if (!b) { const td = h("td", "small secondary", "no complete itinerary in the feed within the hour", row); td.colSpan = 5; return; }
     h("td", "num", minTxt(b.legs[0].wait_sec), row); h("td", "num eta", hhmm(b.arrive_ts), row); h("td", "num", minTxt(b.total_sec), row);
     const it = h("td", "small", null, row);
-    it.append(b.legs.map(l => `${l.route} ${(l.train_id || "").trim()}: board ${hhmm(l.board_ts)}${l.position ? ` (now ${posText(l.position)})` : ""}, ride ${minTxt(l.ride_sec)} to ${l.to_name}${l.transfer_sec ? ` after a ${minTxt(l.transfer_sec)} walk` : ""}`).join(" → "));
+    it.append(b.legs.map(l => `${l.route} ${(l.train_id || "").trim()}: board ${hhmm(l.board_ts)}${l.position ? ` (now ${posText(l.position)})` : l.started ? "" : " (not yet departed)"}, ride ${minTxt(l.ride_sec)} to ${l.to_name}${l.transfer_sec ? ` after a ${minTxt(l.transfer_sec)} walk` : ""}`).join(" → "));
     (b.warnings || []).forEach(x => { const c = h("span", "status-chip st-degraded", null, it); c.style.marginLeft = ".4rem"; h("span", "dot", null, c); c.append(x); });
     const nx = j.options[1]; h("td", "num small hide-sm", nx ? `${minTxt(nx.legs[0].wait_sec)} → ${hhmm(nx.arrive_ts)}` : "–", row); });
   h("div", "tiny muted", "Straight from the feed: the next train of the leg's routes at the origin, its own ETA at the leg's destination, the transfer walk, then the next train there. No model calibration; the snapshot below adds it. Trains holding or stalled right now are flagged.", card);

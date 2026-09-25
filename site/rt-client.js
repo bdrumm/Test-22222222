@@ -266,8 +266,10 @@ export function planJourneys(schedule, feeds, now, maxOptions = 4) {
       const k = tu.stops.findIndex((s, q) => q > i && s.stop_id === leg.to_stop); if (k < 0) continue;
       const board = tu.stops[i].departure ?? tu.stops[i].arrival, arrive = tu.stops[k].arrival ?? tu.stops[k].departure;
       if (board == null || arrive == null || board < notBefore) continue;
-      if (!(tu.trip.is_assigned === true || (vehicles.get(vehKey(tu.trip)) || {}).timestamp <= now + 60) && i > 0) continue;   // not yet departed and not at its origin
-      out.push({ board_ts: board, arrive_ts: arrive, tu });
+      const veh = vehicles.get(vehKey(tu.trip));
+      // a trip still in the yard is listed with its timetable: usable, but shown as not departed
+      const started = !!(veh && veh.stop_id && veh.timestamp && veh.timestamp <= now + 60) || tu.trip.is_assigned === true;
+      out.push({ board_ts: board, arrive_ts: arrive, tu, started });
     }
     return out.sort((a, b) => a.board_ts - b.board_ts);
   };
@@ -281,7 +283,7 @@ export function planJourneys(schedule, feeds, now, maxOptions = 4) {
         const ride = li === 0 ? first : rides(leg, t + transfer)[0];
         if (!ride) { ok = false; break; }
         const st = state(ride.tu), desc = ride.tu.trip;
-        legs.push({ route: desc.route_id, trip_id: desc.trip_id, train_id: desc.train_id, from_name: leg.from_name, to_name: leg.to_name, board_ts: ride.board_ts, arrive_ts: ride.arrive_ts,
+        legs.push({ route: desc.route_id, trip_id: desc.trip_id, train_id: desc.train_id, started: ride.started, from_name: leg.from_name, to_name: leg.to_name, board_ts: ride.board_ts, arrive_ts: ride.arrive_ts,
           wait_sec: ride.board_ts - t - transfer, transfer_sec: transfer, ride_sec: ride.arrive_ts - ride.board_ts, position: st, holding: !!(st && st.holding), stalled: !!(st && st.stalled),
           connection_margin_sec: li ? ride.board_ts - t - transfer : null });
         t = ride.arrive_ts;
