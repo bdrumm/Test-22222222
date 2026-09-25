@@ -18,7 +18,7 @@ from tests.test_positions import _snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = """
-import { parseFeed, computeBoard, tripSuffix, lineBoard, planJourneys, journeyFeeds } from "%s";
+import { parseFeed, computeBoard, tripSuffix, lineBoard, planJourneys, journeyFeeds, trainProgress, segmentTrips } from "%s";
 import { readFileSync } from "node:fs";
 const schedule = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const lines = JSON.parse(readFileSync(process.argv[2].replace("client_schedule", "client_lines"), "utf8")).lines;
@@ -27,6 +27,8 @@ const now = Number(process.argv[4]);
 const board = computeBoard(schedule, feeds, now);
 board.line = lineBoard(schedule, lines["6_N"] || [], feeds, "6", "N", now);
 board.plan = planJourneys(schedule, feeds, now); board.journey_feeds = journeyFeeds(schedule);
+const L6 = schedule.lines["6_N"]; const fi = L6.stops.indexOf("635N"), ti = L6.stops.indexOf("631N");
+board.travel = { trips: segmentTrips(board.line, L6, fi, ti, now), progress0: board.line.trains.map(t => trainProgress(t, 0, L6)), progress60: board.line.trains.map(t => trainProgress(t, 60, L6)) };
 const parsed = Object.fromEntries(Object.entries(feeds).map(([k, f]) => [k, { timestamp: f.timestamp, trips: f.trips.length, vehicles: f.vehicles.length,
   sample: f.trips[0] && { trip_id: f.trips[0].trip.trip_id, route: f.trips[0].trip.route_id, n_stops: f.trips[0].stops.length, first: f.trips[0].stops[0] } }]));
 console.log(JSON.stringify({ board, parsed, suffix: tripSuffix("AFA25GEN-1038-Sunday-00_000600_1..S03R") }));
@@ -139,3 +141,26 @@ console.log(JSON.stringify({{ n: out.length, kinds, first: out[0] }}));
     assert res["n"] == len(active) and res["kinds"] == py_kinds
     assert res["first"]["kind"] == "delay" or not py_kinds.get("delay")
     assert res["first"]["routes"] and res["first"]["header"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_js_travel_helpers_dead_reckon_and_pick_trips(static, tmp_path):
+    res, now, feeds, held = _run_board(static, tmp_path, hold_sec=400)
+    tv = res["board"]["travel"]; trains = res["board"]["line"]["trains"]
+    trips = tv["trips"]
+    assert trips and trips == sorted(trips, key=lambda t: t["board_ts"])
+    for t in trips:
+        assert t["board_ts"] >= now - 60 and t["arrive_ts"] > t["board_ts"] and t["ride_sec"] == t["arrive_ts"] - t["board_ts"]
+        assert t["sched_ride_sec"] and t["ride_vs_sched_sec"] == t["ride_sec"] - t["sched_ride_sec"] and t["stops_to_origin"] >= 1
+    p0, p60 = tv["progress0"], tv["progress60"]
+    assert len(p0) == len(trains) == len(p60)
+    for t, a, b in zip(trains, p0, p60):
+        pos = t["position"]
+        if pos and pos["status"] == "STOPPED_AT":
+            assert a["idx"] == pos["stop_idx"] == b["idx"] and a["state"] in ("stopped", "holding", "terminal")
+        elif pos:
+            assert pos["stop_idx"] - 1 <= a["idx"] < pos["stop_idx"] and b["idx"] >= a["idx"] and a["state"] in ("moving", "stalled")
+        else:
+            assert a["state"] == "unknown"
+    h = next(t for t in trains if t["trip_id"] == held); ph = next(p for t, p in zip(trains, p0) if t["trip_id"] == held)
+    assert ph["state"] == "holding" and ph["since"] >= 400

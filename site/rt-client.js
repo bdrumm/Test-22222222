@@ -270,6 +270,36 @@ export function parseAlerts(doc, now) {
   return out.sort((x, y) => rank[x.kind] - rank[y.kind] || (y.start || 0) - (x.start || 0));
 }
 
+// ---------------------------------------------------------------- travel mode helpers
+/** Where a train is right now as a fractional stop index, dead-reckoned ``age`` seconds after the board was computed:
+ *  stopped trains stay put; moving trains advance along the scheduled run to the next stop (never quite reaching it). */
+export function trainProgress(train, age, line) {
+  const p = train.position;
+  if (!p || p.stop_idx == null) return { idx: Math.max(0, train.next_idx - 0.5), state: "unknown", since: null };
+  const since = (p.since_sec || 0) + Math.max(0, age || 0);
+  if (p.status === "STOPPED_AT") return { idx: p.stop_idx, state: p.holding ? "holding" : (p.at_origin ? "terminal" : "stopped"), since };
+  const j = p.stop_idx;
+  if (j <= 0) return { idx: 0, state: "moving", since };
+  const run = line && line.run_sec[j - 1] != null ? line.run_sec[j - 1] : null;
+  let frac = run ? Math.min(0.96, since / run) : 0.5;
+  if (p.status === "INCOMING_AT") frac = Math.max(frac, 0.85);
+  return { idx: j - 1 + frac, state: p.stalled ? "stalled" : "moving", since };
+}
+
+/** Trains of a line board that will carry a rider from stop fromIdx to stop toIdx: feed ETAs at both, ride vs schedule. */
+export function segmentTrips(lb, line, fromIdx, toIdx, now, maxN = 6) {
+  const schedRide = runBetween(line, fromIdx, toIdx);
+  const out = [];
+  for (const t of lb.trains) {
+    const at = i => { const pt = t.points.find(p => p[0] === i); return pt ? pt[1] : null; };
+    const board = at(fromIdx), arrive = at(toIdx);
+    if (board == null || arrive == null || board < now - 60 || arrive <= board) continue;
+    out.push({ ...t, board_ts: board, arrive_ts: arrive, ride_sec: arrive - board, sched_ride_sec: schedRide,
+      ride_vs_sched_sec: schedRide != null ? arrive - board - schedRide : null, stops_to_origin: Math.max(1, fromIdx - t.next_idx + 1) });
+  }
+  return out.sort((a, b) => a.board_ts - b.board_ts).slice(0, maxN);
+}
+
 /** Feeds needed for the configured journeys. */
 export const journeyFeeds = schedule => [...new Set((schedule.journeys || []).flatMap(j => j.legs.flatMap(l => l.routes.map(r => (schedule.route_feeds || {})[r]))).filter(Boolean))];
 

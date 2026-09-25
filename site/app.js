@@ -1,5 +1,5 @@
-import { barChart, lineChart, heatmap, sparkline, stringline, fmt, seriesColor } from "./charts.js";
-import { createClientLive, lineBoard, planJourneys, journeyFeeds } from "./rt-client.js";
+import { barChart, lineChart, heatmap, sparkline, stringline, trackStrip, fmt, seriesColor } from "./charts.js";
+import { createClientLive, lineBoard, planJourneys, journeyFeeds, trainProgress, segmentTrips } from "./rt-client.js";
 
 const app = document.getElementById("app");
 // Where the JSON lives. Normally next to the page (built site). When GitHub Pages serves the
@@ -37,9 +37,10 @@ const dateTime = iso => { try { return new Date(iso).toLocaleString(undefined, {
 const pctChange = v => v == null ? "–" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(0)}%`;
 
 // ---------------------------------------------------------------- routing
-const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage, model: modelPage, disruptions: disruptionsPage, line: linePage };
+const routes = { "": home, lines: lines, alerts: alerts, data: dataPage, station: station, live: live, plan: plan, routes: routesPage, model: modelPage, disruptions: disruptionsPage, line: linePage, travel: travelPage };
 async function render() {
-  const [section = "", arg] = location.hash.replace(/^#\/?/, "").split("/");
+  const [section = "", ...rest] = location.hash.replace(/^#\/?/, "").split("/");
+  const arg = rest.length ? rest.join("/") : undefined;
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === (section || "home")));
   app.replaceChildren(); h("p", "muted", "Loading…", app);
   try {
@@ -1109,4 +1110,196 @@ async function linePage(idx, arg) {
       h("div", "small secondary", `Bias (median signed error): ${tr.map(x => `${x.stops_ahead} stops ${x.bias_sec >= 0 ? "+" : "−"}${Math.abs(x.bias_sec).toFixed(0)} s`).join(" · ")}. Positive bias means trains arrive later than promised.`, c3);
     }
   } catch (e) { /* optional */ }
+}
+
+
+// ---------------------------------------------------------------- travel mode: one trip, every train on it, live
+const nyParts = ts => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: NY, hour: "numeric", hour12: false, weekday: "short" }).formatToParts(new Date(ts * 1000)).map(x => [x.type, x.value]));
+  return { hour: Number(p.hour) % 24, dow: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(p.weekday) }; };
+const stateColor = s => s === "holding" || s === "stalled" ? "var(--status-critical)" : s === "stopped" || s === "terminal" ? "var(--status-warning)" : s === "unknown" ? "var(--de-emphasis)" : "var(--status-good)";
+const mmss = s => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+const setTile = (t, value, delta) => { t.querySelector(".value").textContent = value; let d = t.querySelector(".delta"); if (!d) d = h("div", "delta", null, t); d.textContent = delta || ""; };
+
+async function travelPage(idx, arg) {
+  const root = app; root.replaceChildren();
+  const head = h("div", "row between", null, root);
+  h("h1", null, "Travel mode: your trip, live", head);
+  const statusEl = h("div", "small secondary", "loading…", head);
+  let schedule;
+  try { schedule = await load("client_schedule.json"); } catch (e) { h("div", "empty", "Travel mode needs data/client_schedule.json, which the site build publishes.", root); return; }
+  const lineKeys = Object.keys(schedule.lines || {}).filter(k => (schedule.lines[k].stops || []).length > 2).sort();
+  if (!lineKeys.length) { h("div", "empty", "No line topology in the client schedule yet.", root); return; }
+  // selection: the URL, then the last choice, then the first configured journey's first leg
+  let saved = null; try { saved = JSON.parse(localStorage.getItem("travel") || "null"); } catch {}
+  let [key, from, to] = (arg || "").split("/");
+  if (!key || !schedule.lines[key]) {
+    if (saved && schedule.lines[saved.key]) ({ key, from, to } = saved);
+    else { const j = (schedule.journeys || [])[0]; const leg = j && j.legs[0];
+      key = leg ? `${leg.routes[0]}_${(leg.from_stop || "").slice(-1)}` : null; if (!key || !schedule.lines[key]) key = lineKeys[0];
+      from = leg && schedule.lines[key].stops.includes(leg.from_stop) ? leg.from_stop : null; to = leg && schedule.lines[key].stops.includes(leg.to_stop) ? leg.to_stop : null; }
+  }
+  const line = schedule.lines[key], stops = line.stops.map((s, i) => ({ stop_id: s, name: line.names[i] })), [route, direction] = key.split("_");
+  let fromIdx = line.stops.indexOf(from), toIdx = line.stops.indexOf(to);
+  if (fromIdx < 0) fromIdx = Math.min(1, stops.length - 2);
+  if (toIdx < 0 || toIdx <= fromIdx) toIdx = Math.min(stops.length - 1, fromIdx + 7);
+  from = stops[fromIdx].stop_id; to = stops[toIdx].stop_id;
+  try { localStorage.setItem("travel", JSON.stringify({ key, from, to })); } catch {}
+  const go = (k, f, t) => { location.hash = `#/travel/${k}/${f}/${t}`; };
+  // controls
+  const filters = h("div", "filters", null, root);
+  h("label", "small secondary", "Line", filters); const selL = h("select", null, null, filters);
+  lineKeys.forEach(k => { const [r, d] = k.split("_"); const o = h("option", null, `${r} ${d === "N" ? "northbound" : "southbound"}`, selL); o.value = k; }); selL.value = key;
+  selL.addEventListener("change", () => go(selL.value, "", ""));
+  h("label", "small secondary", "From", filters); const selF = h("select", null, null, filters);
+  stops.forEach((s, i) => { if (i < stops.length - 1) { const o = h("option", null, s.name, selF); o.value = s.stop_id; } }); selF.value = from;
+  h("label", "small secondary", "To", filters); const selT = h("select", null, null, filters);
+  stops.forEach((s, i) => { if (i > fromIdx) { const o = h("option", null, s.name, selT); o.value = s.stop_id; } }); selT.value = to;
+  selF.addEventListener("change", () => go(key, selF.value, line.stops.indexOf(selF.value) < toIdx ? to : ""));
+  selT.addEventListener("change", () => go(key, from, selT.value));
+  const swap = h("button", "icon-btn", "⇄ reverse", filters); swap.title = "Same stations, the other direction";
+  swap.addEventListener("click", () => { const other = `${route}_${direction === "N" ? "S" : "N"}`; const L2 = schedule.lines[other]; if (!L2) return;
+    const f2 = to.slice(0, -1) + other.slice(-1), t2 = from.slice(0, -1) + other.slice(-1); go(other, L2.stops.includes(f2) ? f2 : "", L2.stops.includes(t2) ? t2 : ""); });
+  // context data (all optional)
+  const [lineData, live, holds, trust, clim, clines] = await Promise.all([
+    load(`lines/${key}.json`).catch(() => null), load("live.json").catch(() => null), load("holds.json").catch(() => null),
+    load("eta_trust.json").catch(() => null), load("climatology.json").catch(() => null), load("client_lines.json").catch(() => null)]);
+  const targets = new Set((idx.targets || []).map(t => t.stop_id));
+  const nowRef = () => (schedule.demo_now || Date.now() / 1000);
+  const parts = nyParts(nowRef());
+  // per-stop layers: typical time lost at this hour (line view deviation grid), holds per day (hold log)
+  const dev = lineData && lineData.deviation;
+  const devRow = new Map((dev && dev.stops || []).map((s, i) => [s.stop_id, i]));
+  const typical = stops.map(s => { const r = devRow.get(s.stop_id); const v = r != null && dev.grid[r] ? dev.grid[r][parts.hour] : null; return v == null ? null : v; });
+  const holdMap = new Map(((holds && holds.by_stop) || []).map(x => [x.stop_id, x]));
+  const holdsPerDay = stops.map(s => (holdMap.get(s.stop_id) || {}).per_day ?? null);
+  const stretchTypical = typical.slice(fromIdx + 1, toIdx + 1).reduce((a, v) => a + (v || 0), 0);
+  const stretchHolds = holdsPerDay.slice(fromIdx, toIdx + 1).reduce((a, v) => a + (v || 0), 0);
+  const schedRide = line.run_sec.slice(fromIdx, toIdx).reduce((a, v) => a + (v || 0), 0);
+  const sim = live && (live.simulation || []).find(e => e.route === route && e.direction === direction) || null;
+  const simAt = (scName, tripId, stopId) => { const sc = sim && sim.scenarios[scName]; if (!sc) return null; const si = sc.stops.findIndex(s => s.stop_id === stopId); const t = sc.trains.find(x => x.trip_id === tripId); const pt = t && t.points.find(p => p[0] === si); return pt ? pt[1] : null; };
+  const stationTo = live && (live.stations || []).find(s => s.stop_id === to) || null, stationFrom = live && (live.stations || []).find(s => s.stop_id === from) || null;
+  const trustRows = trust ? ((trust.by_route || {})[route] || trust.overall || []) : [];
+  const trustFor = k => { const rows = trustRows.filter(r => r.stops_ahead <= k); return rows.length ? rows[rows.length - 1] : trustRows[0] || null; };
+  const baseRate = clim && clim.grid_by_route && clim.grid_by_route[route] ? clim.grid_by_route[route][parts.dow] && clim.grid_by_route[route][parts.dow][parts.hour] : null;
+
+  // tiles
+  const tiles = h("div", "tiles", null, root);
+  const tNext = tile(tiles, `Next ${route} from ${stops[fromIdx].name}`, "–", "");
+  const tArr = tile(tiles, `Arrive ${stops[toIdx].name}`, "–", `scheduled ride ${minTxt(schedRide)}`);
+  const tLine = tile(tiles, "On the line now", "–", "");
+  tile(tiles, "Typical for this hour", `${stretchTypical >= 0 ? "+" : "−"}${Math.abs(stretchTypical).toFixed(0)} s`, `${dev && dev.n_trips ? `time lost on this stretch, ${fmt.compact(dev.n_trips)} trips` : "no line history yet"}${holds && holds.n ? ` · ${stretchHolds.toFixed(1)} holds/day on it` : ""}${baseRate != null ? ` · ${baseRate.toFixed(2)} disruptions/week start this hour` : ""}`);
+
+  // layout: track diagram left, trip panel right
+  const grid = h("div", "travel-grid", null, root);
+  const left = h("div", "card", null, grid), right = h("div", null, null, grid);
+  const lh = h("div", "row between", null, left);
+  h("strong", null, `${route} ${direction === "N" ? "northbound" : "southbound"}: ${stops[fromIdx].name} → ${stops[toIdx].name}`, lh);
+  const layersBox = h("div", "layers", null, left);
+  const layerDefs = [
+    { id: "typical", name: "typical +s", on: !!dev, values: typical.map(v => v == null ? null : Math.max(0, v)), max: Math.max(30, ...typical.map(v => v || 0)), color: "var(--series-1)", format: v => `+${v.toFixed(0)}s` },
+    { id: "holds", name: "holds/day", on: !!(holds && holds.n), values: holdsPerDay, max: Math.max(1, ...holdsPerDay.map(v => v || 0)), color: "var(--status-warning)", format: v => v.toFixed(1) },
+  ];
+  const startIdx = Math.max(0, fromIdx - 6);
+  let strip = null;
+  const drawStrip = () => { if (strip) strip.root.remove();
+    strip = trackStrip(left, { stops, fromIdx, toIdx, startIdx, endIdx: toIdx, routeColor: ROUTE_COLORS[route] || null, rowH: 26, layers: layerDefs.filter(L => L.on), targets });
+    if (state.lb) tickStrip(); };
+  layerDefs.forEach(L => { const lab = h("label", null, null, layersBox); const cb = h("input", null, null, lab); cb.type = "checkbox"; cb.checked = L.on; lab.append(` ${L.name}`); cb.addEventListener("change", () => { L.on = cb.checked; drawStrip(); }); });
+  const legend = h("div", "tiny muted", "Markers: green moving · amber stopped · red holding or stalled · grey no position. ◎ monitored platform. Trains glide between 30-second polls along the scheduled running time.", left);
+  legend.style.marginTop = ".4rem";
+  const panel = h("div", "card", null, right);
+  const panelHead = h("div", "row between", null, panel); h("strong", null, "Your next trains", panelHead); const panelAge = h("span", "small secondary", "", panelHead);
+  const panelBody = h("div", null, null, panel);
+  const insight = h("div", "card", null, right); h("strong", null, "What our data says about this stretch", insight);
+  const insightList = h("ul", "small secondary", null, insight);
+  const worstTyp = typical.map((v, i) => [v, i]).filter(([v, i]) => v != null && i > fromIdx && i <= toIdx).sort((a, b) => b[0] - a[0])[0];
+  if (worstTyp && worstTyp[0] > 0) h("li", null, `At this hour trains lose the most time arriving at ${stops[worstTyp[1]].name} (+${worstTyp[0].toFixed(0)} s per train on average).`, insightList);
+  const worstHold = holdsPerDay.map((v, i) => [v, i]).filter(([v, i]) => v && i >= fromIdx && i <= toIdx).sort((a, b) => b[0] - a[0])[0];
+  if (worstHold) { const hx = holdMap.get(stops[worstHold[1]].stop_id); h("li", null, `${stops[worstHold[1]].name} is where trains on this stretch get held most: ${hx.per_day.toFixed(1)} holds/day, median ${(hx.median_sec / 60).toFixed(1)} min${hx.worst_hours && hx.worst_hours.length ? `, mostly around ${hx.worst_hours.map(x => `${String(x).padStart(2, "0")}:00`).join(", ")}` : ""}.`, insightList); }
+  if (sim && sim.scenarios.baseline.worst_gap) { const wg = sim.scenarios.baseline.worst_gap; const nm = (sim.scenarios.baseline.stops.find(s => s.stop_id === wg.stop_id) || {}).name || wg.stop_id; h("li", null, `The forward simulation projects the largest gap on the line at ${nm} (${(wg.gap_sec / 60).toFixed(0)} min around ${hhmm(wg.at_ts)})${sim.disturbed && sim.scenarios.hold_persists ? `; if the current hold persists 10 more minutes, ${sim.scenarios.hold_persists.n_knock_on} trains are held back.` : "."}`, insightList); }
+  if (stationTo && (stationTo.effects || []).length) stationTo.effects.slice(0, 2).forEach(e => h("li", null, `${stops[toIdx].name}: ${e.text}`, insightList));
+  if (stationFrom && stationFrom.scenarios && stationFrom.scenarios.headline) h("li", null, stationFrom.scenarios.headline + ".", insightList);
+  if (live && live.learned_model && live.learned_model.ready && (stationTo || stationFrom)) h("li", null, `Model ETAs at the monitored platform come from the learned arrival model (${fmt.compact(live.learned_model.n_train)} training rows).`, insightList);
+  if (!insightList.children.length) h("li", null, "No history for this stretch yet; the hourly collection and the line views fill this in.", insightList);
+  const alertsBox = h("div", "card", null, right); h("strong", null, `Alerts for the ${route}`, alertsBox); const alertsBody = h("div", null, null, alertsBox);
+  const stringBox = h("div", "card", null, root); stringBox.style.marginTop = "1rem";
+
+  // live state and rendering
+  const state = { lb: null, lbNow: null, demo: !!schedule.demo_now, alerts: null };
+  const lineSched = ((clines && clines.lines) || {})[key] || [];
+  function tickStrip() {
+    if (!strip || !state.lb) return;
+    const age = state.demo ? 0 : nowRef() - state.lbNow;
+    strip.update(state.lb.trains.map(t => { const p = trainProgress(t, age, line); const late = t.effective_lateness_sec ?? t.lateness_sec;
+      return { id: t.trip_id, idx: p.idx, state: p.state, color: stateColor(p.state), label: `${route} ${(t.train_id || t.trip_id).trim().slice(0, 17)}`,
+        sub: `${late == null ? "" : lateTxt(late)}${p.state === "holding" ? ` · held ${mmss(p.since)}` : p.state === "stalled" ? ` · stalled ${mmss(p.since)}` : p.state === "stopped" && p.since != null ? ` · ${mmss(p.since)}` : ""}` }; }));
+  }
+  function tickTiles() {
+    if (!state.lb) return;
+    const now = nowRef();
+    const trips = segmentTrips(state.lb, line, fromIdx, toIdx, now);
+    const nx = trips[0];
+    setTile(tNext, nx ? mmss(nx.board_ts - now) : "–", nx ? `boards ${hhmm(nx.board_ts)}${nx.position ? ` · now ${posText(nx.position)}` : ""}${trustFor(nx.stops_to_origin) ? ` · ETA ±${(trustFor(nx.stops_to_origin).median_abs_err_sec / 60).toFixed(1)} min at ${nx.stops_to_origin} stop${nx.stops_to_origin > 1 ? "s" : ""} away` : ""}` : "no train serving this trip in the feed");
+    tNext.querySelector(".value").classList.add("countdown");
+    setTile(tArr, nx ? hhmm(nx.arrive_ts) : "–", nx ? `ride ${minTxt(nx.ride_sec)} (scheduled ${minTxt(schedRide)})${nx.ride_vs_sched_sec != null && Math.abs(nx.ride_vs_sched_sec) >= 60 ? `, ${nx.ride_vs_sched_sec > 0 ? "+" : "−"}${Math.abs(nx.ride_vs_sched_sec / 60).toFixed(0)} min` : ""} · door to door ${minTxt(nx.arrive_ts - now)}` : `scheduled ride ${minTxt(schedRide)}`);
+  }
+  function render() {
+    const lb = state.lb, now = nowRef();
+    if (!lb) return;
+    const onSeg = lb.trains.filter(t => t.next_idx >= fromIdx - 6 && t.next_idx <= toIdx);
+    const lates = lb.trains.map(t => t.effective_lateness_sec ?? t.lateness_sec).filter(v => v != null).sort((a, b) => a - b);
+    setTile(tLine, `${lb.trains.length} trains`, `${onSeg.length} approaching or on your stretch · ${lb.n_holding} holding · ${lb.n_stalled} stalled${lates.length ? ` · median ${lateTxt(lates[Math.floor(lates.length / 2)])}` : ""}${lb.n_feed_optimistic ? ` · feed optimistic for ${lb.n_feed_optimistic}` : ""}`);
+    tickTiles(); tickStrip();
+    // trip panel
+    panelBody.replaceChildren();
+    panelAge.textContent = `${state.demo ? "recorded snapshot at" : "feeds polled"} ${hhmmss(state.lbNow)} ET`;
+    const trips = segmentTrips(state.lb, line, fromIdx, toIdx, now);
+    if (!trips.length) { h("div", "small secondary", "No train in the feed serves both stops within the hour (overnight reroute, or the line is not running this pattern right now).", panelBody); }
+    else {
+      const wrap = h("div", "table-wrap", null, panelBody); const tb = h("table", "tiny", null, wrap); const tr = h("tr", null, null, h("thead", null, null, tb));
+      const cols = ["train", "boards", "arrives", "ride", "vs schedule", "now"]; const showModel = !!(stationTo || stationFrom); if (showModel) cols.splice(3, 0, "model");
+      const showHold = !!(sim && sim.disturbed && sim.scenarios.hold_persists); if (showHold) cols.splice(showModel ? 4 : 3, 0, "if hold persists");
+      cols.forEach(x => h("th", ["boards", "arrives", "ride", "model", "if hold persists", "vs schedule"].includes(x) ? "num" : "", x, tr)); const body = h("tbody", null, null, tb);
+      trips.forEach((t, i) => { const row = h("tr", i === 0 ? "worse" : "", null, body); const c0 = h("td", null, null, row); routeBullet(route, c0); c0.append(` ${(t.train_id || t.trip_id).trim()}`);
+        const tr0 = trustFor(t.stops_to_origin);
+        const cb = h("td", "num eta", `${hhmm(t.board_ts)} (${mmss(Math.max(0, t.board_ts - now))})`, row); if (tr0) cb.title = `feed ETA typically ±${tr0.median_abs_err_sec.toFixed(0)} s at ${t.stops_to_origin} stops away`;
+        h("td", "num eta", hhmm(t.arrive_ts), row);
+        if (showModel) { const st = stationTo || stationFrom; const a = (st.arrivals || []).find(x => x.trip_id === t.trip_id); const md = h("td", "num eta", a ? `${hhmm(a.model_eta_ts)}${a.model_source === "learned" ? "" : " (lookback)"}` : "–", row); if (a) md.title = `${st.stop_id === to ? "at your destination" : "at your origin"} · range ${hhmm(a.eta_lo_ts)}–${hhmm(a.eta_hi_ts)}`; }
+        if (showHold) { const hp = simAt("hold_persists", t.trip_id, to); h("td", "num eta", hp ? `${hhmm(hp)}${hp - t.arrive_ts >= 60 ? ` (+${((hp - t.arrive_ts) / 60).toFixed(0)})` : ""}` : "–", row); }
+        h("td", "num", minTxt(t.ride_sec), row);
+        h("td", "num", (t.sched_method === "nearest" ? "~" : "") + lateTxt(t.lateness_sec) + (t.corroboration === "feed_optimistic" ? ` → ${lateTxt(t.effective_lateness_sec)}` : ""), row);
+        const nc = h("td", "small", t.position ? posText(t.position) : (t.started === false ? "not departed" : "–"), row); nc.append(" "); posFlags(nc, t.position, t.corroboration, { track_changed: t.track_changed }); });
+      h("div", "tiny muted", `Boards/arrives are the feed's ETAs for each train at your two stops. "vs schedule" is the train's lateness at its next stop (→ corrected from its position when the feed is optimistic); ${showModel ? "the model column is the learned arrival model's ETA at the monitored platform; " : ""}${showHold ? "'if hold persists' is the simulation's arrival at your destination should the current hold last 10 more minutes; " : ""}the first row is the recommended train.`, panelBody);
+    }
+    // alerts for the route
+    alertsBody.replaceChildren();
+    const al = (state.alerts || (live && live.alerts) || []).filter(x => (x.routes || []).includes(route));
+    if (!al.length) h("div", "small secondary", "No active alert names this line.", alertsBody);
+    al.slice(0, 5).forEach(x => { const r = h("div", "rec", null, alertsBody); const rc = h("div", null, null, r); (x.routes || []).forEach(q => routeBullet(q, rc)); const bd = h("div", null, null, r); h("div", "small", x.header, bd); h("div", "why", `${x.type || x.alert_type || ""}${(x.start || x.active_start) ? ` · since ${hhmm(x.start || x.active_start)}` : ""}${x.kind === "planned" || x.planned ? " · planned" : ""}`, bd); });
+    // segment stringline: the next 45 minutes on your stretch
+    stringBox.replaceChildren();
+    const seg = stops.slice(startIdx, toIdx + 1);
+    const remap = pts => pts.filter(p => p[0] >= startIdx && p[0] <= toIdx).map(p => [p[0] - startIdx, p[1]]);
+    const held = t => t.position && (t.position.holding || t.position.stalled);
+    const trains = lb.trains.map(t => ({ trip_id: t.trip_id, train_id: t.train_id, route_id: route, points: remap(t.points), lateness_sec: t.effective_lateness_sec ?? t.lateness_sec, kind: held(t) ? "live-hold" : "live" })).filter(t => t.points.length >= 2);
+    if (sim) for (const [name, kind] of [["baseline", "sim"], ["hold_persists", "sim-hold"]]) { const sc = sim.scenarios[name]; if (!sc) continue; const sidx = new Map(sc.stops.map((s, i) => [s.stop_id, i]));
+      sc.trains.forEach(t => { const pts = t.points.map(p => [line.stops.indexOf(sc.stops[p[0]] && sc.stops[p[0]].stop_id), p[1]]).filter(p => p[0] >= 0); const rp = remap(pts); if (rp.length >= 2 && (kind === "sim" || t.holding || t.stalled || t.knock_on_sec >= 60)) trains.push({ trip_id: t.trip_id, train_id: t.train_id, route_id: route, points: rp, lateness_sec: t.lateness_sec, kind }); }); }
+    const age = state.demo ? 0 : now - state.lbNow;
+    const markers = lb.trains.map(t => ({ t, p: trainProgress(t, age, line) })).filter(x => x.p.idx >= startIdx && x.p.idx <= toIdx).map(({ t, p }) => ({ leg: 0, stop: p.idx - startIdx, ts: now, color: stateColor(p.state), label: `${route} ${(t.train_id || t.trip_id).trim()}`, rows: [["state", p.state], ["lateness", lateTxt(t.effective_lateness_sec ?? t.lateness_sec)]] }));
+    const path = trips[0] ? [[0, fromIdx - startIdx, now], [0, fromIdx - startIdx, trips[0].board_ts], [0, toIdx - startIdx, trips[0].arrive_ts]] : [];
+    stringline(stringBox, { title: "Your stretch over the next 45 minutes", subtitle: `dots: trains now; dashed: the feed's projection (red: held or stalled)${sim ? "; dotted: the simulation (red: if the hold persists)" : ""}; the red dashed path is your trip on the recommended train`,
+      legs: [{ stops: seg, trains }], now, horizonSec: 2700, backSec: 300, highlight: new Set(trips[0] ? [trips[0].trip_id] : []), path, routeColor: () => ROUTE_COLORS[route] || null, rowH: 14, markers });
+  }
+  // fallback: the pipeline's last line snapshot (feed projections only) when the feeds cannot be reached from this browser
+  function fallbackBoard() {
+    const snap = lineData && lineData.snapshot; if (!snap || !snap.live) return null;
+    const trains = snap.live.filter(t => t.started && t.points && t.points.length).map(t => ({ trip_id: t.trip_id, train_id: t.train_id, route, points: t.points, next_idx: t.points[0][0], next_name: stops[t.points[0][0]] && stops[t.points[0][0]].name, eta_ts: t.points[0][1], lateness_sec: t.lateness, effective_lateness_sec: t.lateness, position: null, corroboration: "position_unknown", track_changed: t.track_changed, started: true }));
+    return { route, direction, now: snap.now, stops, trains, n_holding: 0, n_stalled: 0, n_feed_optimistic: 0 };
+  }
+  drawStrip();
+  clientLive = createClientLive({ base: DATA, feedKeys: sch => [(sch.route_feeds || {})[route]].filter(Boolean),
+    onUpdate: (board, sch, feeds) => { state.lb = lineBoard(sch, lineSched, feeds, route, direction, board.now); state.lbNow = board.now; state.alerts = board.alerts; statusEl.textContent = `live from the MTA feed · every 30 s · ${state.demo ? "recorded snapshot" : `polled ${hhmmss(board.now)} ET`}`; render(); },
+    onError: e => { const fb = fallbackBoard(); statusEl.textContent = `feeds unreachable from this browser (${e.message || e})${fb ? "; showing the pipeline's last snapshot" : ""}`; if (fb && !state.lb) { state.lb = fb; state.lbNow = fb.now; render(); } } });
+  clientLive.start();
+  liveTimer = setInterval(() => { tickStrip(); tickTiles(); }, 1000);
 }

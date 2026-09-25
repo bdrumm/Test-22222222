@@ -529,6 +529,26 @@ ships its recorded feed next to the site so the mode can be exercised
 offline; against real feeds (G and L, 3:48 AM) the decoder matched the Python
 parser entity for entity.
 
+**Travel mode** (`#/travel/<route>_<dir>/<from>/<to>`). The browser's line
+board (every started train, its position, lateness, holds and stalls) drives a
+track diagram. Between polls each marker is dead-reckoned: a stopped train
+stays put; a moving train advances from its last stop toward the next in
+proportion to elapsed time over the canonical running time, capped short of
+the stop until the feed confirms it. Trip candidates are the trains whose
+feed stop list carries both the origin and the destination with the origin
+ETA still ahead; ride time is the difference of the two ETAs and is compared
+with the canonical running time between the stops. Layers come from the
+published analyses: the line view's deviation grid gives each stop's mean
+lateness change at the current hour (summed over the stretch as "typical
+time lost"), the hold log gives holds per day per stop, ETA trust gives the
+feed's typical error at the boarding train's distance, the snapshot's
+simulation gives the destination arrival under "hold persists", the
+monitored platforms' forecasts give the learned model's ETA and downstream
+effects, and the climatology gives the line's disruption base rate for this
+day and hour. When the feeds cannot be fetched from the browser the tab falls
+back to the pipeline's last line snapshot (feed projections without
+positions).
+
 ## 9k. Scoring the live forecasts
 
 Every live snapshot records, for each predicted arrival at a monitored

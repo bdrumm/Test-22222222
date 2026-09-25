@@ -249,3 +249,55 @@ export function stringline(container, { title, subtitle, legs, now, horizonSec =
   f.table(["train", "kind", "lateness", "stops"], rows);
   return f.root;
 }
+
+
+// Vertical track diagram for one direction of a line: stops as rows, the rider's segment highlighted, trains as markers
+// that glide between polls (the caller feeds dead-reckoned positions), optional per-stop data layers as small bars.
+// layers: [{name, values: number[] indexed like stops (null = none), max, color, format}]; targets: stop ids that are monitored platforms.
+export function trackStrip(container, { stops, fromIdx, toIdx, startIdx = 0, endIdx = stops.length - 1, routeColor, rowH = 24, layers = [], targets = new Set() }) {
+  const root = html("div", "track", null, container);
+  const trackX = 180, nameX = 196, nameW = 196, layerW = 70, layerGap = 22;
+  const n = endIdx - startIdx + 1, height = 18 + n * rowH + 10;
+  const width = nameX + nameW + layers.length * (layerW + layerGap) + 6;
+  const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, role: "img" }, root);
+  svg.style.width = "100%"; svg.style.maxWidth = `${width}px`; svg.style.minWidth = "440px"; svg.style.height = "auto";
+  const color = routeColor || cssVar("--series-1");
+  const y = i => 18 + (i - startIdx) * rowH;
+  el("line", { x1: trackX, x2: trackX, y1: y(startIdx), y2: y(endIdx), stroke: cssVar("--grid"), "stroke-width": 4, "stroke-linecap": "round" }, svg);
+  el("line", { x1: trackX, x2: trackX, y1: y(fromIdx), y2: y(toIdx), stroke: color, "stroke-width": 6, "stroke-linecap": "round" }, svg);
+  layers.forEach((L, li) => { const x = nameX + nameW + li * (layerW + layerGap); const t = el("text", { x, y: 9, class: "axis-text" }, svg); t.style.fontSize = "10px"; t.textContent = L.name; });
+  for (let i = startIdx; i <= endIdx; i++) {
+    const inSeg = i >= fromIdx && i <= toIdx, isEnd = i === fromIdx || i === toIdx;
+    el("circle", { cx: trackX, cy: y(i), r: isEnd ? 6 : 3.5, fill: isEnd ? color : cssVar("--surface-1"), stroke: inSeg ? color : cssVar("--text-secondary"), "stroke-width": isEnd ? 2.5 : 1.5 }, svg);
+    const name = stops[i].name.length > 27 ? stops[i].name.slice(0, 26) + "…" : stops[i].name;
+    const t = el("text", { x: nameX, y: y(i) + 4, class: "axis-text", "font-weight": isEnd ? 700 : 400 }, svg); t.textContent = name + (targets.has(stops[i].stop_id) ? " ◎" : "");
+    if (isEnd) el("text", { x: nameX + nameW - 4, y: y(i) + 4, class: "dlabel", "text-anchor": "end" }, svg).textContent = i === fromIdx ? "board" : "alight";
+    layers.forEach((L, li) => { const val = L.values[i]; if (val == null || !(val > 0)) return;
+      const x = nameX + nameW + li * (layerW + layerGap), w = Math.max(2, Math.min(1, val / (L.max || 1)) * layerW);
+      el("rect", { x, y: y(i) - rowH * 0.27, width: w, height: rowH * 0.54, rx: 2, fill: L.color, opacity: 0.75 }, svg);
+      if (val >= (L.max || 1) * 0.2) el("text", { x: x + w + 3, y: y(i) + 4, class: "axis-text" }, svg).textContent = L.format ? L.format(val) : String(val); });
+  }
+  const layer = el("g", {}, svg);
+  const markers = new Map();
+  /** trains: [{id, idx (fractional), state, label, sub, color}] */
+  function update(trains) {
+    const seen = new Set();
+    for (const tr of trains) {
+      if (tr.idx == null || tr.idx < startIdx - 0.98 || tr.idx > endIdx + 0.02) continue;
+      seen.add(tr.id);
+      let m = markers.get(tr.id);
+      if (!m) {
+        m = el("g", { class: "train" }, layer); m.style.transition = "transform .9s linear"; m.style.transform = `translate(0px, ${y(tr.idx).toFixed(1)}px)`;
+        m.c = el("circle", { cx: trackX, cy: 0, r: 7, stroke: cssVar("--surface-1"), "stroke-width": 2 }, m);
+        m.l = el("text", { x: trackX - 14, y: 4, "text-anchor": "end", class: "train-label" }, m);
+        m.s = el("text", { x: trackX - 14, y: 15, "text-anchor": "end", class: "train-sub" }, m);
+        markers.set(tr.id, m);
+      }
+      m.style.transform = `translate(0px, ${y(tr.idx).toFixed(1)}px)`;
+      m.c.setAttribute("fill", tr.color); m.c.classList.toggle("pulse", tr.state === "holding" || tr.state === "stalled");
+      m.l.textContent = tr.label || ""; m.s.textContent = tr.sub || "";
+    }
+    for (const [id, m] of markers) if (!seen.has(id)) { m.remove(); markers.delete(id); }
+  }
+  return { root, update };
+}
