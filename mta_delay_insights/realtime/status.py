@@ -235,13 +235,31 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
         except Exception as exc:  # never break the snapshot
             incidents = [{"error": str(exc)[:200]}]
     plans = []
+    comparisons = []
+    leave_by_out = []
     if journeys:
-        from .journey import plan_journey
+        from .journey import plan_journey, compare_alternatives, leave_by
         for spec in journeys:
             try:
                 plans.append(plan_journey(spec, (journey_models or {}).get(spec.id), trains, static, now, alerts_df, weather_daily, events_df, learned=lctx))
             except Exception as exc:  # planning must never break the snapshot
                 plans.append({"id": spec.id, "label": spec.label, "error": str(exc)[:200], "options": [], "legs": [l.as_dict() for l in spec.legs]})
+        try:
+            comparisons = compare_alternatives(plans, journeys)
+        except Exception as exc:
+            comparisons = [{"error": str(exc)[:200]}]
+        # leave-by budgets for the next few round hours, per journey (typical + conservative), for the planner's calculator
+        for spec in journeys:
+            try:
+                jm = (journey_models or {}).get(spec.id)
+                hours = []
+                for k in range(1, 7):
+                    target = (int(now // 3600) + k) * 3600
+                    lb = leave_by(spec, jm, target, now)
+                    hours.append({"arrive_by_ts": target, "leave_by_ts": lb["leave_by_ts"], "typical_total_sec": lb["typical_total_sec"], "conservative_total_sec": lb["conservative_total_sec"]})
+                leave_by_out.append({"id": spec.id, "hours": hours})
+            except Exception:
+                continue
     unplanned = alerts_now[alerts_now["kind"] == "delay"] if not alerts_now.empty else alerts_now
     alerts_out = [{"alert_id": r.alert_id, "alert_type": r.alert_type, "cause_category": r.cause_category,
                    "routes": list(r.routes), "header": str(r.header)[:240], "active_start": _f(r.active_start)}
@@ -261,6 +279,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
                            "trained_at": learned.card.get("trained_at")} if lctx is not None else {"ready": False}),
         "track_changes": [t.as_dict(static) for t in trains if t.track_changed and t.started][:40],
         "incidents_developing": incidents,
+        "route_choice": comparisons, "leave_by": leave_by_out,
     }
 
 

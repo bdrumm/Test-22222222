@@ -519,3 +519,75 @@ def stringline_data(spec: JourneySpec, trains: list, static: StaticGTFS, now: fl
                 lines.append({"trip_id": t.trip_id, "route_id": t.route_id, "points": pts, "lateness_sec": t.lateness_sec if t.started else None})
         out.append({"leg": li, "stops": [{"stop_id": s, "name": static.stop_name(s)} for s in leg.stops], "trains": lines})
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Route choice and leave-by planning
+# --------------------------------------------------------------------------- #
+def od_key(spec: JourneySpec) -> tuple[str, str]:
+    """Origin and destination station names: alternatives for the same pair are compared together."""
+    return (spec.legs[0].from_name or spec.legs[0].from_stop, spec.legs[-1].to_name or spec.legs[-1].to_stop)
+
+
+def compare_alternatives(plans: list[dict], specs: list[JourneySpec]) -> list[dict]:
+    """Group journey plans by origin/destination and rank the alternatives by predicted arrival now."""
+    by_id = {sp.id: sp for sp in specs}
+    groups: dict[tuple, list] = {}
+    for p in plans:
+        sp = by_id.get(p.get("id"))
+        if sp is None or p.get("error"):
+            continue
+        groups.setdefault(od_key(sp), []).append(p)
+    out = []
+    for (o, d), ps in groups.items():
+        if len(ps) < 2:
+            continue
+        ranked = sorted([p for p in ps if p.get("best")], key=lambda p: p["best"]["arrive_ts"])
+        if not ranked:
+            continue
+        best = ranked[0]
+        alts = []
+        for p in ranked:
+            b = p["best"]
+            alts.append({"id": p["id"], "label": p["label"], "arrive_ts": b["arrive_ts"], "total_sec": b["total_sec"], "depart_ts": b["depart_ts"],
+                         "range_sec": b["total_hi_sec"] - b["total_lo_sec"], "routes": b["routes"], "tight_connection": b.get("tight_connection", False),
+                         "warnings": b.get("warnings", []), "typical_total_sec": p.get("typical_total_sec"),
+                         "vs_best_sec": b["arrive_ts"] - best["best"]["arrive_ts"]})
+        margin = alts[1]["vs_best_sec"] if len(alts) > 1 else None
+        confident = margin is not None and margin > 0.5 * max(alts[0]["range_sec"], 60)
+        typical_best = min((a for a in alts if a["typical_total_sec"]), key=lambda a: a["typical_total_sec"], default=None)
+        out.append({"origin": o, "destination": d, "best_id": best["id"], "best_label": best["label"], "alternatives": alts,
+                    "margin_sec": margin, "confident": bool(confident),
+                    "typical_best_id": typical_best["id"] if typical_best else None,
+                    "recommendation": (f"Take the {best['label']}: arrives {_hhmm(best['best']['arrive_ts'])}, "
+                                       + (f"{margin / 60:.0f} min ahead of the next option" if margin else "only option with a catchable train")
+                                       + ("" if confident or margin is None else " (close call: the ranges overlap)")
+                                       + (f"; usually the {typical_best['label']} is faster at this hour" if typical_best and typical_best["id"] != best["id"] else ""))})
+    return out
+
+
+def leave_by(spec: JourneySpec, model: JourneyModel | None, arrive_by_ts: float, now: float, confidence: float = 0.9) -> dict:
+    """Latest departure from the origin platform to arrive by ``arrive_by_ts`` with the given confidence,
+    from typical waits (p90 headway-based) and scheduled rides plus the model's residual spread."""
+    model = model or JourneyModel(spec.id, [LegModel(l.from_stop, l.to_stop, list(l.routes)) for l in spec.legs])
+    local = datetime.fromtimestamp(arrive_by_ts, NY_TZ)
+    hour, period = local.hour, _period(local.hour, local.weekday())
+    total_typ, total_cons, legs = 0.0, 0.0, []
+    for li, leg in enumerate(spec.legs):
+        lm = model.legs[li] if li < len(model.legs) else LegModel(leg.from_stop, leg.to_stop, list(leg.routes))
+        r = leg.routes[0]
+        w = lm.wait.get(r, {}).get(str(hour), {})
+        wait_exp, wait_p90 = w.get("expected", 300.0), w.get("p90", 600.0)
+        sched = lm.sched_ride.get(r, {}).get(str(hour)) or 600.0
+        excess = lm.excess({"peak": float(hour in PEAK_HOURS and local.weekday() < 5), "weekend": float(local.weekday() >= 5)})
+        p10, p90 = lm.spread(r, period)
+        walk = leg.transfer_min * 60
+        typ = wait_exp + walk + sched + excess
+        cons = (wait_p90 if confidence >= 0.85 else wait_exp) + walk + sched + excess + (p90 if confidence >= 0.85 else 0.5 * p90)
+        total_typ += typ; total_cons += cons
+        legs.append({"route": r, "wait_sec": wait_exp, "wait_p90_sec": wait_p90, "walk_sec": walk, "ride_sec": sched + excess, "ride_p90_extra_sec": p90})
+    leave_ts = arrive_by_ts - total_cons
+    return {"arrive_by_ts": arrive_by_ts, "leave_by_ts": leave_ts, "typical_total_sec": total_typ, "conservative_total_sec": total_cons,
+            "confidence": confidence, "minutes_until_leave": (leave_ts - now) / 60.0, "legs": legs,
+            "text": f"To arrive by {_hhmm(arrive_by_ts)} with {confidence:.0%} confidence, be on the platform by {_hhmm(leave_ts)} "
+                    f"({total_cons / 60:.0f} min budget; a typical trip takes {total_typ / 60:.0f} min)"}

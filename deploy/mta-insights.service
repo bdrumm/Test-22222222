@@ -1,0 +1,18 @@
+# systemd unit for a bare VM (no Docker): pip install . into a venv at /opt/mta-insights first.
+[Unit]
+Description=MTA delay insights: continuous collector, live API and site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mta
+WorkingDirectory=/opt/mta-insights
+Environment=PORT=8000
+ExecStartPre=/bin/sh -c 'test -f /var/lib/mta-insights/gtfs_subway.zip || curl -sSL -o /var/lib/mta-insights/gtfs_subway.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip'
+ExecStart=/opt/mta-insights/.venv/bin/mta-insights serve --site /opt/mta-insights/site --gtfs /var/lib/mta-insights/gtfs_subway.zip --db /var/lib/mta-insights/mta.sqlite --targets /opt/mta-insights/pipeline/targets.json --port 8000 --interval 30
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

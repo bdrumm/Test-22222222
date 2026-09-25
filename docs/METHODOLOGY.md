@@ -374,6 +374,22 @@ median and p90 absolute error and the signed bias by stops ahead, per route,
 say how far ahead the countdown clock can be believed and whether it is
 systematically optimistic.
 
+## 9f. Route choice and leave-by
+
+Journeys with the same origin and destination stations are alternatives.
+Each is planned independently from the live snapshot; the alternative with
+the earliest predicted arrival is recommended, with the margin to the next
+option and a "close call" flag when the margin is smaller than half the best
+option's p10–p90 range. The historically faster alternative at this hour
+(typical waits + scheduled rides + learned excess) is named when it differs
+from the live winner.
+
+The leave-by budget for arriving at a target time with 90% confidence is the
+sum over legs of the p90 wait at that hour (from observed headways, else the
+scheduled headway), the transfer walk, the scheduled ride plus the journey
+model's expected excess, and the p90 residual of that route and period. The
+typical trip uses the expected wait and no residual margin.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

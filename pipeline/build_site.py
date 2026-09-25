@@ -420,7 +420,10 @@ def build_synthetic(args) -> dict:
                              "legs": [{"from": {"station": "14 St-Union Sq", "direction": "N", "routes": ["6"]}, "to": {"station": "Grand Central", "direction": "N", "routes": ["6"]}},
                                       {"transfer_min": 1, "from": {"station": "Grand Central", "direction": "N", "routes": ["4"]}, "to": {"station": "59 St", "direction": "N", "routes": ["4"]}}]},
                             {"id": "bleecker-to-59st-direct", "label": "Bleecker St → 59 St (6 local, no transfer)",
-                             "legs": [{"from": {"station": "Bleecker St", "direction": "N", "routes": ["6"]}, "to": {"station": "59 St", "direction": "N", "routes": ["6"]}}]}],
+                             "legs": [{"from": {"station": "Bleecker St", "direction": "N", "routes": ["6"]}, "to": {"station": "59 St", "direction": "N", "routes": ["6"]}}]},
+                            {"id": "bleecker-to-59st-via-4", "label": "Bleecker St → 59 St (6 to Grand Central, then 4 express)",
+                             "legs": [{"from": {"station": "Bleecker St", "direction": "N", "routes": ["6"]}, "to": {"station": "Grand Central", "direction": "N", "routes": ["6"]}},
+                                      {"transfer_min": 1, "from": {"station": "Grand Central", "direction": "N", "routes": ["4"]}, "to": {"station": "59 St", "direction": "N", "routes": ["4"]}}]}],
                "upstream_stops": 6, "route_share_of_entries": 0.5}
     now = datetime.combine(sc.end, datetime.min.time(), NY_TZ)
     from mta_delay_insights.sources import events as events_src

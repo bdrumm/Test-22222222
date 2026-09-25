@@ -214,15 +214,23 @@ def cmd_serve(args):
     from mta_delay_insights.realtime.journey import resolve_journeys
     g = _load_static(args.gtfs)
     targets = lib.load_targets(args.targets)
-    _, feeds, resolved = lib.stops_and_feeds(g, targets)
+    stops, feeds, resolved = lib.stops_and_feeds(g, targets)
+    copts = lib.collect_options(targets)
+    if args.all_feeds or copts.get("all_stops"):
+        feeds = sorted(set(feeds) | set(copts.get("extra_feeds", [])) | set(config.SUBWAY_FEED_ROUTES))
     for t in resolved:
         rr = lib.resolve_target(g, t); t["upstream"], t["terminals"] = rr["upstream"], rr["terminals"]
-    store = Store(args.db) if args.db and Path(args.db).exists() else None
+    store = None
+    if args.db:
+        Path(args.db).parent.mkdir(parents=True, exist_ok=True)
+        store = Store(args.db)
     try:
         journeys = resolve_journeys(g, targets)
     except Exception as exc:
         logging.warning("journeys not resolved: %s", exc); journeys = []
-    serve(args.site, g, resolved, feeds, store, journeys, port=args.port, interval=args.interval)
+    learned_path = Path(args.db).with_name("arrival.joblib") if args.db else None
+    serve(args.site, g, resolved, feeds, store, journeys, port=args.port, interval=args.interval,
+          collect=not args.no_collect, sample_stops=stops, learned_path=learned_path)
 
 
 def cmd_demo(args):
@@ -330,6 +338,8 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--targets", default=None)
     sv.add_argument("--port", type=int, default=8000)
     sv.add_argument("--interval", type=float, default=30)
+    sv.add_argument("--all-feeds", action="store_true", help="poll every subway feed (default when targets.json sets collect.all_stops)")
+    sv.add_argument("--no-collect", action="store_true", help="serve only; do not persist arrivals into --db")
     sv.set_defaults(func=cmd_serve)
 
     d = sub.add_parser("demo", help="run a synthetic scenario end to end")

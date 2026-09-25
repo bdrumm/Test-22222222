@@ -1,0 +1,15 @@
+# A self-hosted deployment: the server collects every 30 s into a persistent SQLite store,
+# refits the models periodically, serves the app and a JSON API on :8000.
+services:
+  insights:
+    build: .
+    restart: unless-stopped
+    ports: ["8000:8000"]
+    volumes: ["mta-data:/data"]
+    environment:
+      - INTERVAL=30
+      - TICKETMASTER_API_KEY=${TICKETMASTER_API_KEY:-}
+      - SOCRATA_APP_TOKEN=${SOCRATA_APP_TOKEN:-}
+    command: ["serve"]
+volumes:
+  mta-data: {}

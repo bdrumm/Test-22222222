@@ -51,7 +51,7 @@ log reports the HTTP status of the live URL.
 
 | page | what it shows |
 |---|---|
-| Plan a trip | trip-time planner for the configured journeys (e.g. 4 Av-9 St → 14 St-8 Av): leave-now arrival time with a range, every catchable option in the next hour with wait / walk / ride breakdown, typical time at this hour vs right now, and a time-distance (stringline) chart of the trains on the corridor with the recommended itinerary drawn on it |
+| Plan a trip | trip-time planner (with *which way right now*: alternatives for the same origin and destination ranked by predicted arrival, with a confidence call when ranges overlap, and *when should I leave*: platform-by times for arriving by each of the next hours with 90% confidence) for the configured journeys (e.g. 4 Av-9 St → 14 St-8 Av): leave-now arrival time with a range, every catchable option in the next hour with wait / walk / ride breakdown, typical time at this hour vs right now, and a time-distance (stringline) chart of the trains on the corridor with the recommended itinerary drawn on it |
 | Line view | every train on a line as a time-distance (Marey) chart: observed arrivals over the last two hours coloured by lateness, the feed's projections for trains under way, and the timetable; where the line loses time (stop × hour heatmap of lateness change); how far ahead the countdown clock can be trusted (ETA error by stops ahead, from the sampled ETAs) |
 | Disruptions | disruption climatology from the MTA service-alert archive (since 2020): unplanned events per week by line, by hour and weekday, a day × hour heatmap per line, durations by cause |
 | Model | the learned arrival model's card: error by horizon and route vs the schedule, persistence and the MTA countdown ETA, range coverage and calibration, feature importance |
@@ -91,6 +91,18 @@ python -m pipeline.build_site --synthetic --out _site && python -m http.server -
 
 The scheduled collector is a convenience for review; for production, run
 `mta-insights collect` continuously on a small VM and point `build_site` at its store.
+
+## Running your own instance (beyond GitHub Pages)
+
+Pages refreshes only while the hourly Actions run collects. For continuous
+30-second updates, a growing local history, the line views and a JSON API,
+run the server yourself: `docker compose up -d --build` (or the systemd unit
+in `deploy/`). `mta-insights serve` is then a collector *and* a server: every
+poll of every feed is ingested into a persistent SQLite store, the
+propagation, journey and learned arrival models are refitted from that store
+every 30 minutes, and `/api/live`, `/api/plan?journey=`, `/api/routes`,
+`/api/station?id=`, `/api/incidents` and `/api/health` expose the snapshot.
+See [deploy/README.md](deploy/README.md).
 
 ## Data sources
 

@@ -442,6 +442,19 @@ async function plan(idx, journeyId) {
     h("span", "age", `as of ${hhmm(d.generated_ts)} ET · ${ageText(Date.now() / 1000 - d.generated_ts)} · ${d.source}`, rf);
     const btn = h("button", "icon-btn", "↻", rf); btn.title = "Refresh"; btn.addEventListener("click", draw);
     if (!journeys.length) { h("div", "empty", "No journeys configured. Add them under \"journeys\" in pipeline/targets.json.", root); return; }
+    // Route choice across alternatives for the same origin/destination
+    const rc = (d.route_choice || []).filter(x => !x.error);
+    if (rc.length) {
+      h("h2", null, "Which way right now?", root);
+      rc.forEach(g => { const card = h("div", "card", null, root);
+        h("div", "row between", null, card).append(Object.assign(h("strong", null, `${g.origin} → ${g.destination}`), {}));
+        h("p", "small", g.recommendation, card).style.marginTop = ".4rem";
+        const wrap = h("div", "table-wrap", null, card); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
+        ["option", "trains", "leave in", "arrive", "total", "range", "vs best"].forEach((x, i) => h("th", i >= 2 ? "num" : "", x, tr)); const tb = h("tbody", null, null, t);
+        g.alternatives.forEach((a, i) => { const r = h("tr", i === 0 ? "worse" : "", null, tb); const c0 = h("td", null, null, r); link(`#/plan/${a.id}`, a.label, c0, "small");
+          const c1 = h("td", null, null, r); a.routes.forEach(x => routeBullet(x, c1)); h("td", "num", minTxt(a.depart_ts - d.generated_ts), r); h("td", "num eta", hhmm(a.arrive_ts), r); h("td", "num", minTxt(a.total_sec), r); h("td", "num small", `±${(a.range_sec / 120).toFixed(0)} min`, r);
+          h("td", "num", i === 0 ? "best" : `+${(a.vs_best_sec / 60).toFixed(0)} min`, r); if (a.tight_connection) { const w = h("span", "status-chip st-degraded", null, c0); h("span", "dot", null, w); w.append("tight connection"); } }); });
+    }
     const filters = h("div", "filters", null, root);
     h("label", "small secondary", "Journey", filters);
     const sel = h("select", null, null, filters);
@@ -489,6 +502,16 @@ async function plan(idx, journeyId) {
       stringline(card, { title: "Time-distance view", subtitle: "each line is a train (feed ETAs); the dashed red path is the recommended itinerary: wait, ride, transfer, ride", legs: j.stringline, now, highlight: hl, path, routeColor: r => ROUTE_COLORS[r] || null });
       const lg = h("div", "small secondary", null, card); lg.style.marginTop = ".4rem";
       lg.textContent = "Highlighted lines are the trains you would take; grey lines are other trains on the corridor. Steeper lines mean faster running; flat segments are dwells or holds.";
+    }
+    // Leave-by calculator: arrive by a chosen time with 90% confidence
+    const lb = (d.leave_by || []).find(x => x.id === j.id);
+    if (lb && lb.hours.length) {
+      h("h2", null, "When should I leave?", root);
+      const card = h("div", "card", null, root);
+      h("div", "small secondary", "Budget for arriving by a given time with 90% confidence: p90 waits at this hour, scheduled rides plus the model's p90 excess, and the transfer walks. Typical is the expected trip.", card);
+      const wrap = h("div", "table-wrap", null, card); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
+      ["arrive by", "be on the platform by", "budget (90%)", "typical trip"].forEach((x, i) => h("th", i ? "num" : "", x, tr)); const tb = h("tbody", null, null, t);
+      lb.hours.forEach(x => { const r = h("tr", null, null, tb); h("td", null, hhmm(x.arrive_by_ts), r); h("td", "num eta", hhmm(x.leave_by_ts), r); h("td", "num", minTxt(x.conservative_total_sec), r); h("td", "num", minTxt(x.typical_total_sec), r); });
     }
     // Cross-line context from the route analysis
     try {
