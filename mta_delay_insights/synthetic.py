@@ -385,8 +385,17 @@ def to_rt_snapshots(arrivals: pd.DataFrame, start_ts: float, end_ts: float, poll
                 pred = max(pred, prev_pred + 45.0)          # predictions keep the stop order, like a real feed
                 prev_pred = pred
                 stops.append((r.stop_id, pred, pred + DWELL_SEC))
+            # vehicle position from the simulated movements: dwelling at the last served stop or running to the next
+            past = g[g["arrival_ts"] < t]
+            vehicle = None
+            if first <= t:
+                if len(past) and t - float(past["arrival_ts"].iloc[-1]) <= DWELL_SEC:
+                    vehicle = {"stop_id": past["stop_id"].iloc[-1], "ts": float(past["arrival_ts"].iloc[-1]), "status": "STOPPED_AT"}
+                else:
+                    dep = float(past["arrival_ts"].iloc[-1]) + DWELL_SEC if len(past) else first
+                    vehicle = {"stop_id": fut["stop_id"].iloc[0], "ts": dep, "status": "IN_TRANSIT_TO"}
             trips.append({"trip_id": g.iloc[0]["trip_id"], "route_id": g.iloc[0]["route_id"],
-                          "start_date": g.iloc[0]["start_date"], "stops": stops})
+                          "start_date": g.iloc[0]["start_date"], "stops": stops, "vehicle": vehicle})
         snaps.append((feed_key, float(t), encode_trip_updates(trips, t)))
         t += poll_interval
     return snaps

@@ -47,6 +47,22 @@ class LiveTrain:
     started: bool = True                   # False for scheduled trips the feed lists before departure
     track_changed: float = 0.0             # 1.0 when the feed's actual track differs from the scheduled one
     train_id: str | None = None
+    # vehicle position (second, independent signal): where the train physically is and for how long
+    pos_status: str | None = None          # STOPPED_AT | IN_TRANSIT_TO | INCOMING_AT
+    pos_stop_id: str | None = None
+    pos_ts: float | None = None            # feed timestamp of the current position state
+    since_update_sec: float | None = None  # time in the current state (dwell so far, or run so far)
+    expected_run_sec: float | None = None  # scheduled run time into pos_stop_id (IN_TRANSIT_TO)
+    holding: bool = False                  # stopped at a station much longer than a normal dwell
+    stalled: bool = False                  # between stations much longer than the scheduled run
+    position_lateness_sec: float | None = None   # lateness implied by the position alone
+    corroboration: str | None = None       # feed ETA vs position: agree | feed_optimistic | position_unknown
+
+    @property
+    def effective_lateness_sec(self) -> float | None:
+        """Lateness the forecasts should use: the feed's, raised to what the position already proves."""
+        vals = [v for v in (self.lateness_sec, self.position_lateness_sec) if v is not None]
+        return max(vals) if vals else None
 
     def eta_at(self, stop_id: str) -> float | None:
         for s, t in self.stops:
@@ -65,7 +81,11 @@ class LiveTrain:
         return {"trip_id": self.trip_id, "route_id": self.route_id, "direction": self.direction, "feed": self.feed,
                 "next_stop_id": self.next_stop_id, "next_stop_name": name(self.next_stop_id),
                 "next_eta_ts": self.next_eta_ts, "lateness_sec": self.lateness_sec, "sched_matched": self.sched_matched,
-                "started": self.started, "stops_ahead": len(self.stops), "track_changed": bool(self.track_changed), "train_id": self.train_id}
+                "started": self.started, "stops_ahead": len(self.stops), "track_changed": bool(self.track_changed), "train_id": self.train_id,
+                "position": {"status": self.pos_status, "stop_id": self.pos_stop_id, "stop_name": name(self.pos_stop_id), "since_sec": self.since_update_sec,
+                             "expected_run_sec": self.expected_run_sec, "holding": self.holding, "stalled": self.stalled,
+                             "position_lateness_sec": self.position_lateness_sec, "corroboration": self.corroboration} if self.pos_status else None,
+                "effective_lateness_sec": self.effective_lateness_sec}
 
 
 def _service_date(start_date: str | None, now: float) -> date:
@@ -74,9 +94,55 @@ def _service_date(start_date: str | None, now: float) -> date:
     return (datetime.fromtimestamp(now, NY_TZ) - timedelta(hours=3)).date()
 
 
+HOLD_SEC = 150.0        # stopped this long at a station = holding (a normal dwell is 30-60 s)
+STALL_SLACK_SEC = 120.0  # in transit this much longer than the scheduled run = stalled
+
+
+def _fuse_position(train: "LiveTrain", veh: dict, static: StaticGTFS | None, now: float) -> None:
+    """Attach the vehicle position and derive holding / stalled flags and position-implied lateness."""
+    train.pos_status = veh.get("current_status")
+    train.pos_stop_id = veh.get("stop_id") or None
+    ts = veh.get("vehicle_ts")
+    train.pos_ts = float(ts) if ts is not None and not pd.isna(ts) else None
+    if train.pos_ts is not None:
+        train.since_update_sec = max(0.0, now - train.pos_ts)
+    if static is None or not train.pos_stop_id or train.service_date is None:
+        return
+    sched_here = static.scheduled_arrival(train.trip_id, train.pos_stop_id, train.service_date)
+    if train.pos_status == "STOPPED_AT":
+        if train.since_update_sec is not None:
+            train.holding = train.since_update_sec >= HOLD_SEC
+        if sched_here is not None:
+            train.position_lateness_sec = float(now - sched_here)          # still here: at least this late
+    elif train.pos_status in ("IN_TRANSIT_TO", "INCOMING_AT"):
+        prev = None
+        try:
+            seq = static.canonical_stop_sequence(train.route_id, train.direction or "N")
+            i = seq.index(train.pos_stop_id) if train.pos_stop_id in seq else -1
+            prev = seq[i - 1] if i > 0 else None
+        except Exception:
+            prev = None
+        if prev is not None and sched_here is not None:
+            sched_prev = static.scheduled_arrival(train.trip_id, prev, train.service_date)
+            if sched_prev is not None:
+                train.expected_run_sec = max(30.0, float(sched_here - sched_prev))
+        if train.since_update_sec is not None and train.expected_run_sec is not None:
+            train.stalled = train.since_update_sec > train.expected_run_sec + STALL_SLACK_SEC
+        if sched_here is not None:
+            remaining = 0.0 if train.expected_run_sec is None else max(0.0, train.expected_run_sec - (train.since_update_sec or 0.0))
+            train.position_lateness_sec = float(now + remaining - sched_here)
+    # corroborate the feed's own lateness with the position's lower bound
+    if train.lateness_sec is not None and train.position_lateness_sec is not None:
+        gap = train.position_lateness_sec - train.lateness_sec
+        train.corroboration = "feed_optimistic" if gap > 60 else "agree"
+    elif train.position_lateness_sec is None:
+        train.corroboration = "position_unknown"
+
+
 def live_trains(feed_bytes: dict[str, bytes], static: StaticGTFS | None, now: float,
                 past_slack_sec: float = 90.0) -> list[LiveTrain]:
-    """Parse all feeds into LiveTrain objects with lateness at the next stop when the schedule matches."""
+    """Parse all feeds into LiveTrain objects with lateness at the next stop when the schedule matches,
+    fused with the vehicle positions (holding / stalled / position-implied lateness)."""
     trains: list[LiveTrain] = []
     for feed_key, data in feed_bytes.items():
         try:
@@ -86,6 +152,11 @@ def live_trains(feed_bytes: dict[str, bytes], static: StaticGTFS | None, now: fl
         tu = rt.trip_updates_frame(msg, feed_key, now)
         if tu.empty:
             continue
+        vp = rt.vehicle_positions_frame(msg, feed_key, now)
+        positions = {}
+        if not vp.empty:
+            for r in vp.to_dict("records"):
+                positions[(r["trip_id"], None if pd.isna(r.get("start_date")) else r.get("start_date"))] = r
         tu = tu.dropna(subset=["arrival_ts"])
         for (trip_id, start_date), g in tu.groupby(["trip_id", "start_date"], dropna=False, sort=False):
             start_date = None if pd.isna(start_date) else start_date
@@ -113,6 +184,12 @@ def live_trains(feed_bytes: dict[str, bytes], static: StaticGTFS | None, now: fl
                     n_sched = len(static._trip_stop_index().get(tid, {})) if tid else 0
                     if n_sched and len(stops) >= n_sched and train.next_eta_ts > now + 60:
                         train.started = False
+            veh = positions.get((trip_id, start_date)) or positions.get((trip_id, None))
+            if veh is not None and train.started:
+                try:
+                    _fuse_position(train, veh, static, now)
+                except Exception:
+                    pass
             trains.append(train)
     return trains
 
@@ -181,17 +258,21 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
                 if b - a > best_gap:
                     best_gap, gap_stop, gap_when = b - a, s, b
         started = [t for t in ts if t.started]
-        lat = [t.lateness_sec for t in started if t.lateness_sec is not None]
+        lat = [t.effective_lateness_sec for t in started if t.effective_lateness_sec is not None]
         med_late = float(np.median(lat)) if lat else None
         p90_late = float(np.quantile(lat, 0.9)) if lat else None
+        n_holding = sum(1 for t in started if t.holding)
+        n_stalled = sum(1 for t in started if t.stalled)
+        n_pos = sum(1 for t in started if t.pos_status)
+        n_optimistic = sum(1 for t in started if t.corroboration == "feed_optimistic")
         route_alerts = alerts_now[alerts_now["routes"].map(lambda rs: route in rs)] if not alerts_now.empty else alerts_now
         unplanned = route_alerts[(route_alerts["kind"] == "delay")] if not route_alerts.empty else route_alerts
         disruptive = [h for t, h in zip(unplanned.get("alert_type", []), unplanned.get("header", []))
                       if str(t).lower().startswith(DISRUPTION_TYPES)]
         gap_ratio = (best_gap / sched_hw) if (sched_hw and best_gap) else None
-        if disruptive or (gap_ratio and gap_ratio >= GAP_DISRUPTED) or (med_late is not None and med_late >= LATE_DISRUPTED_SEC):
+        if disruptive or (gap_ratio and gap_ratio >= GAP_DISRUPTED) or (med_late is not None and med_late >= LATE_DISRUPTED_SEC) or n_stalled >= 2:
             status = "disrupted"
-        elif len(unplanned) or (gap_ratio and gap_ratio >= GAP_DEGRADED) or (med_late is not None and med_late >= LATE_DEGRADED_SEC):
+        elif len(unplanned) or (gap_ratio and gap_ratio >= GAP_DEGRADED) or (med_late is not None and med_late >= LATE_DEGRADED_SEC) or n_stalled or n_holding >= 2:
             status = "degraded"
         else:
             status = "good"
@@ -199,6 +280,9 @@ def route_status(trains: list[LiveTrain], alerts_now: pd.DataFrame, static: Stat
             "route_id": route, "direction": direction, "trains": len(started), "scheduled_not_started": len(ts) - len(started),
             "matched": sum(1 for t in started if t.sched_matched),
             "median_lateness_sec": med_late, "p90_lateness_sec": p90_late,
+            "positions": {"n": n_pos, "holding": n_holding, "stalled": n_stalled, "feed_optimistic": n_optimistic,
+                          "stalled_trains": [{"trip_id": t.trip_id, "train_id": t.train_id, "toward": static.stop_name(t.pos_stop_id), "since_sec": t.since_update_sec, "expected_run_sec": t.expected_run_sec} for t in started if t.stalled][:5],
+                          "holding_trains": [{"trip_id": t.trip_id, "train_id": t.train_id, "at": static.stop_name(t.pos_stop_id), "since_sec": t.since_update_sec} for t in started if t.holding][:5]},
             "sched_headway_sec": sched_hw, "max_gap_sec": best_gap or None,
             "max_gap_ratio": gap_ratio, "max_gap_stop": gap_stop, "max_gap_stop_name": static.stop_name(gap_stop) if gap_stop else None,
             "max_gap_at_ts": gap_when, "bunching_share": (n_bunch / n_hw) if n_hw else None,
@@ -227,6 +311,21 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
     for t in targets:
         model = (models or {}).get(t["id"])
         stations.append(forecast_station(t, trains, static, model, now, alerts_now, learned=lctx))
+    # forward simulation for the lines that matter to the monitored platforms and journeys
+    sims = []
+    try:
+        from .simulate import simulate_routes, station_scenarios
+        pairs = sorted({(str(r), t.get("direction") or "N") for t in targets for r in t.get("routes", [])})
+        for spec in journeys or []:
+            for leg in spec.legs:
+                d = leg.from_stop[-1] if leg.from_stop and leg.from_stop[-1] in "NS" else "N"
+                pairs += [(str(r), d) for r in leg.routes]
+        pairs = sorted(set(pairs))
+        sims = simulate_routes(trains, static, pairs, now, lctx)
+        for st in stations:
+            st["scenarios"] = station_scenarios(sims, st["stop_id"], now)
+    except Exception as exc:  # the simulation is an add-on; never break the snapshot
+        sims = [{"error": str(exc)[:200]}]
     incidents = []
     if store is not None:
         try:
@@ -234,6 +333,22 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
             incidents = developing_incidents(store, static, now, alerts_now)
         except Exception as exc:  # never break the snapshot
             incidents = [{"error": str(exc)[:200]}]
+    alerted_routes = set()
+    if alerts_now is not None and not alerts_now.empty and "kind" in alerts_now:
+        for rs in alerts_now[alerts_now["kind"] == "delay"]["routes"]:
+            alerted_routes |= {str(x) for x in (rs or [])}
+    for t in trains:
+        if t.started and (t.stalled or (t.holding and (t.since_update_sec or 0) >= 2 * HOLD_SEC)):
+            where = (f"between the previous stop and {static.stop_name(t.pos_stop_id)}" if t.stalled else f"at {static.stop_name(t.pos_stop_id)}")
+            incidents.append({"kind": "stalled" if t.stalled else "holding", "route_id": t.route_id, "direction": t.direction, "trip_id": t.trip_id, "train_id": t.train_id,
+                              "to_stop": t.pos_stop_id, "to_name": static.stop_name(t.pos_stop_id), "n_trains": 1, "n_slow": 1,
+                              "mean_loss_sec": float(t.since_update_sec or 0) - float(t.expected_run_sec or 0), "first_seen_ts": t.pos_ts, "last_seen_ts": now,
+                              "alerted": t.route_id in alerted_routes,
+                              "text": f"{t.route_id} {'northbound' if t.direction == 'N' else 'southbound'} train {t.train_id or t.trip_id} has been {where} for "
+                                      f"{(t.since_update_sec or 0) / 60:.0f} min" + (f" (scheduled run {t.expected_run_sec / 60:.0f} min)" if t.stalled and t.expected_run_sec else "")
+                                      + ("" if t.route_id in alerted_routes else " (no alert posted yet)")})
+    incidents = [x for x in incidents if "error" not in x]
+    incidents.sort(key=lambda x: (x.get("alerted", False), -(x.get("mean_loss_sec") or 0)))
     plans = []
     comparisons = []
     leave_by_out = []
@@ -280,6 +395,11 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
         "track_changes": [t.as_dict(static) for t in trains if t.track_changed and t.started][:40],
         "incidents_developing": incidents,
         "route_choice": comparisons, "leave_by": leave_by_out,
+        "simulation": [x for x in sims if "error" not in x],
+        "simulation_error": next((x["error"] for x in sims if "error" in x), None),
+        "positions": {"n_with_position": sum(1 for t in trains if t.pos_status and t.started),
+                      "holding": sum(1 for t in trains if t.holding and t.started), "stalled": sum(1 for t in trains if t.stalled and t.started),
+                      "feed_optimistic": sum(1 for t in trains if t.corroboration == "feed_optimistic" and t.started)},
     }
 
 

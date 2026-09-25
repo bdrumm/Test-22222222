@@ -296,6 +296,19 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         learned = ArrivalModel()
         (out_data / "models" / "arrival.card.json").write_text(json.dumps({"status": "error", "error": str(exc)[:300]}))
     live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context, learned, store)
+    try:
+        from .client_export import export_client_schedule
+        _, feeds_all, _ = lib.stops_and_feeds(static, targets)
+        feed_urls, demo_now = None, None
+        if mode == "synthetic" and feed_bytes:
+            # self-contained preview: the browser-side live mode replays the recorded snapshot at its own time
+            (out_data / "feeds").mkdir(exist_ok=True)
+            for k, data in feed_bytes.items():
+                (out_data / "feeds" / f"{k}.pb").write_bytes(data)
+            feed_urls, demo_now, feeds_all = {k: f"feeds/{k}.pb" for k in feed_bytes}, now.timestamp(), sorted(feed_bytes)
+        export_client_schedule(static, resolved, specs, out_data, now, feeds_all, feed_urls=feed_urls, demo_now=demo_now)
+    except Exception as exc:
+        logging.warning("client schedule export failed: %s", exc)
     routes_out = {"routes": [], "transfers": []}
     if specs:
         try:
@@ -539,6 +552,14 @@ def build_synthetic(args) -> dict:
             if tu.trip.trip_id == held:
                 for x in tu.stop_time_update:
                     x.arrival.time += 360; x.departure.time += 360
+    for ent in msg.entity:
+        if held and ent.HasField("vehicle") and ent.vehicle.trip.trip_id == held:
+            # its reported position: stopped at the next stop for 7 minutes (the feed's ETAs above are still optimistic)
+            held_tu = next(e.trip_update for e in msg.entity if e.HasField("trip_update") and e.trip_update.trip.trip_id == held)
+            from google.transit import gtfs_realtime_pb2 as _pb
+            ent.vehicle.current_status = _pb.VehiclePosition.VehicleStopStatus.Value("STOPPED_AT")
+            ent.vehicle.stop_id = held_tu.stop_time_update[0].stop_id
+            ent.vehicle.timestamp = int(snap_now.timestamp() - 420)
     context["_feed_bytes"] = {feed_key: data}
     alerts_live = sim.alerts.copy()
     unplanned_idx = alerts_live.index[~alerts_live["planned"]] if not alerts_live.empty else []

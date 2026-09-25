@@ -185,6 +185,40 @@ slip by lead time, how lateness upstream carries to the platform, how often
 gaps persist, and how much each alert cause adds. See
 [docs/METHODOLOGY.md](docs/METHODOLOGY.md#8-realtime-mode-and-the-look-back-propagation-model).
 
+### Train positions, corroboration and what-if scenarios
+
+Every live snapshot fuses the feeds' **vehicle positions** with the trip
+updates. A train reported `STOPPED_AT` a station for 2.5 minutes or more is
+*holding*; one `IN_TRANSIT_TO` its next stop for longer than the scheduled run
+plus 2 minutes is *stalled*. The position also proves a lower bound on the
+train's lateness (it is still at a stop it should have left), so when that
+exceeds what the feed's ETA implies the train is flagged *feed optimistic* and
+every downstream ETA is raised accordingly. Holding or stalled trains show up
+under "Developing right now" before any alert is posted.
+
+From the fused state the snapshot runs a **forward simulation** for each line
+that serves a monitored platform or journey: every train's trajectory over the
+next hour (learned-model ETAs where available, position-corrected, no train
+within 90 s of the one ahead), the knock-on delay this adds to followers, and
+the largest projected gap. Where a train is holding, two more scenarios are
+simulated, *hold persists 10 more minutes* and *clears now*, and each
+monitored platform states what they mean for its next arrivals ("if the hold
+on the 6 persists, the next trains arrive 0/10/7 min later and the gap grows to
+13 min"). The Line view draws the simulated trajectories (dotted) on the Marey
+chart next to the observed and feed-projected ones.
+
+### 30-second live mode in the browser
+
+The MTA feed endpoint allows cross-origin requests, so the published site can
+poll the feeds itself. The "live feeds" toggle on the Live page fetches the
+relevant line-group feeds every 30 seconds, decodes the protobuf in the
+browser (`site/rt-client.js`, no dependencies), and computes the board for
+every monitored platform: next arrivals, lateness against today's timetable
+(shipped by the build as `data/client_schedule.json`), positions, holds,
+stalls, feed-optimistic corrections, gaps and bunching, and the "if the hold
+persists" ETAs with the same rules the Python side uses. The pipeline snapshot
+below it still carries the model forecasts and downstream effects.
+
 ## Learned arrival model
 
 `mta_delay_insights/models/` turns the collected history into a prediction
@@ -314,10 +348,10 @@ mta_delay_insights/
     report.py             InsightReport → Markdown / JSON
     engine.py             analyze_station(): orchestration
   synthetic.py            mini corridor + injected-cause scenarios + GTFS-RT re-encoding
-  realtime/               status (holistic now), propagation (look-back model + forecast), server (local live mode)
+  realtime/               status (holistic now + position fusion), propagation (look-back model + forecast), simulate (forward scenarios), server (local live mode)
   cli.py                  mta-insights sources | static | collect | replay | context | analyze | live | serve | demo
 pipeline/                 GitHub Actions data pipeline: collect, context, build_site, data-branch helper
-site/                     static review app (vanilla JS + SVG charts) published to GitHub Pages
+site/                     static review app (vanilla JS + SVG charts) published to GitHub Pages; rt-client.js polls the MTA feeds in the browser
 tests/                    unit tests + end-to-end scenario tests
 docs/                     METHODOLOGY.md, DATA_SOURCES.md
 examples/                 programmatic use

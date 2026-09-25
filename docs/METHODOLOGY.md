@@ -438,6 +438,72 @@ arrivals that leave late again and the median time recovered, per route and
 terminal, which says whether the timetable's recovery allowance matches the
 delays that actually reach the terminal.
 
+## 9j. Vehicle-position fusion, corroboration and forward simulation
+
+**Fusion.** Each realtime trip is joined to its vehicle entity (same trip id
+and start date). The vehicle carries `current_status` (INCOMING_AT,
+STOPPED_AT, IN_TRANSIT_TO), the stop it refers to and a timestamp that the
+NYCT feed sets to the time the train *entered* that state. Hence
+`since_update_sec = now − vehicle.timestamp` is how long the train has been
+stopped at, or running toward, that stop.
+
+* *Holding*: STOPPED_AT for ≥ `HOLD_SEC` (150 s; a normal dwell is 30–60 s).
+* *Stalled*: IN_TRANSIT_TO for longer than the scheduled run from the previous
+  stop of the route's canonical sequence plus `STALL_SLACK_SEC` (120 s).
+* *Position lateness*: the schedule says when the train should have been at
+  the stop it is at (or heading to). If it is still stopped there,
+  `now − sched(stop)` is a lower bound on its lateness; if it is in transit,
+  `now + remaining_run − sched(stop)`. `effective_lateness` is the larger of the
+  feed's lateness and the position lateness.
+* *Corroboration*: `agree` when the feed's implied lateness is within 60 s of
+  the position lateness, `feed_optimistic` when the position proves the train
+  more than 60 s later than the feed says, `position_unknown` when the
+  vehicle's stop cannot be matched to the schedule. Forecasts at a monitored
+  platform raise every ETA of a feed-optimistic train by the difference, and
+  the learned model receives the effective lateness as its state.
+
+Holding trains stopped for ≥ 2 × HOLD_SEC and stalled trains are listed with
+the developing incidents (kind `holding` / `stalled`), with a note when no
+alert has been posted for the route yet.
+
+**Forward simulation** (`realtime/simulate.py`). For each (route, direction)
+that serves a monitored platform or a configured journey, the started trains
+are ordered by progress along the canonical stop sequence. Each train's
+unconstrained trajectory over the next hour is the learned model's prediction
+per stop where available, else the feed's ETA; feed-optimistic trains are
+shifted by their position correction; and, under the `hold_persists`
+scenario, holding or stalled trains lose `hold_extra_sec` more (600 s), while
+`clears_now` assumes they move immediately. Trains are then processed
+front-to-back and no follower may arrive at a stop within `MIN_HEADWAY_SEC`
+(90 s) of its leader; the delay this adds is the train's *knock-on*. Outputs:
+projected `points` per train, per-stop headways, the worst projected gap
+(where and when), the number of trains held back and the total knock-on. The
+hold scenarios are only run where a train is holding or stalled. For each
+monitored platform `station_scenarios` reports the next arrivals under each
+scenario and the extra minutes the persisting hold would add. The
+simulation is deliberately simple (no dwell model, no terminal turn, no
+dispatcher interventions such as skipped stops or rerouting) and is meant to
+answer "what does the current state imply if nothing changes", not to replace
+the learned model.
+
+**Browser-side live mode** (`site/rt-client.js`). The MTA endpoint answers
+cross-origin GETs (`Access-Control-Allow-Origin: *`), so the site polls the
+feeds directly every 30 s. A minimal protobuf wire decoder reads the subset we
+need (feed timestamp, trip descriptor with the NYCT train id / assignment,
+stop time updates with scheduled and actual track, vehicle positions). The
+build ships `data/client_schedule.json`: for every monitored platform today's
+and tomorrow's scheduled arrivals keyed by the realtime trip-id suffix, and
+for every relevant line the canonical stop sequence with scheduled running
+times. The browser then reproduces the server rules (lateness against the
+timetable, holds and stalls with the same thresholds, an approximate position
+lateness that places the train's scheduled time at its current stop using the
+canonical running times, gaps and bunching against the scheduled headway, and
+the `hold_persists` shift with the 90 s follower constraint). `tests/
+test_rt_client_js.py` runs the decoder and board under Node against a
+synthetic snapshot and checks they agree with the Python parser and position
+rules. The synthetic preview ships its recorded feed next to the site so the
+mode can be exercised offline.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

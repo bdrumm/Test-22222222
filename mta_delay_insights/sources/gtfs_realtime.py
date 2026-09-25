@@ -173,6 +173,8 @@ def encode_trip_updates(trips: Iterable[dict], feed_ts: float) -> bytes:
             v = vent.vehicle
             v.trip.trip_id = t["trip_id"]
             v.trip.route_id = t["route_id"]
+            if t.get("start_date"):
+                v.trip.start_date = t["start_date"]
             v.stop_id = t["vehicle"].get("stop_id", "")
             v.timestamp = int(t["vehicle"].get("ts", feed_ts))
             status = t["vehicle"].get("status", "IN_TRANSIT_TO")

@@ -221,17 +221,20 @@ export function stringline(container, { title, subtitle, legs, now, horizonSec =
     if (pts.length < 2) return;
     const hi = highlight.has(tr.trip_id);
     const kind = tr.kind || "feed";
-    const color = kind === "sched" ? cssVar("--grid") : kind === "actual" ? lateColor(tr.lateness_sec) : (routeColor(tr.route_id) || seriesColor(li));
+    const isSim = kind === "sim" || kind === "sim-hold";
+    const color = kind === "sched" ? cssVar("--grid") : kind === "actual" ? lateColor(tr.lateness_sec) : kind === "sim-hold" ? cssVar("--status-critical") : (routeColor(tr.route_id) || seriesColor(li));
+    const baseW = kind === "sched" ? 1 : kind === "actual" ? 2 : isSim ? 1.4 : 1.5;
     const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
     const pathEl = el("path", { d, fill: "none", stroke: hi ? color : (kind === "feed" && highlight.size ? cssVar("--de-emphasis") : color),
-      "stroke-width": hi ? 3 : (kind === "sched" ? 1 : kind === "actual" ? 2 : 1.5), "stroke-linejoin": "round", "stroke-linecap": "round",
-      opacity: hi ? 1 : (kind === "sched" ? 0.7 : 0.9), ...(kind === "live" ? { "stroke-dasharray": "5 4" } : {}) }, f.svg);
+      "stroke-width": hi ? 3 : baseW, "stroke-linejoin": "round", "stroke-linecap": "round",
+      opacity: hi ? 1 : (kind === "sched" ? 0.7 : isSim ? 0.85 : 0.9), ...(kind === "live" ? { "stroke-dasharray": "5 4" } : isSim ? { "stroke-dasharray": "1.5 3.5" } : {}) }, f.svg);
     const hit = el("path", { d, fill: "none", stroke: "transparent", "stroke-width": 14 }, f.svg);
     const late = tr.lateness_sec == null ? "–" : `${tr.lateness_sec >= 0 ? "+" : "−"}${Math.abs(tr.lateness_sec / 60).toFixed(0)} min`;
     if (kind !== "sched") {
-      hit.addEventListener("pointermove", ev => { pathEl.setAttribute("stroke-width", "4"); f.showTip(ev.clientX, ev.clientY, `${tr.route_id || ""} ${kind === "actual" ? "observed" : "projected"} ${tr.train_id || tr.trip_id}`, [["lateness", late], ["stops", String(pts.length)]]); });
-      hit.addEventListener("pointerleave", () => { pathEl.setAttribute("stroke-width", hi ? "3" : (kind === "actual" ? "2" : "1.5")); f.hideTip(); });
-      rows.push([`${tr.route_id || ""} ${tr.train_id || tr.trip_id}`, kind, late, String(pts.length)]);
+      const kindName = kind === "actual" ? "observed" : kind === "sim" ? "simulated" : kind === "sim-hold" ? "if the hold persists" : "projected";
+      hit.addEventListener("pointermove", ev => { pathEl.setAttribute("stroke-width", "4"); f.showTip(ev.clientX, ev.clientY, `${tr.route_id || ""} ${kindName} ${tr.train_id || tr.trip_id}`, [["lateness", late], ["stops", String(pts.length)]]); });
+      hit.addEventListener("pointerleave", () => { pathEl.setAttribute("stroke-width", hi ? "3" : String(baseW)); f.hideTip(); });
+      rows.push([`${tr.route_id || ""} ${tr.train_id || tr.trip_id}`, kindName, late, String(pts.length)]);
     }
   }));
   if (path.length >= 2) {

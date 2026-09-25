@@ -1,7 +1,7 @@
 """End-to-end build from a data directory laid out like the data branch, including backfilled network history."""
 import json
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -56,3 +56,20 @@ def test_build_from_data_with_backfill(static, mini_gtfs_dir, tmp_path):
     card = json.loads((out / "models" / "arrival.card.json").read_text()); assert card["status"] in ("ok", "insufficient_data")
     tr = json.loads((out / "train_runs.json").read_text()); assert tr["n_pairs"] > 20
     assert (out / "digest.md").exists() and (out / "climatology.json").exists()
+    cs = json.loads((out / "client_schedule.json").read_text())
+    assert cs["targets"]["grand-central-n"]["stop_id"] == "631N" and cs["constants"]["hold_sec"] > 0 and cs["feeds"]
+
+
+def test_client_schedule_export(static, tmp_path):
+    from pipeline.client_export import export_client_schedule
+    from mta_delay_insights.sources.gtfs_static import NY_TZ
+    targets = {"targets": [{"id": "gc", "station": "Grand Central", "direction": "N", "routes": ["6", "4"]}], "upstream_stops": 3}
+    _, feeds, resolved = lib.stops_and_feeds(static, targets)
+    now = datetime.combine(START + timedelta(days=2), datetime.min.time(), tzinfo=NY_TZ) + timedelta(hours=9)
+    cs = export_client_schedule(static, resolved, [], tmp_path, now, feeds)
+    tgt = cs["targets"]["gc"]
+    assert tgt["stop_id"] == "631N" and len(tgt["sched"]) > 50 and all(len(x) == 3 for x in tgt["sched"])
+    assert tgt["sched"] == sorted(tgt["sched"], key=lambda x: x[2]) and {x[1] for x in tgt["sched"]} == {"6", "4"}
+    ln = cs["lines"]["6_N"]
+    assert ln["stops"] and len(ln["run_sec"]) == len(ln["stops"]) - 1 and all(r is None or r > 0 for r in ln["run_sec"])
+    assert (tmp_path / "client_schedule.json").exists()

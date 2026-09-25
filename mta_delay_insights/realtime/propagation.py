@@ -255,6 +255,8 @@ def forecast_station(target: dict, trains: list, static: StaticGTFS, model: Prop
             if e > extra:
                 extra, n_alert = e, n
         model_eta = eta + bias + extra
+        if t.position_lateness_sec is not None and t.lateness_sec is not None and t.position_lateness_sec > t.lateness_sec + 60:
+            model_eta += t.position_lateness_sec - t.lateness_sec     # the position proves the feed optimistic
         eta_lo, eta_hi, source = eta + p10, eta + p90 + extra, "lookback"
         if learned is not None and t.started:
             try:
@@ -273,6 +275,9 @@ def forecast_station(target: dict, trains: list, static: StaticGTFS, model: Prop
             "trip_id": t.trip_id, "route_id": t.route_id, "feed_eta_ts": eta, "model_eta_ts": model_eta,
             "eta_lo_ts": eta_lo, "eta_hi_ts": eta_hi, "minutes_away": round(h / 60, 1), "model_source": source,
             "track_changed": bool(t.track_changed),
+            "position": ({"status": t.pos_status, "stop_name": name(t.pos_stop_id) if t.pos_stop_id else None, "since_sec": t.since_update_sec,
+                          "holding": t.holding, "stalled": t.stalled, "corroboration": t.corroboration} if t.pos_status else None),
+            "agreement": ("agree" if abs(model_eta - eta) < 45 else "model_later" if model_eta > eta else "model_earlier"),
             "sched_ts": sched, "feed_lateness_sec": (eta - sched) if sched else None,
             "model_lateness_sec": (model_eta - sched) if sched else None,
             "now_at_stop": t.next_stop_id, "now_at_stop_name": name(t.next_stop_id) if t.next_stop_id else None,

@@ -184,3 +184,11 @@ ul.findings li.sev-medium .sev { color: var(--status-warning); border: 1px solid
 
 figure.chart.dense { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 figure.chart.dense svg { display: block; }
+
+/* Realtime flags and the browser-side feed toggle */
+.flag { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; padding: .08rem .38rem; border-radius: 4px; background: var(--page); color: var(--text-secondary); border: 1px solid var(--border); margin-right: .25rem; white-space: nowrap; }
+.flag.crit { background: var(--status-critical); border-color: var(--status-critical); color: #fff; }
+.flag.warn { background: var(--status-warning); border-color: var(--status-warning); color: #111; }
+.live-toggle { cursor: pointer; }
+.live-toggle.on { border-color: var(--status-good); color: var(--status-good); font-weight: 600; }
+table.tiny td, table.tiny th { font-size: .8rem; padding: .2rem .4rem; }

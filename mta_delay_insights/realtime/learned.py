@@ -66,6 +66,9 @@ class LearnedContext:
         if not mine.empty and np.isfinite(mine["lateness_sec"].iloc[-1]) and self.now - float(mine["arrival_ts"].iloc[-1]) < 1200:
             last = mine.iloc[-1]
             u, t_u, lat_u, sched_u = str(last["stop_id"]), float(last["arrival_ts"]), float(last["lateness_sec"]), float(last["sched_ts"])
+            # a train provably held since that arrival is later than its last observation says
+            if train.position_lateness_sec is not None and train.position_lateness_sec > lat_u + 60:
+                lat_u = float(train.position_lateness_sec)
             k = j + 1
             lat = mine["lateness_sec"].values
             mom1 = float(lat[-1] - lat[-2]) if len(lat) >= 2 and np.isfinite(lat[-2]) else None
@@ -73,7 +76,7 @@ class LearnedContext:
         else:
             if train.lateness_sec is None or not train.started or j == 0:
                 return None
-            u, t_u, lat_u = train.next_stop_id, float(train.next_eta_ts), float(train.lateness_sec)
+            u, t_u, lat_u = train.next_stop_id, float(train.next_eta_ts), float(train.effective_lateness_sec)
             sched_u = self.static.scheduled_arrival(train.trip_id, u, train.service_date)
             if sched_u is None:
                 return None
