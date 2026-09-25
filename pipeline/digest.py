@@ -75,7 +75,7 @@ def build_digest(out_data: Path, now: datetime) -> dict:
                + (f" and {ev['mae_feed']:.0f} s for the MTA countdown ETA ({(1 - ev['mae_model_on_feed_rows'] / ev['mae_feed']):.0%} better)" if ev.get("mae_feed") else "")
                + f"; 80% range covers {ev.get('coverage_p10_p90', 0):.0%} of outcomes; trained on {card.get('n_train', 0):,} rows")
         lines += ["## Prediction model", f"- {txt}", ""]; items.append({"kind": "model", "text": txt})
-    hs = _load(out_data, "holds")
+    hs = _load(out_data, "holds.json")
     if hs.get("n"):
         lg = hs.get("long") or {}
         top = hs.get("by_stop", [])[:3]
@@ -85,7 +85,7 @@ def build_digest(out_data: Path, now: datetime) -> dict:
             txt += (f". Of {lg['n']} long holds (≥ {hs['long_sec'] / 60:.0f} min), {lg['share_with_alert']:.0%} had an unplanned alert for the line"
                     + (f", posted a median {lg['median_latency_sec'] / 60:.0f} min after the hold began" if lg.get("median_latency_sec") is not None else ""))
         lines += ["## Holds", f"- {txt}", ""]; items.append({"kind": "holds", "text": txt})
-    fe = _load(out_data, "forecast_eval")
+    fe = _load(out_data, "forecast_eval.json")
     if fe.get("n"):
         o = fe.get("overall", {})
         txt = (f"Live forecasts scored against {fe['n']:,} observed arrivals ({fe.get('n_snapshots', 0)} snapshots, {fe.get('days', 0)} days): "
