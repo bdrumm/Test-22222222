@@ -97,6 +97,21 @@ async function home(idx) {
     h("div", "tiny muted", `${fmt.num(t.arrival_count)} arrivals · ${t.coverage_windows?.span_hours ?? "?"} h of coverage`, card);
     link(`#/station/${t.id}`, "Open report →", card, "small").style.display = "inline-block";
   }
+  if ((idx.routes || []).length) {
+    h("h2", null, "Routes and transfers", app);
+    const rg = h("div", "grid", null, app);
+    for (const r of idx.routes) {
+      const card = h("div", "card", null, rg);
+      const head = h("div", "row between", null, card);
+      h("strong", null, r.label, head);
+      badge(r.status === "ok" ? "analysed" : "collecting", r.status === "ok" ? "s-low" : "s-na", head);
+      if (r.dominant) h("div", "small secondary", `Largest component: ${r.dominant}`, card);
+      if (r.top) h("p", "small", r.top, card).style.marginTop = ".5rem";
+      else if (r.status === "ok") h("p", "small secondary", "No material cross-line effect found so far.", card).style.marginTop = ".5rem";
+      const row = h("div", "row", null, card); row.style.gap = "1rem";
+      link(`#/routes/${r.id}`, "Route analysis →", row, "small"); link(`#/plan/${r.id}`, "Plan this trip →", row, "small");
+    }
+  }
   if (idx.mode === "synthetic") h("p", "small muted", "This preview was built from the synthetic corridor with an injected signal failure and missing trips; the pipeline replaces it with live MTA data on each run.", app);
 }
 function tile(parent, label, value, delta) { const t = h("div", "tile", null, parent); h("div", "label", label, t); h("div", "value", value, t); if (delta) h("div", "delta", delta, t); return t; }
