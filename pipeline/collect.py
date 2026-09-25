@@ -128,7 +128,10 @@ def main(argv=None) -> int:
     written = lib.save_arrivals(data_dir, arrivals)
     n_samples = lib.save_eta_samples(data_dir, store.eta_samples())
     n_dwells = lib.save_dwells(data_dir, store.dwells(stops))
-    logging.info("eta samples: %s, dwells: %s", n_samples, n_dwells)
+    from mta_delay_insights.collect.dwells import HOLD_SEC
+    all_dwells = store.dwells()
+    n_holds = lib.save_holds(data_dir, all_dwells[all_dwells["dwell_sec"] >= HOLD_SEC]) if not all_dwells.empty else {}
+    logging.info("eta samples: %s, dwells: %s, holds: %s", n_samples, n_dwells, n_holds)
     n_alerts = lib.save_alerts(data_dir, alerts, time.time())
     n_eval = 0
     if args.live_every > 0 and state["proj"]:

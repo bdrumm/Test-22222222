@@ -947,12 +947,43 @@ async function modelPage(idx) {
 
 // ---------------------------------------------------------------- disruption climatology (historical alerts archive)
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+async function holdsSection(root) {
+  try {
+    const hs = await load("holds.json");
+    if (hs && hs.n) {
+      h("h2", null, "Where trains get held, from the vehicle positions", root);
+      const ch = h("div", "card", null, root);
+      h("p", "small secondary", `${fmt.compact(hs.n)} holds (a train reported stopped at a station for ≥ ${(hs.hold_sec / 60).toFixed(1)} min) at every stop of the polled feeds over ${hs.days} day${hs.days === 1 ? "" : "s"}: ${hs.per_day} per day, median ${(hs.median_sec / 60).toFixed(1)} min. Holds are the first visible symptom of most incidents.`, ch);
+      const tiles = h("div", "tiles", null, ch);
+      tile(tiles, "Holds per day", hs.per_day, `median ${(hs.median_sec / 60).toFixed(1)} min`);
+      if (hs.long) {
+        tile(tiles, `Long holds (≥ ${hs.long_sec / 60} min)`, hs.long.per_day + " / day", `median ${(hs.long.median_hold_sec / 60).toFixed(0)} min`);
+        tile(tiles, "Long holds with an alert", `${(hs.long.share_with_alert * 100).toFixed(0)}%`, `${(hs.long.share_alert_after * 100).toFixed(0)}% alerted after the hold began · ${(hs.long.share_alert_before * 100).toFixed(0)}% already alerted`);
+        tile(tiles, "Alert latency", hs.long.median_latency_sec != null ? `${(hs.long.median_latency_sec / 60).toFixed(0)} min` : "–", hs.long.median_latency_sec != null ? `median from the hold's start to the alert · p75 ${(hs.long.p75_latency_sec / 60).toFixed(0)} min` : "no alert followed a long hold yet");
+      }
+      const two = h("div", "two", null, ch);
+      barChart(h("div", null, null, two), { title: "Holds per day by hour", categories: HOURS, series: [{ name: "holds/day", values: hs.by_hour }], format: fmt.num1, labelEvery: 3, height: 200 });
+      const br = hs.by_route.slice(0, 20);
+      barChart(h("div", null, null, two), { title: "Minutes held per day by line", categories: br.map(r => r.route), series: [{ name: "min/day", values: br.map(r => r.total_min_per_day) }], format: fmt.num1, height: 200 });
+      const wrapH = h("div", "table-wrap", null, ch); const th = h("table", null, null, wrapH); const trh = h("tr", null, null, h("thead", null, null, th));
+      ["stop", "lines", "holds/day", "median", "p90", "minutes held", "worst hours"].forEach((x, i) => h("th", i >= 2 && i <= 5 ? "num" : "", x, trh)); const tbh = h("tbody", null, null, th);
+      hs.by_stop.slice(0, 15).forEach(x => { const r = h("tr", null, null, tbh); h("td", null, `${x.name}`, r); const rc = h("td", null, null, r); x.routes.forEach(q => routeBullet(q, rc)); h("td", "num", fmt.num1(x.per_day), r); h("td", "num", `${(x.median_sec / 60).toFixed(1)} min`, r); h("td", "num", `${(x.p90_sec / 60).toFixed(1)} min`, r); h("td", "num", fmt.num1(x.total_min), r); h("td", "small", x.worst_hours.map(hh => `${String(hh).padStart(2, "0")}:00`).join(", "), r); });
+      if ((hs.longest || []).length) {
+        const det = h("details", null, null, ch); h("summary", "small", "Longest holds and whether an alert followed", det);
+        const ul = h("ul", "small secondary", null, det);
+        hs.longest.forEach(x => h("li", null, `${x.route} at ${x.name}, ${dateTime(new Date(x.start_ts * 1000).toISOString())}: held ${(x.dwell_sec / 60).toFixed(0)} min · ${x.alert_latency_sec == null ? "no unplanned alert for the line" : x.alert_latency_sec > 0 ? `alert ${(x.alert_latency_sec / 60).toFixed(0)} min after the hold began` : `alert already posted ${(-x.alert_latency_sec / 60).toFixed(0)} min earlier`}`, ul));
+      }
+      h("div", "small secondary", "Terminals and relay points hold trains by design (schedule recovery, crew changes); a mid-line station with frequent long holds is a signal, merge or dispatching problem. The alert latency is how long riders on the platform knew before the MTA said so.", ch);
+    }
+  } catch (e) { /* optional */ }
+}
+
 async function disruptionsPage(idx, routeSel) {
   const root = app; root.replaceChildren();
   h("h1", null, "Disruption climatology: when and where the subway breaks", root);
   let c;
-  try { c = await load("climatology.json"); } catch (e) { h("div", "empty", "No climatology yet (data/climatology.json).", root); return; }
-  if (!c.n_events) { h("div", "empty", "The historical alerts archive (data.ny.gov, since 2020) has not been pulled yet; the hourly context step fetches it.", root); return; }
+  try { c = await load("climatology.json"); } catch (e) { h("div", "empty", "No climatology yet (data/climatology.json).", root); await holdsSection(root); return; }
+  if (!c.n_events) { h("div", "empty", "The historical alerts archive (data.ny.gov, since 2020) has not been pulled yet; the hourly context step fetches it.", root); await holdsSection(root); return; }
   h("p", "secondary", `${fmt.compact(c.n_events)} unplanned disruption events (delays, suspensions, reroutes, skipped stops, slow speeds) from the MTA service-alert archive over ${c.weeks.toFixed(0)} weeks (${new Date(c.first_ts * 1000).toLocaleDateString()} – ${new Date(c.last_ts * 1000).toLocaleDateString()}). Each event is one alert thread; its duration is the time from the first to the last update.`, root);
   const tiles = h("div", "tiles", null, root);
   const perWeek = c.n_events / c.weeks;
@@ -982,6 +1013,7 @@ async function disruptionsPage(idx, routeSel) {
     const g = c.grid_by_route[sel.value];
     heatmap(c3, { title: `${sel.value}: disruption events per week starting in each hour`, rows: DOW, cols: HOURS, values: g, format: fmt.num1, colLabelEvery: 3 });
   }
+  await holdsSection(root);
   h("h2", null, "Causes and how long they last", root);
   const c4 = h("div", "card", null, root); const wrap = h("div", "table-wrap", null, c4); const t = h("table", null, null, wrap);
   const tr = h("tr", null, null, h("thead", null, null, t)); ["cause", "events", "share", "median duration", "p90 duration"].forEach((x, i) => h("th", i ? "num" : "", x, tr));

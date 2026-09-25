@@ -538,6 +538,21 @@ verdict (the `feed_optimistic` rows should show a strongly negative feed bias
 and a better model and simulation) and the held-train subset with the
 `hold_persists` scenario's error.
 
+## 9l. Hold log and alert latency
+
+The dwell tracker (section 9i) keeps every dwell at the monitored stops; it
+now also keeps every **hold** anywhere on the polled feeds, a train reported
+`STOPPED_AT` a station for ≥ `HOLD_SEC` (150 s), as `holds/` day files on the
+data branch. The summary (`data/holds.json`, last 30 days) gives holds per
+day, their distribution by hour and by line, the stops that accumulate the
+most held minutes (with their worst hours), and, for long holds (≥ 5 min),
+the match to unplanned delay alerts naming the same route: an alert counts if
+it was active within 30 minutes before the hold began or started within an
+hour after; *alert latency* is the alert's start minus the hold's start, and
+the share of long holds that never got an alert is reported alongside.
+Terminals and relay points hold trains by design, so the stop table is read
+against the line's topology.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

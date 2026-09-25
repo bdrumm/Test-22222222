@@ -194,7 +194,10 @@ plus 2 minutes is *stalled*. The position also proves a lower bound on the
 train's lateness (it is still at a stop it should have left), so when that
 exceeds what the feed's ETA implies the train is flagged *feed optimistic* and
 every downstream ETA is raised accordingly. Holding or stalled trains show up
-under "Developing right now" before any alert is posted.
+under "Developing right now" before any alert is posted. Every hold anywhere
+on the polled feeds is also logged (`holds/` on the data branch) and the
+Disruptions page reports where trains get held, by hour and by line, and how
+long after a long hold the MTA's alert followed, if at all.
 
 From the fused state the snapshot runs a **forward simulation** for each line
 that serves a monitored platform or journey: every train's trajectory over the

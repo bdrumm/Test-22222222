@@ -14,6 +14,8 @@ import pandas as pd
 
 from ..storage.db import DWELL_COLUMNS
 
+HOLD_SEC = 150.0        # stopped this long at a station = holding (a normal dwell is 30-60 s)
+
 
 @dataclass
 class _Stop:
@@ -27,7 +29,10 @@ class _Stop:
 
 @dataclass
 class DwellTracker:
+    """Dwells at the stops of interest, plus every *hold* (dwell >= ``hold_sec``) anywhere on the network."""
+
     stops_of_interest: set[str] | None = None
+    hold_sec: float | None = HOLD_SEC
     state: dict[str, _Stop] = field(default_factory=dict)
 
     @staticmethod
@@ -59,7 +64,8 @@ class DwellTracker:
         for key in list(self.state):
             if key not in seen:
                 out.append(self._emit(key, self.state.pop(key)))
-        rows = [d for d in out if self.stops_of_interest is None or d["stop_id"] in self.stops_of_interest]
+        rows = [d for d in out if self.stops_of_interest is None or d["stop_id"] in self.stops_of_interest
+                or (self.hold_sec is not None and d["dwell_sec"] >= self.hold_sec)]
         return pd.DataFrame(rows, columns=DWELL_COLUMNS)
 
     @staticmethod

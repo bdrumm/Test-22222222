@@ -237,6 +237,15 @@ def load_eta_samples(data_dir: Path, days: int | None = None, stops: set[str] | 
     return _load_daily(data_dir, "eta_samples", days, stops)
 
 
+def save_holds(data_dir: Path, df: pd.DataFrame) -> dict[str, int]:
+    """Network-wide holds (dwells >= HOLD_SEC at any stop), a small daily file."""
+    return _save_daily(data_dir, "holds", df, DWELL_COLUMNS, "stopped_from_ts", ["trip_key", "stop_id"])
+
+
+def load_holds(data_dir: Path, days: int | None = None) -> pd.DataFrame:
+    return _load_daily(data_dir, "holds", days)
+
+
 def save_forecast_eval(data_dir: Path, df: pd.DataFrame) -> dict[str, int]:
     from mta_delay_insights.realtime.evaluate import FORECAST_EVAL_COLUMNS
     return _save_daily(data_dir, "forecast_eval", df, FORECAST_EVAL_COLUMNS, "made_ts", ["made_ts", "trip_id", "stop_id"])

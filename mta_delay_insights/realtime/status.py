@@ -96,7 +96,7 @@ def _service_date(start_date: str | None, now: float) -> date:
     return (datetime.fromtimestamp(now, NY_TZ) - timedelta(hours=3)).date()
 
 
-HOLD_SEC = 150.0        # stopped this long at a station = holding (a normal dwell is 30-60 s)
+from ..collect.dwells import HOLD_SEC   # stopped this long at a station = holding (a normal dwell is 30-60 s)
 STALL_SLACK_SEC = 120.0  # in transit this much longer than the scheduled run = stalled
 
 

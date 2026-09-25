@@ -361,6 +361,12 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         dw = {"n": 0, "stops": [], "error": str(exc)[:200]}
     (out_data / "dwell.json").write_text(json.dumps(dw, default=str))
     try:
+        from mta_delay_insights.analysis.holds import hold_summary
+        hs = hold_summary(context.get("_holds"), alerts, static)
+    except Exception as exc:
+        logging.warning("hold analysis failed: %s", exc); hs = {"n": 0, "error": str(exc)[:200]}
+    (out_data / "holds.json").write_text(json.dumps(hs, default=str))
+    try:
         from mta_delay_insights.analysis.train_runs import terminal_recovery
         tr_arr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
         trr = terminal_recovery(tr_arr, static)
@@ -409,6 +415,7 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
                 "network_sources": (net["source"].value_counts().to_dict() if net is not None and not net.empty and "source" in net else {}),
                 "eta_samples": int(len(es_samples)) if es_samples is not None else 0,
                 "dwells": int(len(context.get("_dwells"))) if context.get("_dwells") is not None else 0,
+                "holds": int(len(context.get("_holds"))) if context.get("_holds") is not None else 0,
                 "alerts_archive_rows": int(len(context.get("alerts_archive"))) if context.get("alerts_archive") is not None else 0,
                 "events_rows": int(len(context.get("events"))) if context.get("events") is not None else 0,
                 "backfill_days": (context.get("_backfill_manifest") or {}).get("n_days", 0)}
@@ -478,6 +485,7 @@ def build_from_data(args) -> dict:
     context["_network_arrivals"] = network
     context["_eta_samples"] = lib.load_eta_samples(data_dir, days=45)
     context["_dwells"] = lib.load_dwells(data_dir, days=45)
+    context["_holds"] = lib.load_holds(data_dir, days=30)
     context["_forecast_eval"] = lib.load_forecast_eval(data_dir, days=14)
     context["_backfill_manifest"] = {"n_days": len(backfill_days), "days": backfill_days}
     feed_bytes = {}
