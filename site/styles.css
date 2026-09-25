@@ -181,3 +181,6 @@ ul.findings li.sev-medium .sev { color: var(--status-warning); border: 1px solid
 
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 @media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+
+figure.chart.dense { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+figure.chart.dense svg { display: block; }

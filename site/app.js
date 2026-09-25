@@ -547,9 +547,9 @@ async function plan(idx, journeyId) {
         h("div", "row between", null, card).append(Object.assign(h("strong", null, `${g.origin} → ${g.destination}`), {}));
         h("p", "small", g.recommendation, card).style.marginTop = ".4rem";
         const wrap = h("div", "table-wrap", null, card); const t = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, t));
-        ["option", "trains", "leave in", "arrive", "total", "range", "vs best"].forEach((x, i) => h("th", i >= 2 ? "num" : "", x, tr)); const tb = h("tbody", null, null, t);
+        [["option", ""], ["trains", ""], ["leave in", "num"], ["arrive", "num"], ["total", "num"], ["range", "num hide-sm"], ["vs best", "num"]].forEach(([x, c]) => h("th", c, x, tr)); const tb = h("tbody", null, null, t);
         g.alternatives.forEach((a, i) => { const r = h("tr", i === 0 ? "worse" : "", null, tb); const c0 = h("td", null, null, r); link(`#/plan/${a.id}`, a.label, c0, "small");
-          const c1 = h("td", null, null, r); a.routes.forEach(x => routeBullet(x, c1)); h("td", "num", minTxt(a.depart_ts - d.generated_ts), r); h("td", "num eta", hhmm(a.arrive_ts), r); h("td", "num", minTxt(a.total_sec), r); h("td", "num small", `±${(a.range_sec / 120).toFixed(0)} min`, r);
+          const c1 = h("td", null, null, r); a.routes.forEach(x => routeBullet(x, c1)); h("td", "num", minTxt(a.depart_ts - d.generated_ts), r); h("td", "num eta", hhmm(a.arrive_ts), r); h("td", "num", minTxt(a.total_sec), r); h("td", "num small hide-sm", `±${(a.range_sec / 120).toFixed(0)} min`, r);
           h("td", "num", i === 0 ? "best" : `+${(a.vs_best_sec / 60).toFixed(0)} min`, r); if (a.tight_connection) { const w = h("span", "status-chip st-degraded", null, c0); h("span", "dot", null, w); w.append("tight connection"); } }); });
     }
     const filters = h("div", "filters", null, root);

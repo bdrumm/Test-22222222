@@ -34,7 +34,7 @@ function niceTicks(max, n = 4) {
 }
 
 class Frame {
-  constructor(container, { title, subtitle, series, kind = "rect", height = 240 }) {
+  constructor(container, { title, subtitle, series, kind = "rect", height = 240, dense = false }) {
     this.root = html("figure", "chart", null, container);
     this.root.style.margin = "0";
     if (title) html("div", "title", title, this.root);
@@ -55,6 +55,7 @@ class Frame {
     btn.addEventListener("click", () => { this.root.classList.toggle("show-table"); btn.textContent = this.root.classList.contains("show-table") ? "Chart" : "Table"; });
     this.svg = el("svg", { viewBox: `0 0 720 ${height}`, role: "img" }, this.root);
     this.height = height; this.width = 720;
+    if (dense) { this.root.classList.add("dense"); this.svg.style.minWidth = "640px"; }
     this.tableWrap = html("div", "table-view table-wrap", null, this.root);
   }
   table(headers, rows) {
@@ -159,7 +160,7 @@ export function lineChart(container, { title, subtitle, x, series, format = fmt.
 // Heatmap: rows x cols with a sequential blue ramp.
 export function heatmap(container, { title, subtitle, rows, cols, values, format = fmt.pct, colLabelEvery = 2, rowLabelEvery = 1 }) {
   const cellH = 14, m = { l: 74, r: 8, t: 8, b: 24 }, height = m.t + rows.length * cellH + m.b;
-  const f = new Frame(container, { title, subtitle, series: null, height });
+  const f = new Frame(container, { title, subtitle, series: null, height, dense: true });
   const W = f.width - m.l - m.r, cw = W / cols.length;
   const ramp = ["--seq-100", "--seq-200", "--seq-300", "--seq-400", "--seq-500", "--seq-600", "--seq-700"].map(cssVar);
   const flat = values.flat().filter(v => v != null && Number.isFinite(v)), vmax = Math.max(...flat, 1e-9);
@@ -200,7 +201,7 @@ export function stringline(container, { title, subtitle, legs, now, horizonSec =
     if (li > 0 && i === 0) { const prev = stops[stops.length - 1]; stops[stops.length - 1] = { ...prev, name: prev.name === st.name ? st.name : `${prev.name} / ${st.name}` }; legOffsets[li] = stops.length - 1; return; }
     stops.push({ name: st.name, leg: li }); }); });
   const m = { l: 150, r: 16, t: 16, b: 28 }, height = m.t + Math.max(1, stops.length - 1) * rowH + m.b;
-  const f = new Frame(container, { title, subtitle, series: null, height });
+  const f = new Frame(container, { title, subtitle, series: null, height, dense: true });
   const W = f.width - m.l - m.r, H = height - m.t - m.b;
   const t0 = now - backSec, t1 = now + horizonSec;
   const xp = ts => m.l + ((ts - t0) / (t1 - t0)) * W, yp = i => m.t + (stops.length > 1 ? (i / (stops.length - 1)) * H : H / 2);
