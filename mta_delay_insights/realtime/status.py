@@ -57,7 +57,7 @@ class LiveTrain:
     expected_run_sec: float | None = None  # scheduled run time into pos_stop_id (IN_TRANSIT_TO)
     holding: bool = False                  # stopped at a station much longer than a normal dwell (not at its origin terminal)
     stalled: bool = False                  # between stations much longer than the scheduled run
-    at_origin: bool = False                # stopped at the route's origin terminal: waiting to depart is not a hold
+    at_origin: bool = False                # stopped at a terminal of the route: waiting to depart or relay is not a hold
     position_lateness_sec: float | None = None   # lateness implied by the position alone
     corroboration: str | None = None       # feed ETA vs position: agree | feed_optimistic | position_unknown
 
@@ -128,7 +128,7 @@ def _fuse_position(train: "LiveTrain", veh: dict, static: StaticGTFS | None, now
         seq = static.canonical_stop_sequence(train.route_id, train.direction or "N")
     except Exception:
         seq = []
-    train.at_origin = bool(seq) and train.pos_stop_id == seq[0]
+    train.at_origin = bool(seq) and train.pos_stop_id in (seq[0], seq[-1])   # either terminal: waiting or relaying
     if train.pos_status == "STOPPED_AT":
         if train.since_update_sec is not None:
             train.holding = train.since_update_sec >= HOLD_SEC and not train.at_origin
@@ -333,7 +333,7 @@ def recent_holds(store, static: StaticGTFS | None, now: float, window_sec: float
                 try:
                     seq = static.canonical_stop_sequence(str(r), d)
                     if seq:
-                        origins.add(seq[0])
+                        origins.add(seq[0]); origins.add(seq[-1])
                 except Exception:
                     pass
         hh = hh[~hh["stop_id"].isin(origins)]

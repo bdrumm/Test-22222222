@@ -58,8 +58,8 @@ def match_holds_to_alerts(holds: pd.DataFrame, alerts: pd.DataFrame | None) -> p
     return out
 
 
-def origin_terminals(static: StaticGTFS | None, routes) -> set[str]:
-    """First stop of each route/direction's canonical sequence: trains wait there by design."""
+def terminals(static: StaticGTFS | None, routes) -> set[str]:
+    """Both ends of each route/direction's canonical sequence: trains wait to depart or relay there by design."""
     out: set[str] = set()
     if static is None:
         return out
@@ -70,8 +70,11 @@ def origin_terminals(static: StaticGTFS | None, routes) -> set[str]:
             except Exception:
                 seq = []
             if seq:
-                out.add(seq[0])
+                out.add(seq[0]); out.add(seq[-1])
     return out
+
+
+origin_terminals = terminals   # backwards-compatible name
 
 
 def hold_summary(holds: pd.DataFrame | None, alerts: pd.DataFrame | None, static: StaticGTFS | None,
@@ -80,7 +83,7 @@ def hold_summary(holds: pd.DataFrame | None, alerts: pd.DataFrame | None, static
     if holds is None or holds.empty:
         return empty
     h = holds[holds["dwell_sec"] >= hold_sec].copy()
-    origins = origin_terminals(static, h["route_id"].dropna().unique())
+    origins = terminals(static, h["route_id"].dropna().unique())
     n_terminal = int(h["stop_id"].isin(origins).sum())
     h = h[~h["stop_id"].isin(origins)]
     if h.empty:

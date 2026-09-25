@@ -451,7 +451,7 @@ NYCT feed sets to the time the train *entered* that state. Hence
 stopped at, or running toward, that stop.
 
 * *Holding*: STOPPED_AT for ≥ `HOLD_SEC` (150 s; a normal dwell is 30–60 s),
-  except at the route's origin terminal, where waiting to depart is by design
+  except at either terminal of the route, where waiting to depart or relay is by design
   (the wait still counts toward the train's position lateness).
 * *Stalled*: IN_TRANSIT_TO for longer than the scheduled run from the previous
   stop of the route's canonical sequence plus `STALL_SLACK_SEC` (120 s).
@@ -559,7 +559,7 @@ the match to unplanned delay alerts naming the same route: an alert counts if
 it was active within 30 minutes before the hold began or started within an
 hour after; *alert latency* is the alert's start minus the hold's start, and
 the share of long holds that never got an alert is reported alongside.
-Waits at a route's origin terminal are left out (counted separately as
+Waits at either terminal of a route are left out (counted separately as
 terminal waits); other relay points still appear, so the stop table is read
 against the line's topology.
 
