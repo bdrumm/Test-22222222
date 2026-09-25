@@ -644,5 +644,107 @@
 "skipped": [
 "ticketmaster"
 ]
+},
+{
+"ts": 1790313419.1770008,
+"iso": "2026-09-25T01:16:59.177004-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace",
+"bdfm",
+"g",
+"l",
+"nqrw"
+],
+"polls": 9,
+"errors": 0,
+"arrivals": 90,
+"flushed": 38,
+"alerts": 838,
+"duration_sec": 242,
+"written": {
+"2026-09-24": 977,
+"2026-09-25": 189
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 9,
+"first_ts": 1790313177.4489105,
+"last_ts": 1790313417.44992,
+"arrivals": 14
+},
+{
+"feed": "ace",
+"polls": 9,
+"first_ts": 1790313177.4489105,
+"last_ts": 1790313417.44992,
+"arrivals": 10
+},
+{
+"feed": "bdfm",
+"polls": 9,
+"first_ts": 1790313177.4489105,
+"last_ts": 1790313417.44992,
+"arrivals": 13
+},
+{
+"feed": "g",
+"polls": 9,
+"first_ts": 1790313177.4489105,
+"last_ts": 1790313417.44992,
+"arrivals": 5
+},
+{
+"feed": "l",
+"polls": 9,
+"first_ts": 1790313177.4489105,
+"last_ts": 1790313417.44992,
+"arrivals": 2
+},
+{
+"feed": "nqrw",
+"polls": 9,
+"first_ts": 1790313177.4489105,
+"last_ts": 1790313417.44992,
+"arrivals": 9
+}
+]
+},
+{
+"ts": 1790313429.5959704,
+"iso": "2026-09-25T01:17:09.595971-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:5951",
+"delay_incidents:7805",
+"major_incidents:1187",
+"customer_journey:1200",
+"stations:496",
+"ridership_hourly:6120",
+"weather_daily:61",
+"news:5",
+"events:8"
+],
+"failed": {
+"nyc_events": "404 Client Error: Not Found for url: https://data.cityofnewyork.us/resource/tvpn-ykxb.json?%24limit=5000&%24where=start_date_time+%3E%3D+%272026-08-26T00%3A00%3A00%27+AND+start_date_time+%3C%3D+%272026-10-09T23%3A59%3A59%27&%24order=start_date_time"
+},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636",
+"4av-9st-fg-n": "608",
+"4av-9st-fg-s": "608",
+"4av-9st-r-n": "608",
+"4av-9st-r-s": "608",
+"14st-8av-ace-n": "618",
+"14st-8av-ace-s": "618",
+"8av-l-n": "618",
+"8av-l-s": "618"
+},
+"skipped": [
+"ticketmaster"
+]
 }
 ]
