@@ -193,8 +193,13 @@ figure.chart.dense svg { display: block; }
 .live-toggle.on { border-color: var(--status-good); color: var(--status-good); font-weight: 600; }
 table.tiny td, table.tiny th { font-size: .8rem; padding: .2rem .4rem; }
 
-/* Travel mode: track diagram */
+/* Travel mode: track diagram (SVG text outside a figure.chart gets no colour by default: set it for both themes) */
 .track { overflow-x: auto; }
+.track text { fill: var(--text-primary); }
+.track .axis-text { fill: var(--text-primary); font-size: 11px; }
+.track .dlabel { fill: var(--text-secondary); }
+.track text.badge-text { fill: #fff; }
+.track rect + text, .track .layer-value { fill: var(--text-primary); }
 .track .train-label { font-size: 10.5px; font-weight: 650; fill: var(--text-primary); }
 .track .train-sub { font-size: 9px; fill: var(--text-secondary); }
 .track .badge-text { font-size: 10px; font-weight: 700; fill: #fff; }
