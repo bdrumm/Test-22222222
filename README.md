@@ -462,3 +462,11 @@ Validated end to end on synthetic scenarios (signal failure, dwell, merge
 holds, missing trips, late terminal departures, weather; null control). The
 live collectors are written against the documented MTA / Socrata / Open-Meteo
 shapes and tested on fixture payloads; run them where the network allows.
+
+## iOS app (WhichWay)
+
+`ios/WhichWay/` is a SwiftUI app (iOS 17+, Xcode 16 project) that turns the travel mode into a phone travel
+assistant: origin and destination pickers, every viable path ranked by expected and live time, a live track
+diagram per leg with the trains moving on it, itineraries with connection margins, the line board, and the
+published layers (typical time lost at this hour, hold risk, measured segment speeds, alerts). It reads the MTA
+feeds directly every 30 s and the published `data/` files from the site. See `ios/README.md`.
