@@ -11,7 +11,7 @@ PORT ?= 8000
 .PHONY: help venv gtfs site-synthetic site data-branch serve test ios ios-build ios-test ios-fixtures
 
 help:
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | column -t -s "$$(printf '\t')"
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
 
 venv: ## Python environment with the package and the dev tools
 	test -x $(PYTHON) || $(PY) -m venv $(VENV)
