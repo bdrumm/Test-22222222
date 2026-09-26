@@ -1,0 +1,450 @@
+{
+ "status": "ok",
+ "trained_at": 1790436359.3520203,
+ "n_train": 1200000,
+ "n_test": 300000,
+ "train_span": [
+  1789617600.0,
+  1790130722.0
+ ],
+ "test_span": [
+  1790130722.0,
+  1790435699.0
+ ],
+ "fit_seconds": 117.5,
+ "features": [
+  "route_code",
+  "direction_code",
+  "k",
+  "sched_run_sec",
+  "lateness_u",
+  "mom1",
+  "mom3",
+  "gap_ahead_sec",
+  "leader_lateness",
+  "leader_same_route",
+  "sched_headway_sec",
+  "seg_recent_excess",
+  "dest_recent_lateness",
+  "hour_sin",
+  "hour_cos",
+  "weekend",
+  "peak",
+  "planned_active",
+  "precip_mm",
+  "street_event_w",
+  "news_w",
+  "clim_rate"
+ ],
+ "dropped_features": [
+  "cause_code",
+  "feed_excess",
+  "track_changed",
+  "alert_active",
+  "heat",
+  "holiday",
+  "venue_event_w",
+  "nws_any",
+  "nws_severe"
+ ],
+ "evaluation": {
+  "n": 300000,
+  "mae_model": 63.38047179478956,
+  "mae_schedule": 72.01068914157231,
+  "mae_persistence": 75.91725321744204,
+  "coverage_p10_p90": 0.8,
+  "range_width_median_sec": 136.6299644220735,
+  "n_with_feed": 6229,
+  "mae_feed": 66.72382661947604,
+  "mae_model_on_feed_rows": 62.41736334695225,
+  "improvement_vs_feed": 0.06454161115613799,
+  "by_k": [
+   {
+    "k": 1,
+    "n": 60722,
+    "mae_model": 28.72789642504194,
+    "mae_schedule": 35.87407371687334,
+    "mae_persistence": 34.2769204246777,
+    "mae_feed": 48.06427099028274,
+    "coverage": 0.7879187115048911
+   },
+   {
+    "k": 2,
+    "n": 58131,
+    "mae_model": 42.15976881933806,
+    "mae_schedule": 50.088448502877114,
+    "mae_persistence": 49.47830544295802,
+    "mae_feed": 60.42760112381915,
+    "coverage": 0.791453785415699
+   },
+   {
+    "k": 3,
+    "n": 55345,
+    "mae_model": 52.439550499883325,
+    "mae_schedule": 60.95403290136535,
+    "mae_persistence": 61.967739721386614,
+    "mae_feed": 68.32114120995327,
+    "coverage": 0.807155117896829
+   },
+   {
+    "k": 5,
+    "n": 49740,
+    "mae_model": 73.00834750248012,
+    "mae_schedule": 81.87990757954566,
+    "mae_persistence": 87.28163367145869,
+    "mae_feed": 85.87128636226967,
+    "coverage": 0.811178126256534
+   },
+   {
+    "k": 8,
+    "n": 42460,
+    "mae_model": 96.57760556195736,
+    "mae_schedule": 106.92104882517346,
+    "mae_persistence": 116.59441202242007,
+    "mae_feed": 92.77714244267787,
+    "coverage": 0.8068535091851154
+   },
+   {
+    "k": 12,
+    "n": 33602,
+    "mae_model": 124.53274897709723,
+    "mae_schedule": 134.7269314703122,
+    "mae_persistence": 151.65757042230473,
+    "mae_feed": 112.82081501876714,
+    "coverage": 0.7996250223201
+   }
+  ],
+  "by_route": [
+   {
+    "route": "2",
+    "n": 24826,
+    "mae_model": 62.81666881483235,
+    "mae_schedule": 67.77473369072457,
+    "coverage": 0.8157576734069121
+   },
+   {
+    "route": "F",
+    "n": 23139,
+    "mae_model": 90.87507689979365,
+    "mae_schedule": 101.12894623008273,
+    "coverage": 0.75815722373482
+   },
+   {
+    "route": "1",
+    "n": 22817,
+    "mae_model": 29.44301274867171,
+    "mae_schedule": 34.19975772826444,
+    "coverage": 0.8273655607660955
+   },
+   {
+    "route": "6",
+    "n": 19186,
+    "mae_model": 42.30948812884889,
+    "mae_schedule": 52.827376525866576,
+    "coverage": 0.8111643907015532
+   },
+   {
+    "route": "R",
+    "n": 16958,
+    "mae_model": 62.407790758012524,
+    "mae_schedule": 69.6055657420466,
+    "coverage": 0.7786295553720958
+   },
+   {
+    "route": "D",
+    "n": 16394,
+    "mae_model": 79.00430679322763,
+    "mae_schedule": 87.49890203733074,
+    "coverage": 0.8070635598389655
+   },
+   {
+    "route": "4",
+    "n": 16156,
+    "mae_model": 63.31715291401054,
+    "mae_schedule": 68.24087371395849,
+    "coverage": 0.8306511512750681
+   },
+   {
+    "route": "L",
+    "n": 15381,
+    "mae_model": 43.922868813318914,
+    "mae_schedule": 54.203089401103625,
+    "coverage": 0.8056043170144984
+   },
+   {
+    "route": "A",
+    "n": 14592,
+    "mae_model": 86.50945344585642,
+    "mae_schedule": 90.29975328947368,
+    "coverage": 0.8157209429824561
+   },
+   {
+    "route": "7",
+    "n": 13237,
+    "mae_model": 45.83995726358564,
+    "mae_schedule": 58.81440999394972,
+    "coverage": 0.8294930875576036
+   },
+   {
+    "route": "Q",
+    "n": 12432,
+    "mae_model": 76.96673872021188,
+    "mae_schedule": 84.91907979407979,
+    "coverage": 0.7819337194337195
+   },
+   {
+    "route": "N",
+    "n": 11935,
+    "mae_model": 82.51903815041827,
+    "mae_schedule": 90.04837555615633,
+    "coverage": 0.7701717637201508
+   },
+   {
+    "route": "C",
+    "n": 11815,
+    "mae_model": 53.6392962352004,
+    "mae_schedule": 60.68083010050789,
+    "coverage": 0.7794329242488363
+   },
+   {
+    "route": "3",
+    "n": 10815,
+    "mae_model": 61.89818198762438,
+    "mae_schedule": 70.67024953608924,
+    "coverage": 0.8087840961627369
+   },
+   {
+    "route": "5",
+    "n": 10774,
+    "mae_model": 74.705143621585,
+    "mae_schedule": 78.19193165977656,
+    "coverage": 0.8152960831631706
+   },
+   {
+    "route": "J",
+    "n": 10758,
+    "mae_model": 50.863312727287706,
+    "mae_schedule": 67.85722253206916,
+    "coverage": 0.7857408440230527
+   },
+   {
+    "route": "M",
+    "n": 10509,
+    "mae_model": 72.71264401679298,
+    "mae_schedule": 91.32514987153868,
+    "coverage": 0.7837092016366923
+   },
+   {
+    "route": "B",
+    "n": 8396,
+    "mae_model": 101.3275475693188,
+    "mae_schedule": 116.1688899475941,
+    "coverage": 0.7672701286326822
+   },
+   {
+    "route": "E",
+    "n": 8313,
+    "mae_model": 76.59603080452086,
+    "mae_schedule": 87.45511316037071,
+    "coverage": 0.7793816913268374
+   },
+   {
+    "route": "G",
+    "n": 7371,
+    "mae_model": 38.27019328352127,
+    "mae_schedule": 47.31271197937865,
+    "coverage": 0.811965811965812
+   },
+   {
+    "route": "6X",
+    "n": 4428,
+    "mae_model": 59.88317530155606,
+    "mae_schedule": 68.90113255185055,
+    "coverage": 0.8035230352303523
+   },
+   {
+    "route": "W",
+    "n": 4191,
+    "mae_model": 58.78502199123964,
+    "mae_schedule": 65.97208303507516,
+    "coverage": 0.7924123120973514
+   },
+   {
+    "route": "SI",
+    "n": 2482,
+    "mae_model": 67.23818954596429,
+    "mae_schedule": 75.48491051396854,
+    "coverage": 0.782030620467365
+   },
+   {
+    "route": "7X",
+    "n": 1834,
+    "mae_model": 40.45294143235957,
+    "mae_schedule": 51.92567465609527,
+    "coverage": 0.8424209378407852
+   },
+   {
+    "route": "H",
+    "n": 340,
+    "mae_model": 37.20924143288601,
+    "mae_schedule": 50.258823529411764,
+    "coverage": 0.8558823529411764
+   },
+   {
+    "route": "FX",
+    "n": 288,
+    "mae_model": 57.253617043614454,
+    "mae_schedule": 63.64930555555556,
+    "coverage": 0.7430555555555556
+   },
+   {
+    "route": "FS",
+    "n": 276,
+    "mae_model": 73.8330401082753,
+    "mae_schedule": 98.64855072463769,
+    "coverage": 0.7898550724637681
+   },
+   {
+    "route": "Z",
+    "n": 243,
+    "mae_model": 53.01515338477617,
+    "mae_schedule": 64.34156378600824,
+    "coverage": 0.823045267489712
+   },
+   {
+    "route": "GS",
+    "n": 114,
+    "mae_model": 13.178704270911714,
+    "mae_schedule": 18.359649122807017,
+    "coverage": 0.868421052631579
+   }
+  ],
+  "calibration_by_width": [
+   {
+    "bucket": 0,
+    "n": 75000,
+    "width_median": 48.13099840712035,
+    "mae": 17.52674642126555
+   },
+   {
+    "bucket": 1,
+    "n": 75000,
+    "width_median": 101.05953885723991,
+    "mae": 35.71043392616447
+   },
+   {
+    "bucket": 2,
+    "n": 75000,
+    "width_median": 184.7506456454647,
+    "mae": 63.16603299142902
+   },
+   {
+    "bucket": 3,
+    "n": 75000,
+    "width_median": 355.6951371493295,
+    "mae": 137.11867384029924
+   }
+  ],
+  "range_scale": 1.0780131158384747
+ },
+ "importance": [
+  {
+   "feature": "k",
+   "mae_increase": 108.69578014078297
+  },
+  {
+   "feature": "sched_run_sec",
+   "mae_increase": 105.06181460976731
+  },
+  {
+   "feature": "seg_recent_excess",
+   "mae_increase": 9.149009313209156
+  },
+  {
+   "feature": "route_code",
+   "mae_increase": 4.310141637933633
+  },
+  {
+   "feature": "lateness_u",
+   "mae_increase": 1.4272054481645924
+  },
+  {
+   "feature": "mom1",
+   "mae_increase": 0.9875319099826001
+  },
+  {
+   "feature": "mom3",
+   "mae_increase": 0.6093985562142095
+  },
+  {
+   "feature": "hour_cos",
+   "mae_increase": 0.28426933989336334
+  },
+  {
+   "feature": "hour_sin",
+   "mae_increase": 0.20051069487818296
+  },
+  {
+   "feature": "leader_same_route",
+   "mae_increase": 0.14006803516955557
+  },
+  {
+   "feature": "gap_ahead_sec",
+   "mae_increase": 0.0905777689696734
+  },
+  {
+   "feature": "peak",
+   "mae_increase": 0.06660670457190321
+  },
+  {
+   "feature": "direction_code",
+   "mae_increase": 0.06044287501210732
+  },
+  {
+   "feature": "weekend",
+   "mae_increase": 0.047120203967601526
+  },
+  {
+   "feature": "leader_lateness",
+   "mae_increase": 0.014300991360748583
+  }
+ ],
+ "iterations": {
+  "0.1": 400,
+  "0.5": 400,
+  "0.9": 400
+ },
+ "routes_seen": [
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "6X",
+  "7",
+  "7X",
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "FS",
+  "FX",
+  "G",
+  "GS",
+  "H",
+  "J",
+  "L",
+  "M",
+  "N",
+  "Q",
+  "R",
+  "SI",
+  "W",
+  "Z"
+ ],
+ "n_rows": 1500000,
+ "n_arrivals": 701854
+}
