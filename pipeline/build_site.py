@@ -372,6 +372,16 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     except Exception as exc:
         logging.warning("hold analysis failed: %s", exc); hs = {"n": 0, "error": str(exc)[:200]}
     (out_data / "holds.json").write_text(json.dumps(hs, default=str))
+    # the client prediction engine: tables the browser and the phone apply to the live feeds
+    try:
+        from mta_delay_insights.realtime.client_model import fit_client_model
+        cm_arr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
+        client_model = fit_client_model(context.get("_eta_samples"), cm_arr, context.get("_holds"), static, now.isoformat())
+    except Exception as exc:
+        logging.warning("client model failed: %s", exc)
+        from mta_delay_insights.realtime.client_model import fit_client_model
+        client_model = fit_client_model(None, None, None, None, now.isoformat()) | {"error": str(exc)[:200]}
+    (out_data / "client_model.json").write_text(json.dumps(client_model, default=str))
     try:
         from mta_delay_insights.analysis.segments import segment_profile
         sp = segment_profile(context.get("_segment_runs"), static)
@@ -428,6 +438,9 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
                 "eta_samples": int(len(es_samples)) if es_samples is not None else 0,
                 "dwells": int(len(context.get("_dwells"))) if context.get("_dwells") is not None else 0,
                 "holds": int(len(context.get("_holds"))) if context.get("_holds") is not None else 0,
+                "client_model": {"eta_samples": client_model["eta_calibration"].get("n", 0), "routes_calibrated": len(client_model["eta_calibration"].get("by_route", {})),
+                                 "holds": client_model["hold_survival"].get("n_holds", 0), "carry_pairs": client_model["lateness_carry"].get("n", 0),
+                                 "routes_carry": len(client_model["lateness_carry"].get("by_route", {}))},
                 "segment_runs": int(len(context.get("_segment_runs"))) if context.get("_segment_runs") is not None else 0,
                 "alerts_archive_rows": int(len(context.get("alerts_archive"))) if context.get("alerts_archive") is not None else 0,
                 "events_rows": int(len(context.get("events"))) if context.get("events") is not None else 0,

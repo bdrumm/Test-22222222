@@ -1,5 +1,5 @@
 import { barChart, lineChart, heatmap, sparkline, stringline, trackDiagram, fmt, seriesColor } from "./charts.js";
-import { createClientLive, lineBoard, planJourneys, journeyFeeds, trainProgress, stationIndex, enumeratePaths, reachableStations, schedHeadwayAt, pathTrips } from "./rt-client.js";
+import { createClientLive, lineBoard, planJourneys, journeyFeeds, trainProgress, stationIndex, enumeratePaths, reachableStations, schedHeadwayAt, pathTrips, predictBoard } from "./rt-client.js";
 
 const app = document.getElementById("app");
 // Where the JSON lives. Normally next to the page (built site). When GitHub Pages serves the
@@ -1157,7 +1157,7 @@ async function travelPage(idx, arg) {
   const statusEl = h("div", "small secondary", "loading…", head);
   let schedule;
   try { schedule = await load("client_schedule.json"); } catch (e) { h("div", "empty", "Travel mode needs data/client_schedule.json, which the site build publishes.", root); return; }
-  const [clines, holds, trust, clim, live, segs] = await Promise.all([load("client_lines.json").catch(() => null), load("holds.json").catch(() => null), load("eta_trust.json").catch(() => null), load("climatology.json").catch(() => null), load("live.json").catch(() => null), load("segments.json").catch(() => null)]);
+  const [clines, holds, trust, clim, live, segs, cmodel] = await Promise.all([load("client_lines.json").catch(() => null), load("holds.json").catch(() => null), load("eta_trust.json").catch(() => null), load("climatology.json").catch(() => null), load("live.json").catch(() => null), load("segments.json").catch(() => null), load("client_model.json").catch(() => null)]);
   const segKey = (k, stop) => (segs && segs.by_key || {})[`${k}|${stop}`] || null;
   const lineSched = (clines && clines.lines) || {};
   const index = stationIndex(schedule);
@@ -1225,12 +1225,23 @@ async function travelPage(idx, arg) {
   // tiles
   const tiles = h("div", "tiles", null, root);
   const tNext = tile(tiles, "Next train", "–", " "), tArr = tile(tiles, `Arrive ${dest.name}`, "–", " "), tLine = tile(tiles, "On your lines now", "–", " "), tTyp = tile(tiles, "This hour, typically", "–", " ");
+  // hold scenarios (shown when a train on these lines is held): what the prediction engine assumes about the hold
+  const scen = h("div", "row modebar", null, root); scen.style.display = "none";
+  h("span", "small secondary", "A train on these lines is held. Times assume:", scen);
+  const scenBtns = {};
+  [["baseline", "the hold ends as holds here usually do"], ["hold_persists", "it drags on (p90)"], ["clears_now", "it clears now"]].forEach(([id, name]) => {
+    const b = h("button", `icon-btn${id === "baseline" ? " on" : ""}`, name, scen); scenBtns[id] = b;
+    b.addEventListener("click", () => { state.scenario = id; Object.entries(scenBtns).forEach(([k, x]) => x.classList.toggle("on", k === id)); onBoards(); }); });
   // ranked paths
   h("h2", null, `${origin.name} → ${dest.name}: ${paths.length} way${paths.length > 1 ? "s" : ""} to get there`, root);
   const pathsCard = h("div", "card", null, root); const pathsBody = h("div", null, null, pathsCard);
   h("div", "tiny muted", "Bars: expected door-to-door time, broken into wait (grey), ride (line colour, including the time trains typically lose on that stretch at this hour and the hold risk), walk at the transfer (dark). Ranking uses the live feeds once they arrive (arrival time of the next itinerary), otherwise the expected time. Click a path to inspect it below.", pathsCard);
   const detail = h("div", null, null, root);
-  const state = { boards: {}, lbNow: null, demo: !!schedule.demo_now, alerts: null, diagram: null, tracks: null };
+  let savedMode = "track"; try { savedMode = localStorage.getItem("travel_mode") || "track"; } catch {}
+  const state = { boards: {}, lbNow: null, demo: !!schedule.demo_now, alerts: null, diagram: null, tracks: null, pred: {}, predBoards: {}, scenario: "baseline", anyHeld: false, mode: savedMode, countdowns: [] };
+  // the prediction engine's 80% window and the feed's own ETA at a leg's arrival stop
+  const arriveRange = l => { if (!l || !l.pred) return null; const pt = l.pred.points.find(x => Math.abs(x.eta_ts - l.arrive_ts) < 0.5); if (!pt) return null; const fp = (l.feed_points || []).find(p => p[0] === pt.idx); return { lo: pt.lo_ts, hi: pt.hi_ts, feed: fp ? fp[1] : null, source: pt.source }; };
+  const rangeText = (rg, ts) => rg ? `${hhmm(rg.lo)}–${hhmm(rg.hi)}${rg.feed != null && Math.abs(rg.feed - ts) >= 60 ? ` · feed says ${hhmm(rg.feed)}` : ""}` : "";
 
   function drawPaths() {
     pathsBody.replaceChildren();
@@ -1262,7 +1273,14 @@ async function travelPage(idx, arg) {
   function drawDetail() {
     detail.replaceChildren();
     const p = selected;
+    const modeBar = h("div", "row modebar", null, detail); h("span", "small secondary", "View", modeBar);
+    const modeBtns = {};
+    [["track", "Track"], ["timeline", "Timeline"], ["board", "Departure board"]].forEach(([id, name]) => { const b = h("button", `icon-btn${state.mode === id ? " on" : ""}`, name, modeBar); modeBtns[id] = b;
+      b.addEventListener("click", () => { state.mode = id; try { localStorage.setItem("travel_mode", id); } catch {} Object.entries(modeBtns).forEach(([k, x]) => x.classList.toggle("on", k === id)); applyMode(); }); });
     const card = h("div", "card", null, detail);
+    state.boardBox = h("div", "card", null, detail); state.stringBox = h("div", "card", null, detail);
+    const applyMode = () => { card.style.display = state.mode === "track" ? "" : "none"; state.boardBox.style.display = state.mode === "board" ? "" : "none"; state.stringBox.style.display = state.mode === "timeline" ? "" : "none"; };
+    applyMode();
     const th = h("div", "row between", null, card); const tt = h("div", null, null, th);
     p.legs.forEach((l, li) => { if (li) tt.append(" → "); bullets(l.routes, tt); }); h("strong", null, ` ${origin.name} → ${dest.name}${p.transfer ? ` via ${p.transfer.station}` : ""}`, tt);
     const layerBox = h("div", "layers", null, th);
@@ -1300,8 +1318,9 @@ async function travelPage(idx, arg) {
     if (p.transfer) { const hx = holdMap.get(p.transfer.stop2) || holdMap.get(p.transfer.stop); if (hx) h("li", null, `At the transfer, ${p.transfer.station}, trains are held ${hx.per_day.toFixed(1)} times a day (median ${(hx.median_sec / 60).toFixed(1)} min).`, ul); h("li", null, `The scheduled headway of the ${p.legs[1].routes.join("/")} at ${p.transfer.station} is about ${schedHeadwayAt(schedule, lineSched, p.legs[1].keys, p.legs[1].from, now0) ? `${(schedHeadwayAt(schedule, lineSched, p.legs[1].keys, p.legs[1].from, now0) / 60).toFixed(0)} min` : "unknown"}, so an expected wait of ${minTxt(p.wait2_sec)}.`, ul); }
     const baseRate = clim && clim.grid_by_route ? p.legs.map(l => { const g = clim.grid_by_route[l.routes[0]]; return g && g[parts.dow] ? [l.routes[0], g[parts.dow][parts.hour]] : null; }).filter(Boolean) : [];
     if (baseRate.length) h("li", null, `Disruption base rate for this day and hour: ${baseRate.map(([r, v]) => `${r} ${v.toFixed(2)}/week`).join(", ")}.`, ul);
+    if (cmodel) { const cal = cmodel.eta_calibration || {}; const r0 = p.legs[0].routes[0]; const tbl = (cal.by_route || {})[r0]; const b = (tbl || cal.all || [])[1];
+      h("li", null, `Prediction engine: the feed's ETAs are calibrated on ${fmt.compact(cal.n || 0)} samples${tbl && b ? ` (${r0}, 2–5 min out: the train comes ${Math.abs(b.bias).toFixed(0)} s ${b.bias >= 0 ? "later" : "earlier"} than promised on average, 80% within ${b.p10.toFixed(0)}…+${b.p90.toFixed(0)} s)` : " (no table for this line yet: priors)"}, blended with the lateness the timetable carries from the train's current stop${(cmodel.hold_survival || {}).n_holds ? `; a held train is expected to move again after the remaining hold typical of ${fmt.compact(cmodel.hold_survival.n_holds)} logged holds` : ""}.`, ul); }
     if (!ul.children.length) h("li", null, "No history for these stretches yet; the hourly collection fills this in.", ul);
-    state.stringBox = h("div", "card", null, detail);
     renderLive();
   }
 
@@ -1325,7 +1344,9 @@ async function travelPage(idx, arg) {
     const now = nowRef(), p = selected, it = p.live;
     setTile(tNext, it ? mmss(it.board_ts - now) : "–", it ? `${it.legs[0].route} boards ${hhmm(it.board_ts)} at ${origin.name}${it.legs[0].position ? ` · now ${posText(it.legs[0].position)}` : ""}` : (state.lbNow ? "no train in the feed for this path" : "waiting for the feeds"));
     tNext.querySelector(".value").classList.add("countdown");
-    setTile(tArr, it ? hhmm(it.arrive_ts) : "–", it ? `door to door ${minTxt(it.total_sec)} · expected ${minTxt(p.expected_sec)} · scheduled ${minTxt(p.sched_sec)}` : `expected ${minTxt(p.expected_sec)} · scheduled ${minTxt(p.sched_sec)}`);
+    const rg = it ? arriveRange(it.legs[it.legs.length - 1]) : null;
+    setTile(tArr, it ? hhmm(it.arrive_ts) : "–", it ? `${rg ? `80% window ${rangeText(rg, it.arrive_ts)} · ` : ""}door to door ${minTxt(it.total_sec)} · expected ${minTxt(p.expected_sec)} · scheduled ${minTxt(p.sched_sec)}` : `expected ${minTxt(p.expected_sec)} · scheduled ${minTxt(p.sched_sec)}`);
+    for (const [el, ts] of state.countdowns) el.textContent = mmss(Math.max(0, ts - now));
   }
   function renderLive() {
     const now = nowRef(); tickTiles(); tickDiagram();
@@ -1334,7 +1355,7 @@ async function travelPage(idx, arg) {
     setTile(tTyp, `${selected.typical_sec >= 0 ? "+" : "−"}${Math.abs(selected.typical_sec).toFixed(0)} s`, `time lost on this path's stretches at this hour${selected.hold_risk_sec >= 5 ? ` · +${selected.hold_risk_sec.toFixed(0)} s hold risk` : ""}${selected.n_alerts ? ` · ${selected.n_alerts} alert(s) on its lines` : ""}`);
     if (!state.tblBody) return;
     state.tblBody.replaceChildren(); state.tblAge.textContent = state.lbNow ? `${state.demo ? "recorded snapshot at" : "feeds polled"} ${hhmmss(state.lbNow)} ET` : "";
-    const its = state.lbNow ? pathTrips(state.boards, schedule, selected, now) : [];
+    const its = state.lbNow ? pathTrips(state.predBoards, schedule, selected, now) : [];
     if (!its.length) { h("div", "small secondary", state.lbNow ? "No itinerary on this path in the feed within the hour (overnight reroute, or the line is not running this pattern right now)." : "Waiting for the feeds…", state.tblBody); }
     else {
       const wrap = h("div", "table-wrap", null, state.tblBody); const tb = h("table", "tiny", null, wrap); const tr = h("tr", null, null, h("thead", null, null, tb));
@@ -1343,9 +1364,24 @@ async function travelPage(idx, arg) {
       its.forEach((it, i) => { const row = h("tr", i === 0 ? "worse" : "", null, body); h("td", "num", mmss(Math.max(0, it.board_ts - now)), row);
         it.legs.forEach((l, li) => { if (li === 1) { const cc = h("td", "small", null, row); cc.append(`walk ${minTxt(it.walk_sec)}, wait ${minTxt(it.wait_at_transfer_sec - it.walk_sec)}`); if (it.connection_margin_sec != null && it.connection_margin_sec < 120) { const c = h("span", "status-chip st-degraded", null, cc); c.style.marginLeft = ".3rem"; h("span", "dot", null, c); c.append("tight"); } }
           const c = h("td", "small", null, row); routeBullet(l.route, c); c.append(` ${(l.train_id || l.trip_id).trim()}`); c.append(" "); if (l.position) { const sp = h("span", "tiny muted", `${posText(l.position)}${speedText(l) ? ` · ${speedText(l)}` : ""}`, c); sp.style.display = "block"; } posFlags(c, l.position, l.corroboration, { track_changed: l.track_changed });
-          h("td", "num eta", hhmm(l.board_ts), row); h("td", "num eta", hhmm(l.arrive_ts), row); });
+          h("td", "num eta", hhmm(l.board_ts), row); const ac = h("td", "num eta", hhmm(l.arrive_ts), row); const rg = arriveRange(l); if (rg) { const s = h("div", "tiny muted", rangeText(rg, l.arrive_ts), ac); s.style.whiteSpace = "nowrap"; } });
         h("td", "num", minTxt(it.total_sec), row); h("td", "num", it.ride_vs_sched_sec == null ? "–" : `${it.ride_vs_sched_sec >= 0 ? "+" : "−"}${Math.abs(it.ride_vs_sched_sec / 60).toFixed(0)} min`, row); });
-      h("div", "tiny muted", "Times are the feed's ETAs for each train at your stops; lateness and flags come from the train's reported position. The first row is the recommended itinerary; a connection is tight when the margin after the walk is under two minutes.", state.tblBody);
+      h("div", "tiny muted", "Times come from the prediction engine: the feed's ETA calibrated by line and horizon, blended with the lateness the timetable carries from the train's current stop, and corrected for a train that is being held; the small range is the 80% window. Lateness and flags come from the train's reported position. The first row is the recommended itinerary; a connection is tight when the margin after the walk is under two minutes.", state.tblBody);
+    }
+    // departure-board view: the next trains from the origin, big and glanceable
+    if (state.boardBox) {
+      state.boardBox.replaceChildren(); state.countdowns = [];
+      const bh = h("div", "row between", null, state.boardBox); h("strong", null, `Departures from ${origin.name}`, bh);
+      h("span", "small secondary", state.lbNow ? `${selected.legs[0].routes.join("/")} toward ${dest.name}${selected.transfer ? `, change at ${selected.transfer.station}` : ""}` : "waiting for the feeds", bh);
+      if (!its.length) h("div", "small secondary", state.lbNow ? "No train for this path in the feed yet." : "Waiting for the feeds…", state.boardBox);
+      its.slice(0, 5).forEach((it, i) => { const l0 = it.legs[0], ln = it.legs[it.legs.length - 1]; const row = h("div", `dep${i === 0 ? " first" : ""}`, null, state.boardBox);
+        const cd = h("div", "dep-count countdown", mmss(Math.max(0, it.board_ts - now)), row); state.countdowns.push([cd, it.board_ts]);
+        const mid = h("div", "dep-mid", null, row); const top = h("div", null, null, mid); routeBullet(l0.route, top); top.append(` ${(l0.train_id || l0.trip_id).trim()} · boards ${hhmm(l0.board_ts)} `); posFlags(top, l0.position, l0.corroboration);
+        const bits = [l0.position ? posText(l0.position) : null, it.legs[1] ? `change at ${selected.transfer.station}: ${it.connection_margin_sec != null && it.connection_margin_sec < 120 ? "tight, " : ""}${minTxt(it.connection_margin_sec)} margin` : null,
+          it.ride_vs_sched_sec != null && Math.abs(it.ride_vs_sched_sec) >= 60 ? `${it.ride_vs_sched_sec > 0 ? "+" : "−"}${Math.abs(it.ride_vs_sched_sec / 60).toFixed(0)} min vs schedule` : null].filter(Boolean);
+        h("div", "tiny muted", bits.join(" · "), mid);
+        const arr = h("div", "dep-arr", null, row); h("div", "eta", hhmm(it.arrive_ts), arr); const rg = arriveRange(ln); h("div", "tiny muted", rg ? rangeText(rg, it.arrive_ts) : `arrive ${dest.name}`, arr); });
+      h("div", "tiny muted", "Countdown to boarding at your platform; the arrival is the prediction engine's estimate with its 80% window.", state.boardBox);
     }
     // Marey chart of the path over the next 45 minutes
     if (state.stringBox && state.tracks) {
@@ -1354,12 +1390,15 @@ async function travelPage(idx, arg) {
         for (const k of track.keys) { const lb = state.boards[k]; if (!lb) continue; const line = schedule.lines[k];
           for (const t of lb.trains) { const pts = t.points.map(([i, ts]) => [track.stops.findIndex(s => s.stop_id === line.stops[i]) - track.startIdx, ts]).filter(p => p[0] >= 0 && p[0] <= track.endIdx - track.startIdx); if (pts.length >= 2) trs.push({ trip_id: t.trip_id, train_id: t.train_id, route_id: k.split("_")[0], points: pts, lateness_sec: t.effective_lateness_sec ?? t.lateness_sec, kind: t.position && (t.position.holding || t.position.stalled) ? "live-hold" : "live" }); } }
         return { stops: seg, trains: trs }; });
+      legs.forEach((lg, li) => { const track = state.tracks[li]; for (const k of track.keys) { const pr = state.pred[k]; const sc = pr && (pr[state.scenario] || pr.baseline); if (!sc) continue; const line = schedule.lines[k];
+        for (const t of sc.trains) { const pts = t.points.map(pt => [track.stops.findIndex(s => s.stop_id === line.stops[pt.idx]) - track.startIdx, pt.eta_ts]).filter(q => q[0] >= 0 && q[0] <= track.endIdx - track.startIdx);
+          if (pts.length >= 2) lg.trains.push({ trip_id: `${t.trip_id}#model`, train_id: t.trip_id, route_id: k.split("_")[0], points: pts, kind: t.hold_extra_sec > 0 || t.knock_on_sec >= 60 ? "sim-hold" : "sim" }); } } });
       const age = state.demo ? 0 : now - state.lbNow; const markers = [];
       state.tracks.forEach((track, li) => { for (const k of track.keys) { const lb = state.boards[k]; if (!lb) continue; for (const t of lb.trains) { const p = progressOnTrack(t, k, track, age); if (!p || p.idx < track.startIdx || p.idx > track.endIdx) continue; markers.push({ leg: li, stop: p.idx - track.startIdx, ts: now, color: stateColor(p.state), label: `${k.split("_")[0]} ${(t.train_id || t.trip_id).trim()}`, rows: [["state", p.state], ["lateness", lateTxt(t.effective_lateness_sec ?? t.lateness_sec)]] }); } } });
       const it = its[0]; const path = [];
       if (it) { path.push([0, state.tracks[0].fromIdx - state.tracks[0].startIdx, now], [0, state.tracks[0].fromIdx - state.tracks[0].startIdx, it.legs[0].board_ts], [0, state.tracks[0].toIdx - state.tracks[0].startIdx, it.legs[0].arrive_ts]);
         if (it.legs[1]) path.push([1, state.tracks[1].fromIdx - state.tracks[1].startIdx, it.legs[1].board_ts], [1, state.tracks[1].toIdx - state.tracks[1].startIdx, it.legs[1].arrive_ts]); }
-      stringline(state.stringBox, { title: "This path over the next 45 minutes", subtitle: "dots: trains now; dashed: the feed's projection (red: held or stalled); the red dashed path is your recommended itinerary: wait, ride, change, ride", legs, now, horizonSec: 2700, backSec: 300, highlight: new Set(it ? it.legs.map(l => l.trip_id) : []), path, routeColor: r => ROUTE_COLORS[r] || null, rowH: 14, markers });
+      stringline(state.stringBox, { title: "This path over the next 45 minutes", subtitle: "dots: trains now; dashed: the feed's projection (red: held or stalled); dotted: the prediction engine (red: a held train, or one it holds back); the red dashed path is your recommended itinerary: wait, ride, change, ride", legs, now, horizonSec: 2700, backSec: 300, highlight: new Set(it ? it.legs.map(l => l.trip_id) : []), path, routeColor: r => ROUTE_COLORS[r] || null, rowH: 14, markers });
     }
   }
   function fallbackBoards() {
@@ -1369,11 +1408,18 @@ async function travelPage(idx, arg) {
       any = true; state.lbNow = state.lbNow || snap.now; }
     return any ? out : null;
   }
-  function onBoards() { const now = nowRef(); for (const p of paths) p.live = pathTrips(state.boards, schedule, p, now)[0] || null; if (!pathId) selected = rank()[0]; drawPaths(); renderLive(); }
+  function predictAll() {
+    const now = nowRef(); state.pred = {}; state.predBoards = {}; state.anyHeld = false;
+    for (const k of involvedKeys) { const lb = state.boards[k]; if (!lb) continue; const pr = predictBoard(lb, schedule.lines[k], cmodel, now); state.pred[k] = pr; if (pr.hold_persists) state.anyHeld = true;
+      const sc = pr[state.scenario] || pr.baseline; const byTrip = new Map(sc.trains.map(t => [t.trip_id, t]));
+      state.predBoards[k] = { ...lb, trains: lb.trains.map(t => { const q = byTrip.get(t.trip_id); return q && q.points.length ? { ...t, feed_points: t.points, points: q.points.map(pt => [pt.idx, pt.eta_ts]), pred: q } : t; }) }; }
+    scen.style.display = state.anyHeld ? "" : "none";
+  }
+  function onBoards() { const now = nowRef(); predictAll(); for (const p of paths) p.live = pathTrips(state.predBoards, schedule, p, now)[0] || null; if (!pathId) selected = rank()[0]; drawPaths(); renderLive(); }
   drawPaths(); drawDetail();
   clientLive = createClientLive({ base: DATA, feedKeys: () => feedKeys,
     onUpdate: (board, sch, feeds) => { for (const k of involvedKeys) { const [r, d] = k.split("_"); if (sch.lines[k]) state.boards[k] = lineBoard(sch, lineSched[k] || [], feeds, r, d, board.now); } state.lbNow = board.now; state.alerts = board.alerts;
-      statusEl.textContent = `live from ${feedKeys.length} MTA feed${feedKeys.length > 1 ? "s" : ""} · every 30 s · ${state.demo ? "recorded snapshot" : `polled ${hhmmss(board.now)} ET`}`; onBoards(); },
+      statusEl.textContent = `live from ${feedKeys.length} MTA feed${feedKeys.length > 1 ? "s" : ""} · ${state.demo ? "recorded snapshot" : `polled ${hhmmss(board.now)} ET, next in ${Math.round((board.next_poll_ms || 30000) / 1000)} s (aligned to the feed's 30-second updates)`}`; onBoards(); },
     onError: e => { statusEl.textContent = `feeds unreachable from this browser (${e.message || e})`; if (!state.lbNow) { const fb = fallbackBoards(); if (fb) { state.boards = fb; statusEl.textContent += "; showing the pipeline's last line snapshots"; onBoards(); } } } });
   clientLive.start();
   liveTimer = setInterval(() => { tickDiagram(); tickTiles(); }, 1000);

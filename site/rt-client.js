@@ -524,8 +524,15 @@ export function planJourneys(schedule, feeds, now, maxOptions = 4) {
 
 /** Poll the feeds every intervalMs and hand computed boards to onUpdate(board, schedule, feeds).
  *  feedKeys limits which feeds are polled (default: the feeds the monitored platforms need). */
-export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, fetchImpl = (u, o) => fetch(u, o), feedKeys = null }) {
-  let timer = null, schedule = null, running = false, busy = false, ticks = 0, alerts = null, alertsError = null;
+export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, fetchImpl = (u, o) => fetch(u, o), feedKeys = null, feedPeriodSec = 30 }) {
+  let timer = null, schedule = null, running = false, busy = false, ticks = 0, alerts = null, alertsError = null, lastFeedTs = 0, staleRuns = 0;
+  // The MTA republishes each feed about every feedPeriodSec; polling just after the next publication keeps the
+  // board as fresh as the source allows. When a poll returns the previous timestamp, look again shortly.
+  function nextDelay() {
+    if (!lastFeedTs || (schedule && schedule.demo_now) || Date.now() / 1000 - lastFeedTs > 120) return intervalMs;
+    if (staleRuns > 0 && staleRuns <= 4) return 5000;
+    return Math.max(4000, Math.min(intervalMs, (lastFeedTs + feedPeriodSec + 1.5) * 1000 - Date.now()));
+  }
   async function tick() {
     if (busy) return; busy = true;
     try {
@@ -541,6 +548,8 @@ export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, 
         info.push({ key, feed_ts: fd.timestamp, trips: fd.trips.length, vehicles: fd.vehicles.length, ms: Date.now() - t0 });
       }));
       const board = computeBoard(schedule, feeds, now); board.feeds = info.sort((a, b) => a.key.localeCompare(b.key)); board.schedule_generated_at = schedule.generated_at; board.demo = !!schedule.demo_now;
+      const maxTs = Math.max(0, ...info.map(x => x.feed_ts || 0)); board.fresh = !(lastFeedTs && maxTs <= lastFeedTs); staleRuns = board.fresh ? 0 : staleRuns + 1; lastFeedTs = Math.max(lastFeedTs, maxTs);
+      board.feed_ts = maxTs || null; board.next_poll_ms = nextDelay();
       if (schedule.alerts_url && !schedule.demo_now && (ticks % 4 === 0 || alerts == null)) {   // the alerts document is large: every 2 minutes
         try { const r = await fetchImpl(schedule.alerts_url, { cache: "no-store" }); if (r.ok) { alerts = parseAlerts(await r.json(), now); alertsError = null; } else { alertsError = `HTTP ${r.status}`; alerts = alerts || []; } }
         catch (e) { alertsError = String(e.message || e); alerts = alerts || []; }   // retry on the regular cadence, not every tick
@@ -551,9 +560,113 @@ export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, 
     } catch (e) { if (onError) onError(e); }
     finally { busy = false; }
   }
+  function arm() { if (!running) return; timer = setTimeout(async () => { await tick(); arm(); }, nextDelay()); }
   return {
-    start() { if (running) return; running = true; tick(); timer = setInterval(tick, intervalMs); },
-    stop() { running = false; if (timer) clearInterval(timer); timer = null; },
-    refresh: tick, get running() { return running; },
+    start() { if (running) return; running = true; tick().then(arm); },
+    stop() { running = false; if (timer) clearTimeout(timer); timer = null; },
+    refresh: tick, get running() { return running; }, get nextDelayMs() { return nextDelay(); },
   };
+}
+
+// ---------------------------------------------------------------- client prediction engine
+// Port of mta_delay_insights/realtime/client_model.py (predict_train / predict_line); tested against it.
+export const HORIZON_EDGES = [0, 120, 300, 600, 1200, 2400, 3600];
+export const MIN_STOP_GAP_SEC = 30;
+export const PREDICT_SCENARIOS = ["baseline", "hold_persists", "clears_now"];
+const PRIOR_HOLD = { expected: 300, p50: 180, p90: 720, clears_2min: 0.35 };
+export const priorSpread = h => [-45 - 0.05 * h, 60 + 0.15 * h];
+export function horizonIndex(h) { for (let i = 0; i < HORIZON_EDGES.length - 1; i++) if (HORIZON_EDGES[i] <= h && h < HORIZON_EDGES[i + 1]) return i; return h < 0 ? 0 : HORIZON_EDGES.length - 2; }
+export function calibrationAt(model, route, h) {
+  const cal = (model && model.eta_calibration) || {}; const i = horizonIndex(h);
+  const table = (cal.by_route && cal.by_route[route]) || cal.all;
+  if (table && i < table.length) return table[i];
+  const [p10, p90] = priorSpread(Math.max(0, h)); return { n: 0, bias: 0, p10, p90 };
+}
+export function carryAt(model, route, k) {
+  const lc = (model && model.lateness_carry) || {}; const t = (lc.by_route && lc.by_route[route]) || lc.all;
+  if (!t || k < 1 || k > (t.slope || []).length) return null;
+  return { slope: t.slope[k - 1], intercept: t.intercept[k - 1], resid_std: t.resid_std[k - 1] };
+}
+/** Expected / p50 / p90 remaining hold for a train held `elapsed` seconds (linear between the grid points). */
+export function remainingHold(sv, elapsed) {
+  const keys = ["expected", "p50", "p90", "clears_2min"];
+  if (!sv || !sv.elapsed || !sv.elapsed.length) return { ...PRIOR_HOLD };
+  const g = sv.elapsed; const pick = i => Object.fromEntries(keys.map(k => [k, sv[k][i]]));
+  if (elapsed <= g[0]) return pick(0);
+  if (elapsed >= g[g.length - 1]) return pick(g.length - 1);
+  for (let i = 0; i < g.length - 1; i++) if (g[i] <= elapsed && elapsed < g[i + 1]) { const f = (elapsed - g[i]) / (g[i + 1] - g[i]); return Object.fromEntries(keys.map(k => [k, sv[k][i] + f * (sv[k][i + 1] - sv[k][i])])); }
+  return pick(g.length - 1);
+}
+/** Unconstrained projection of one train over its remaining stops (see client_model.predict_train for the fields). */
+export function predictTrain(train, line, model, now, scenario = "baseline") {
+  const route = String(train.route || "");
+  const pts = (train.points || []).filter(p => p[1] != null).map(p => [Number(p[0]), Number(p[1])]).sort((a, b) => a[0] - b[0]);
+  const out = { trip_id: train.trip_id, points: [], hold_extra_sec: 0, knock_on_sec: 0, scenario };
+  if (!pts.length) return out;
+  const nextIdx = train.next_idx != null ? Number(train.next_idx) : pts[0][0];
+  const lat = train.lateness_sec, eff = train.effective_lateness_sec != null ? train.effective_lateness_sec : lat;
+  const optimistic = (eff != null && lat != null) ? Math.max(0, eff - lat) : 0;
+  const pos = train.position || {}; const held = !!(pos.holding || pos.stalled);
+  let extra = 0;
+  if (held) { const rem = remainingHold(model && model.hold_survival, Number(pos.since_sec || 0)); extra = ({ baseline: rem.expected, hold_persists: rem.p90, clears_now: 0 })[scenario] ?? rem.expected; }
+  out.hold_extra_sec = extra;
+  const run = line.run_sec || []; const schedNext = train.sched_ts;
+  let prevT = null;
+  for (const [idx, feed] of pts) {
+    const h = feed - now; const cal = calibrationAt(model, route, h);
+    const etaF = feed + Number(cal.bias) + optimistic;
+    const varF = Math.max(((Number(cal.p90) - Number(cal.p10)) / 2.56) ** 2, 1);
+    let eta = etaF, lo = feed + Number(cal.p10) + optimistic, hi = feed + Number(cal.p90) + optimistic, source = "feed";
+    const k = idx - nextIdx;
+    if (schedNext != null && eff != null && k >= 1) {
+      let runSum = 0, ok = true;
+      for (let s = nextIdx; s < idx; s++) { const r = s < run.length ? run[s] : null; if (r == null) { ok = false; break; } runSum += Number(r); }
+      const carry = carryAt(model, route, k);
+      if (ok && carry) {
+        const schedD = Number(schedNext) + runSum; const etaS = schedD + Number(carry.intercept) + Number(carry.slope) * Number(eff);
+        const varS = Math.max(Number(carry.resid_std) ** 2, 1); const w = varF / (varF + varS);
+        eta = w * etaS + (1 - w) * etaF; const sd = Math.sqrt(1 / (1 / varF + 1 / varS)); lo = eta - 1.28 * sd; hi = eta + 1.28 * sd; source = "blend";
+      }
+    }
+    eta += extra; lo += extra; hi += extra;
+    let t = Math.max(eta, now);
+    if (prevT != null && t < prevT + MIN_STOP_GAP_SEC) t = prevT + MIN_STOP_GAP_SEC;
+    const shift = t - eta;
+    out.points.push({ idx, feed_ts: feed, eta_ts: t, lo_ts: lo + shift, hi_ts: hi + shift, source });
+    prevT = t;
+  }
+  return out;
+}
+/** All trains of one line direction, furthest along first, with the headway cascade applied. */
+export function predictLine(trains, line, model, now, scenario = "baseline", minHeadwaySec = 90, horizonSec = 3600) {
+  const firstTs = t => Math.min(...(t.points || []).map(p => Number(p[1])), now);
+  const order = [...trains].sort((a, b) => ((b.next_idx ?? 0) - (a.next_idx ?? 0)) || (firstTs(a) - firstTs(b)));
+  const projs = []; const lastAt = new Map();
+  for (const t of order) {
+    const p = predictTrain(t, line, model, now, scenario); let shift = 0, knock = 0;
+    for (const pt of p.points) {
+      let want = pt.eta_ts + shift; const ahead = lastAt.get(pt.idx);
+      if (ahead != null && want < ahead + minHeadwaySec) { const delta = ahead + minHeadwaySec - want; shift += delta; knock += delta; want = ahead + minHeadwaySec; }
+      pt.eta_ts = want; pt.lo_ts += shift; pt.hi_ts += shift; lastAt.set(pt.idx, want);
+    }
+    p.knock_on_sec = knock; p.points = p.points.filter(pt => pt.eta_ts <= now + horizonSec + 900); projs.push(p);
+  }
+  const stops = line.stops || []; const perStop = []; let worst = null;
+  for (let i = 0; i < stops.length; i++) {
+    const arr = projs.flatMap(p => p.points.filter(pt => pt.idx === i && pt.eta_ts <= now + horizonSec).map(pt => pt.eta_ts)).sort((a, b) => a - b);
+    const hws = arr.slice(1).map((b, j) => b - arr[j]); const gap = hws.length ? Math.max(...hws) : null;
+    if (gap && (!worst || gap > worst.gap_sec)) worst = { gap_sec: gap, idx: i, at_ts: arr[hws.indexOf(gap) + 1] };
+    perStop.push({ idx: i, n_arrivals: arr.length, next_ts: arr.length ? arr[0] : null, max_headway_sec: gap });
+  }
+  return { scenario, now, trains: projs, per_stop: perStop, worst_gap: worst, n_knock_on: projs.filter(p => p.knock_on_sec >= 60).length, knock_on_total_sec: projs.reduce((a, p) => a + p.knock_on_sec, 0) };
+}
+/** A lineBoard() train in the predictor's input form. */
+export const predictorInput = lb => (lb.trains || []).map(t => ({ trip_id: t.trip_id, route: t.route, next_idx: t.next_idx, points: t.points.map(p => Array.isArray(p) ? [p[0], p[1]] : [p.idx, p.ts]),
+  lateness_sec: t.lateness_sec, effective_lateness_sec: t.effective_lateness_sec, sched_ts: t.sched_ts,
+  position: t.position ? { status: t.position.status, since_sec: t.position.since_sec, holding: !!t.position.holding, stalled: !!t.position.stalled } : null }));
+/** Predictions for a board under every scenario that matters: baseline always, the hold scenarios when a train is held. */
+export function predictBoard(lb, line, model, now) {
+  const input = predictorInput(lb); const out = { baseline: predictLine(input, line, model, now, "baseline") };
+  if (input.some(t => t.position && (t.position.holding || t.position.stalled))) { out.hold_persists = predictLine(input, line, model, now, "hold_persists"); out.clears_now = predictLine(input, line, model, now, "clears_now"); }
+  return out;
 }

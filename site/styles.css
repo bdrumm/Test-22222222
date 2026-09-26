@@ -231,3 +231,13 @@ table.tiny td, table.tiny th { font-size: .8rem; padding: .2rem .4rem; }
 .combo-list .how { font-size: .76rem; color: var(--text-secondary); }
 .combo-list .route { transform: scale(.85); transform-origin: left center; }
 @media (max-width: 720px) { .combo { width: 100% !important; } }
+
+/* Travel mode: view switch, hold scenarios, departure board */
+.modebar { margin: .5rem 0 .6rem; gap: .4rem; }
+.icon-btn.on { border-color: var(--series-1); color: var(--series-1); font-weight: 600; }
+.dep { display: grid; grid-template-columns: 96px 1fr auto; gap: .8rem; align-items: center; padding: .55rem .4rem; border-bottom: 1px solid var(--grid); }
+.dep.first { background: color-mix(in oklab, var(--series-1) 9%, transparent); border-radius: 8px; }
+.dep-count { font-size: 1.9rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.dep-arr { text-align: right; white-space: nowrap; }
+.dep-arr .eta { font-size: 1.25rem; font-weight: 650; }
+@media (max-width: 640px) { .dep { grid-template-columns: 76px 1fr; } .dep-arr { grid-column: 2; text-align: left; } .dep-count { font-size: 1.5rem; } }
