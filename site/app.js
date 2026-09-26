@@ -405,6 +405,7 @@ async function dataPage(idx) {
     tile(t2, "Dwell estimates", fmt.compact(ds.dwells || 0), `from vehicle positions · ${fmt.compact(ds.holds || 0)} holds network-wide`);
     tile(t2, "Scored live forecasts", fmt.compact(ds.forecast_eval || 0), "predicted arrivals matched to what happened");
     tile(t2, "Alert archive rows", fmt.compact(ds.alerts_archive_rows || 0), `${fmt.compact(ds.events_rows || 0)} event/news rows`);
+    if (ds.client_model) tile(t2, "Prediction engine tables", `${fmt.compact(ds.client_model.eta_samples || 0)} ETAs`, `${ds.client_model.routes_calibrated || 0} lines calibrated · ${fmt.compact(ds.client_model.holds || 0)} holds · ${fmt.compact(ds.client_model.carry_pairs || 0)} carry pairs (${ds.client_model.routes_carry || 0} lines)`);
   }
   const days = Object.keys(st.arrivals_per_day || {}).sort();
   if (days.length) { const c = h("div", "card", null, app); c.style.marginTop = "1rem"; barChart(c, { title: "Observed arrivals per day", categories: days.map(d => d.slice(5)), series: [{ name: "arrivals", values: days.map(d => st.arrivals_per_day[d]) }], labelEvery: Math.max(1, Math.ceil(days.length / 12)) }); }
