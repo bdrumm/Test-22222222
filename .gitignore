@@ -12,3 +12,4 @@ reports/
 _site/
 data-branch/
 ios/WhichWay/Config/Local.xcconfig
+.local/

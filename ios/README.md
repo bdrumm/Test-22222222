@@ -81,7 +81,10 @@ ios/WhichWayCore/              SwiftPM package over Models/ and Core/ (symlinks)
 
 Everything the app needs runs locally: the Python pipeline builds the site data (the timetable extract, the
 prediction engine's tables, geometry, hold log, …) and `mta-insights serve` serves it with `live.json` refreshed
-from the MTA feeds every 30 seconds. From the repository root:
+from the MTA feeds every 30 seconds. One command does all of it (`make local`, or
+`scripts/local_setup.sh --real` for the full build from the collected history): the Python environment, the
+data, `Config/Local.xcconfig` with your team id and a bundle id, the local server in the background (log and
+pid under `.local/`), and Xcode opened on the project. Step by step, from the repository root:
 
 ```bash
 make venv                 # Python environment with the package and dev tools (once)

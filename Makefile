@@ -8,10 +8,13 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help venv gtfs site-synthetic site data-branch serve test ios ios-build ios-test ios-fixtures
+.PHONY: help local venv gtfs site-synthetic site data-branch serve test ios ios-build ios-test ios-fixtures
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
+
+local: ## Everything for a Mac in one go: env, offline data, Xcode config, local server, open Xcode (--real via the script)
+	scripts/local_setup.sh
 
 venv: ## Python environment with the package and the dev tools
 	test -x $(PYTHON) || $(PY) -m venv $(VENV)
