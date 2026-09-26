@@ -25,4 +25,7 @@ jobs:
       - name: Core package tests
         if: hashFiles('ios/WhichWayCore/Package.swift') != ''
         working-directory: ios/WhichWayCore
-        run: swift test 2>&1 | tail -60
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log | tail -60
+          grep -q "Executed [1-9][0-9]* tests, with 0 failures" test.log

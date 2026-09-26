@@ -56,9 +56,22 @@ final class PresetStore {
 
     func remove(id: UUID) { presets.removeAll { $0.id == id }; save() }
 
-    func remove(at offsets: IndexSet) { presets.remove(atOffsets: offsets); save() }
+    func remove(at offsets: IndexSet) {
+        for i in offsets.sorted(by: >) where i < presets.count { presets.remove(at: i) }
+        save()
+    }
 
-    func move(from: IndexSet, to: Int) { presets.move(fromOffsets: from, toOffset: to); save() }
+    /// SwiftUI's onMove semantics: `to` is the destination in the list's positions before the move.
+    func move(from: IndexSet, to: Int) {
+        let moving = from.sorted().filter { $0 < presets.count }.map { presets[$0] }
+        var rest = presets
+        for i in from.sorted(by: >) where i < rest.count { rest.remove(at: i) }
+        let removedBefore = from.filter { $0 < to }.count
+        let target = max(0, min(rest.count, to - removedBefore))
+        rest.insert(contentsOf: moving, at: target)
+        presets = rest
+        save()
+    }
 
     /// The first preset whose window covers this moment.
     func active(at ts: Double) -> CommutePreset? { presets.first { $0.isActive(at: ts) } }

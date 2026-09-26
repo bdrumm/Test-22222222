@@ -44,6 +44,21 @@ final class PresetsTests: XCTestCase {
         XCTAssertEqual(PresetStore(defaults: d).presets.map { $0.name }, ["home"])
     }
 
+    func testReorderAndDeleteByOffsets() throws {
+        let d = try XCTUnwrap(UserDefaults(suiteName: "whichway-tests-\(UUID().uuidString)"))
+        let s = PresetStore(defaults: d)
+        for n in ["a", "b", "c", "d"] { s.add(CommutePreset(name: n, originId: "x", destId: "y", startMinute: 0, endMinute: 60)) }
+        // SwiftUI's onMove: dragging the first row below the third lands it after "c"
+        s.move(from: IndexSet(integer: 0), to: 3)
+        XCTAssertEqual(s.presets.map { $0.name }, ["b", "c", "a", "d"])
+        s.move(from: IndexSet(integer: 3), to: 0)
+        XCTAssertEqual(s.presets.map { $0.name }, ["d", "b", "c", "a"])
+        s.remove(at: IndexSet([0, 2]))
+        XCTAssertEqual(PresetStore(defaults: d).presets.map { $0.name }, ["b", "a"])
+        s.move(from: IndexSet(integer: 9), to: 0)
+        XCTAssertEqual(s.presets.map { $0.name }, ["b", "a"], "out-of-range offsets are ignored")
+    }
+
     func testNearestStationsFromGeometry() throws {
         let schedJSON = """
         {"lines": {"6_N": {"stops": ["635N", "634N", "633N"], "names": ["14 St-Union Sq", "23 St", "28 St"], "run_sec": [90, 80], "dist_m": [700, 600]},
