@@ -56,12 +56,16 @@ struct LineBoardView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         TrackDiagramView(line: line, route: route, trains: trains(line), colW: 52)
                     }
-                    if let b = data.boards[lineKey] {
+                    if let b = data.predictedBoards[lineKey] ?? data.boards[lineKey] {
                         HStack(spacing: 8) {
                             Tile(title: "Trains", value: "\(b.trains.count)", sub: "started, in the feed")
                             Tile(title: "Held / overdue", value: "\(b.nHolding) / \(b.nStalled)", sub: "≥ \(Int(sched.constants.holdSec)) s at a stop / late between stops")
                             Tile(title: "Late ≥ 3 min", value: "\(b.trains.filter { ($0.effectiveLatenessSec ?? 0) >= 180 }.count)", sub: "vs the timetable")
                         }
+                        if let lp = data.predictions[lineKey]?[data.scenario] ?? data.predictions[lineKey]?["baseline"] {
+                            EngineSummary(prediction: lp, line: line)
+                        }
+                        ScenarioPicker()
                         let alerts = data.alertsFor(routes: [route])
                         ForEach(alerts.prefix(3)) { a in
                             Text("\(a.kind): \(a.header)").font(.caption).foregroundStyle(a.kind == "delay" ? Color.red : Color.secondary).lineLimit(3)
@@ -101,7 +105,10 @@ struct TrainRow: View {
                 HStack {
                     Text(shortLabel(train)).font(.caption.monospaced().bold())
                     Spacer()
-                    Text("next \(train.nextName) \(Fmt.hhmm(train.etaTs))").font(.caption).lineLimit(1)
+                    Text("next \(train.nextName) \(Fmt.hhmm(train.feedPoints?.first?.ts ?? train.etaTs))").font(.caption).lineLimit(1)
+                }
+                if let text = engineText {
+                    Text(text).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Text(train.position?.text ?? "position unknown").font(.caption2).foregroundStyle(.secondary)
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -124,10 +131,40 @@ struct TrainRow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(.secondarySystemBackground)))
     }
 
+    private var engineText: String? {
+        guard let pr = train.pred, let pt = pr.point(at: train.nextIdx) else { return nil }
+        var s = "engine \(Fmt.hhmm(pt.etaTs)) · \(Fmt.hhmm(pt.loTs))–\(Fmt.hhmm(pt.hiTs))"
+        if pr.holdExtraSec > 0 { s += " · +\(Int(pr.holdExtraSec.rounded())) s expected hold" }
+        if pr.knockOnSec >= 60 { s += " · held back \(Fmt.mmss(pr.knockOnSec))" }
+        return s
+    }
+
     private var latenessColor: Color {
         guard let e = train.effectiveLatenessSec else { return Color.secondary }
         if e >= 300 { return Color.red }
         if e >= 120 { return Color.orange }
         return Color.secondary
+    }
+}
+
+
+/// What the engine projects for the line in the next hour: the largest gap and the knock-on from held trains.
+struct EngineSummary: View {
+    let prediction: LinePrediction
+    let line: LineTopology
+
+    private var text: String {
+        guard let w = prediction.worstGap else { return "Engine: no gap projected in the next hour." }
+        let name = w.idx < line.names.count ? line.names[w.idx] : "stop \(w.idx)"
+        var s = "Engine: largest projected gap \(Fmt.minTxt(w.gapSec)) at \(name) around \(Fmt.hhmm(w.atTs))"
+        if prediction.nKnockOn > 0 {
+            let plural = prediction.nKnockOn == 1 ? "" : "s"
+            s += " · \(prediction.nKnockOn) train\(plural) held back by the train ahead (\(Fmt.minTxt(prediction.knockOnTotalSec)) in total)"
+        }
+        return s
+    }
+
+    var body: some View {
+        Text(text).font(.caption).foregroundStyle(.secondary)
     }
 }
