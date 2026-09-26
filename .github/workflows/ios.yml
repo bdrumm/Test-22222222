@@ -1,0 +1,28 @@
+name: ios
+# Builds the WhichWay iOS app on a macOS runner so the Swift sources are compiler-checked on every push.
+on:
+  push:
+    branches: [claude/train-delay-analysis-framework-auxzv1, main]
+    paths: [ios/**, .github/workflows/ios.yml]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode version
+        run: xcodebuild -version && xcrun simctl list runtimes | head -20
+      - name: Build for the simulator
+        working-directory: ios/WhichWay
+        run: |
+          set -o pipefail
+          xcodebuild -project WhichWay.xcodeproj -scheme WhichWay -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" ONLY_ACTIVE_ARCH=NO build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD|Compiling|\*\*" || true
+          if grep -q "BUILD SUCCEEDED" build.log; then echo "build ok"; else echo "::group::errors"; grep -E "error:" build.log | sort -u; echo "::endgroup::"; exit 1; fi
+      - name: Core package tests
+        if: hashFiles('ios/WhichWayCore/Package.swift') != ''
+        working-directory: ios/WhichWayCore
+        run: swift test 2>&1 | tail -60
