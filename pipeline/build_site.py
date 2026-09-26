@@ -313,6 +313,9 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
                 (out_data / "feeds" / f"{k}.pb").write_bytes(data)
             feed_urls, demo_now, feeds_all = {k: f"feeds/{k}.pb" for k in feed_bytes}, now.timestamp(), sorted(feed_bytes)
         export_client_schedule(static, resolved, specs, out_data, now, feeds_all, feed_urls=feed_urls, demo_now=demo_now, extra_routes=LINE_VIEW_ROUTES)
+        from mta_delay_insights.realtime.client_export import export_client_geometry
+        cs_keys = list(json.loads((out_data / "client_schedule.json").read_text()).get("lines", {}).keys())
+        export_client_geometry(static, cs_keys, out_data, now)
     except Exception as exc:
         logging.warning("client schedule export failed: %s", exc)
     routes_out = {"routes": [], "transfers": []}

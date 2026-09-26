@@ -12,7 +12,19 @@ struct TripCandidate: Identifiable {
     var rideSec: Double
     var schedRideSec: Double?
     var stopsToOrigin: Int
+    var arriveLoTs: Double? = nil
+    var arriveHiTs: Double? = nil
+    var feedArriveTs: Double? = nil
+    var arriveSource: String? = nil
     var rideVsSchedSec: Double? { schedRideSec.map { rideSec - $0 } }
+
+    /// "10:49–10:54 · feed says 10:49" when the engine's window and the feed's own time are known.
+    var rangeText: String? {
+        guard let lo = arriveLoTs, let hi = arriveHiTs else { return nil }
+        var s = "\(Fmt.hhmm(lo))–\(Fmt.hhmm(hi))"
+        if let f = feedArriveTs, abs(f - arriveTs) >= 60 { s += " · feed says \(Fmt.hhmm(f))" }
+        return s
+    }
 }
 
 struct Itinerary: Identifiable {
@@ -36,7 +48,10 @@ func segmentTrips(_ lb: LineBoard, line: LineTopology, fromIdx: Int, toIdx: Int,
     for t in lb.trains {
         guard let board = t.points.first(where: { $0.idx == fromIdx })?.ts, let arrive = t.points.first(where: { $0.idx == toIdx })?.ts else { continue }
         if board < now - 60 || arrive <= board { continue }
-        out.append(TripCandidate(train: t, key: lb.key, boardTs: board, arriveTs: arrive, rideSec: arrive - board, schedRideSec: sched, stopsToOrigin: max(1, fromIdx - t.nextIdx + 1)))
+        var c = TripCandidate(train: t, key: lb.key, boardTs: board, arriveTs: arrive, rideSec: arrive - board, schedRideSec: sched, stopsToOrigin: max(1, fromIdx - t.nextIdx + 1))
+        if let pt = t.pred?.point(at: toIdx) { c.arriveLoTs = pt.loTs; c.arriveHiTs = pt.hiTs; c.arriveSource = pt.source }
+        c.feedArriveTs = t.feedPoints?.first(where: { $0.idx == toIdx })?.ts
+        out.append(c)
     }
     out.sort { $0.boardTs < $1.boardTs }
     return Array(out.prefix(maxN))

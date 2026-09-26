@@ -74,6 +74,13 @@ def test_client_schedule_export(static, tmp_path):
     assert ln["stops"] and len(ln["run_sec"]) == len(ln["stops"]) - 1 and all(r is None or r > 0 for r in ln["run_sec"])
     assert len(ln["dist_m"]) == len(ln["stops"]) - 1 and all(d and 200 < d < 3000 for d in ln["dist_m"]), "segment lengths from the stop coordinates"
     assert (tmp_path / "client_schedule.json").exists()
+    # geometry for map views: coordinates per canonical stop, the simplified track when the feed has shapes
+    from pipeline.client_export import export_client_geometry
+    geo = export_client_geometry(static, list(cs["lines"].keys()), tmp_path, now)
+    assert set(geo["lines"]) == set(cs["lines"]) and (tmp_path / "client_geometry.json").exists()
+    for k, g in geo["lines"].items():
+        assert len(g["coords"]) == len(cs["lines"][k]["stops"]) and all(c is None or (len(c) == 2 and 40 < c[0] < 41.5) for c in g["coords"])
+        assert isinstance(g["shape"], list)
     cl = json.loads((tmp_path / "client_lines.json").read_text())
     ls = cl["lines"]["6_N"]
     assert len(ls) > 50 and all(len(x) == 3 and 0 <= x[1] < len(ln["stops"]) for x in ls) and ls == sorted(ls, key=lambda x: x[2])

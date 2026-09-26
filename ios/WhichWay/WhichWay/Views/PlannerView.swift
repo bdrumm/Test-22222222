@@ -51,10 +51,11 @@ struct PlannerView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if !paths.isEmpty {
-                    tiles(index)
+                    NowCard(option: ranked.first, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
+                    ScenarioPicker()
                     pathList
                     if let sel = paths.first(where: { $0.id == selectedPath }) {
-                        PathDetailView(option: sel, schedule: sched, index: index)
+                        PathDetailView(option: sel, schedule: sched, index: index, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
                     }
                 } else if !originId.isEmpty && !destId.isEmpty {
                     Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
@@ -100,22 +101,6 @@ struct PlannerView: View {
         }
     }
 
-    private func tiles(_ index: StationIndex) -> some View {
-        let best = ranked.first
-        let dest = index.stations[destId]?.name ?? ""
-        return HStack(spacing: 8) {
-            Tile(title: "Next train",
-                 value: best?.live.map { Fmt.hhmm($0.boardTs) } ?? "–",
-                 sub: best.map { "on the \($0.legs[0].routesLabel)" } ?? " ")
-            Tile(title: "Arrive \(dest)",
-                 value: best?.live.map { Fmt.hhmm($0.arriveTs) } ?? "–",
-                 sub: best?.live.map { Fmt.minTxt($0.totalSec) + " door to door" } ?? "waiting for the feeds")
-            Tile(title: "This hour",
-                 value: best.map { Fmt.signed($0.typicalSec) } ?? "–",
-                 sub: best.map { $0.holdRiskSec >= 5 ? "+\(Int($0.holdRiskSec.rounded())) s hold risk" : "typical on these stretches" } ?? " ")
-        }
-    }
-
     private var pathList: some View {
         let list = ranked
         let maxSec = max(60, list.map { p in max(p.expectedSec, p.live?.totalSec ?? 0) }.max() ?? 60)
@@ -157,7 +142,7 @@ struct PlannerView: View {
         guard let sched = data.schedule else { return }
         let now = data.now
         for i in paths.indices {
-            paths[i].live = pathTrips(boards: data.boards, schedule: sched, option: paths[i], now: now, maxN: 1).first
+            paths[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: paths[i], now: now, maxN: 1).first
         }
     }
 }
@@ -246,24 +231,24 @@ struct PathDetailView: View {
     let option: PathOption
     let schedule: ClientSchedule
     let index: StationIndex
+    let originName: String
+    let destName: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(option.label).font(.headline)
-            ForEach(Array(option.legs.enumerated()), id: \.offset) { i, leg in
-                LegDiagram(leg: leg, legNo: i + 1, option: option, schedule: schedule)
-            }
+            PathViewsView(option: option, schedule: schedule, originName: originName, destName: destName)
             itineraries
             insights
         }
     }
 
     private var itineraries: some View {
-        let its = pathTrips(boards: data.boards, schedule: schedule, option: option, now: data.now)
+        let its = pathTrips(boards: data.predictedBoards, schedule: schedule, option: option, now: data.now)
         return VStack(alignment: .leading, spacing: 6) {
             Text("Next itineraries").font(.subheadline.bold())
             if its.isEmpty {
-                Text(data.boards.isEmpty ? "Waiting for the live feeds…" : "No train in the feeds covers this path right now.")
+                Text(data.predictedBoards.isEmpty ? "Waiting for the live feeds…" : "No train in the feeds covers this path right now.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(its) { it in ItineraryRow(itinerary: it) }
@@ -436,6 +421,9 @@ struct ItineraryRow: View {
                 Text(Fmt.signed(itinerary.rideVsSchedSec) + " vs sched")
                     .font(.caption2)
                     .foregroundStyle(itinerary.rideVsSchedSec > 120 ? Color.red : Color.secondary)
+            }
+            if let last = itinerary.legs.last, let rt = last.rangeText {
+                Text("80% window \(rt)").font(.caption2).foregroundStyle(.secondary)
             }
             ForEach(Array(itinerary.legs.enumerated()), id: \.offset) { i, leg in
                 HStack(spacing: 6) {

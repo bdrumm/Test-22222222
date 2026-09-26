@@ -145,3 +145,25 @@ def station_transfers(static: StaticGTFS, lines: dict, default_sec: int = 120) -
             if opts:
                 out[sid] = sorted(opts, key=lambda o: o["line"])
     return out
+
+
+def export_client_geometry(static, keys: list[str], out_data: Path, now=None) -> dict:
+    """Stop coordinates and the simplified track per exported line ("F_N"), for map views; a separate file
+    because it is only needed on demand."""
+    lines = {}
+    for k in keys:
+        route, _, direction = k.rpartition("_")
+        try:
+            seq = static.canonical_stop_sequence(route, direction)
+        except Exception:
+            seq = []
+        if not seq:
+            continue
+        try:
+            shape = static.pattern_shape(route, direction)
+        except Exception:
+            shape = []
+        lines[k] = {"coords": static.stop_coords(seq), "shape": shape}
+    out = {"generated_at": now.isoformat() if now is not None else None, "lines": lines}
+    (out_data / "client_geometry.json").write_text(json.dumps(out, separators=(",", ":")))
+    return out

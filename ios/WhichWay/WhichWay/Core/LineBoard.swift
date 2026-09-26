@@ -83,6 +83,9 @@ struct LiveTrain: Identifiable {
     var started: Bool
     var segment: SegmentInfo?
     var lastRun: LastRun?
+    /// Set on the predicted boards: the feed's own points and the engine's projection for the chosen scenario.
+    var feedPoints: [TrainPoint]? = nil
+    var pred: PredictedTrain? = nil
 
     var label: String { (trainId ?? tripId).trimmingCharacters(in: .whitespaces) }
     var isHeld: Bool { position?.holding == true || position?.stalled == true }

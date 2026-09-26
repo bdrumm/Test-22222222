@@ -19,6 +19,21 @@ final class DataService {
     private(set) var index: StationIndex?
     private(set) var feeds: [String: RTFeed] = [:]
     private(set) var boards: [String: LineBoard] = [:]
+    /// Stop coordinates and tracks (data/client_geometry.json), fetched the first time a map is shown.
+    private(set) var geometry: ClientGeometry?
+    @ObservationIgnored private var geometryRequested = false
+    /// The prediction engine's tables (data/client_model.json); nil means physical priors.
+    private(set) var model: ClientModel?
+    /// Per line key, the engine's projections per scenario ("baseline" always; the hold scenarios when a train is held).
+    private(set) var predictions: [String: [String: LinePrediction]] = [:]
+    /// Boards whose points are the engine's ETAs for the chosen scenario (the planner and diagrams read these).
+    private(set) var predictedBoards: [String: LineBoard] = [:]
+    /// baseline | hold_persists | clears_now
+    private(set) var scenario: String = "baseline"
+    /// Newest feed timestamp seen; polls are aligned to the feeds' 30-second publication.
+    private(set) var lastFeedTs: Double = 0
+    private(set) var nextPollSec: Double = 30
+    var anyHeld: Bool { predictions.values.contains { $0["hold_persists"] != nil } }
     private(set) var alerts: [RouteAlert] = []
     private(set) var lastUpdate: Date?
     private(set) var lastError: String?
@@ -35,6 +50,8 @@ final class DataService {
     @ObservationIgnored private var pollTask: Task<Void, Never>? = nil
     @ObservationIgnored private var deviationRequested: Set<String> = []
     @ObservationIgnored private var pollCount = 0
+    @ObservationIgnored private var staleRuns = 0
+    static let feedPeriodSec = 30.0
 
     init() {
         baseURL = UserDefaults.standard.string(forKey: "baseURL") ?? DataService.defaultBase
@@ -88,10 +105,21 @@ final class DataService {
         lineSched = (try? await fetchJSON(ClientLines.self, "client_lines.json"))?.lines ?? [:]
         holds = try? await fetchJSON(HoldsSummary.self, "holds.json")
         segments = try? await fetchJSON(SegmentsSummary.self, "segments.json")
+        model = try? await fetchJSON(ClientModel.self, "client_model.json")
         deviations = [:]
         deviationRequested = []
         for k in wanted { requestDeviation(k) }
         staticVersion += 1
+    }
+
+    func requestGeometry() {
+        if geometryRequested { return }
+        geometryRequested = true
+        Task { [weak self] in
+            guard let self = self else { return }
+            if let g = try? await self.fetchJSON(ClientGeometry.self, "client_geometry.json") { self.geometry = g; self.staticVersion += 1 }
+            else { self.geometryRequested = false }
+        }
     }
 
     /// The deviation grid of one line (typical time lost per stop by hour), fetched once per line on demand.
@@ -109,6 +137,23 @@ final class DataService {
 
     // MARK: - polling
 
+    func setScenario(_ s: String) {
+        guard s != scenario else { return }
+        scenario = s
+        rebuildPredicted()
+    }
+
+    /// The MTA republishes each feed about every 30 s: the next poll is due just after the next publication
+    /// (never sooner than 4 s, never later than the configured interval); a poll that returned the previous
+    /// timestamp looks again after 5 s a few times.
+    func nextDelay() -> Double {
+        let interval = max(10, pollSec)
+        if lastFeedTs == 0 || isDemo || Date().timeIntervalSince1970 - lastFeedTs > 120 { return interval }
+        if staleRuns > 0 && staleRuns <= 4 { return 5 }
+        let due = lastFeedTs + DataService.feedPeriodSec + 1.5 - Date().timeIntervalSince1970
+        return max(4, min(interval, due))
+    }
+
     func start() {
         if pollTask != nil { return }
         pollTask = Task { [weak self] in
@@ -116,10 +161,18 @@ final class DataService {
             while !Task.isCancelled {
                 if self.schedule == nil { await self.loadStatic() }
                 if self.schedule != nil { await self.poll() }
-                let secs = max(10, self.pollSec)
+                let secs = self.schedule == nil ? 15 : self.nextDelay()
+                self.nextPollSec = secs
                 try? await Task.sleep(nanoseconds: UInt64(secs * 1_000_000_000))
             }
         }
+    }
+
+    /// Coming back to the foreground: poll at once when the last poll is older than half a feed period.
+    func refreshIfStale() {
+        guard schedule != nil else { return }
+        if let t = lastUpdate, Date().timeIntervalSince(t) < DataService.feedPeriodSec / 2 { return }
+        Task { await poll() }
     }
 
     func stop() {
@@ -141,6 +194,10 @@ final class DataService {
         stop()
         feeds = [:]
         boards = [:]
+        lastFeedTs = 0
+        staleRuns = 0
+        predictions = [:]
+        predictedBoards = [:]
         alerts = []
         lastUpdate = nil
         lastError = nil
@@ -205,6 +262,11 @@ final class DataService {
             }
         }
         for (k, f) in got { feeds[k] = f }
+        let maxTs = got.values.compactMap { $0.timestamp }.max() ?? 0
+        if maxTs > 0 {
+            staleRuns = maxTs <= lastFeedTs ? staleRuns + 1 : 0
+            lastFeedTs = max(lastFeedTs, maxTs)
+        }
         pollCount += 1
         if pollCount % 4 == 1, let au = sched.alertsUrl, let u = url(au) {
             if let r = try? await URLSession.shared.data(from: u) { alerts = Alerts.parse(r.0, now: now) }
@@ -223,6 +285,29 @@ final class DataService {
             if let b = lineBoard(schedule: sched, lineSched: lineSched[k] ?? [], feeds: feeds, key: k, now: t) { out[k] = b }
         }
         boards = out
+        var preds: [String: [String: LinePrediction]] = [:]
+        for (k, b) in out { if let line = sched.lines[k] { preds[k] = Predictor.predictBoard(b, line: line, model: model, now: t) } }
+        predictions = preds
+        rebuildPredicted()
+    }
+
+    /// Replace each train's points with the engine's ETAs for the current scenario, keeping the feed's own.
+    func rebuildPredicted() {
+        var out: [String: LineBoard] = [:]
+        for (k, b) in boards {
+            guard let sc = predictions[k], let lp = sc[scenario] ?? sc["baseline"] else { out[k] = b; continue }
+            var nb = b
+            nb.trains = b.trains.map { t in
+                guard let p = lp.train(t.tripId), !p.points.isEmpty else { return t }
+                var nt = t
+                nt.feedPoints = t.points
+                nt.points = p.points.map { TrainPoint(idx: $0.idx, ts: $0.etaTs) }
+                nt.pred = p
+                return nt
+            }
+            out[k] = nb
+        }
+        predictedBoards = out
     }
 
     func alertsFor(routes: [String]) -> [RouteAlert] {

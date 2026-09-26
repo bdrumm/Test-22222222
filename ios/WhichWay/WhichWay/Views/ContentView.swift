@@ -12,7 +12,7 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            case .active: data.start()
+            case .active: data.start(); data.refreshIfStale()
             case .background: data.stop()
             default: break
             }

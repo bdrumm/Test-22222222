@@ -427,6 +427,59 @@ class StaticGTFS:
         self._seg_cache[key] = out
         return out
 
+    def stop_coords(self, stop_ids: list[str]) -> list[list[float] | None]:
+        """[lat, lon] per stop id (None when the feed has no coordinates for it)."""
+        if "stop_lat" not in self.stops:
+            return [None] * len(stop_ids)
+        coords = self.stops.set_index("stop_id")[["stop_lat", "stop_lon"]]
+        out = []
+        for s in stop_ids:
+            if s in coords.index:
+                lat, lon = coords.loc[s]
+                out.append([round(float(lat), 6), round(float(lon), 6)] if lat == lat and lon == lon else None)
+            else:
+                out.append(None)
+        return out
+
+    def pattern_shape(self, route_id: str, direction: str, tolerance_m: float = 8.0) -> list[list[float]]:
+        """The canonical pattern's track from shapes.txt as [lat, lon] points, simplified with the
+        Douglas-Peucker tolerance; empty when the feed has no shapes."""
+        if self.shapes is None or self.shapes.empty or "shape_id" not in self.trips.columns:
+            return []
+        seq = self.canonical_stop_sequence(route_id, direction)
+        tids = self._pattern_trips(route_id, direction, seq, limit=20)
+        if not tids:
+            return []
+        sid = self.trips[self.trips["trip_id"].isin(tids)]["shape_id"].dropna().mode()
+        if sid.empty:
+            return []
+        sh = self.shapes[self.shapes["shape_id"] == sid.iloc[0]].copy()
+        sh["shape_pt_sequence"] = pd.to_numeric(sh["shape_pt_sequence"], errors="coerce")
+        sh = sh.sort_values("shape_pt_sequence")
+        lat = pd.to_numeric(sh["shape_pt_lat"], errors="coerce").to_numpy(); lon = pd.to_numeric(sh["shape_pt_lon"], errors="coerce").to_numpy()
+        ok = ~(np.isnan(lat) | np.isnan(lon)); lat, lon = lat[ok], lon[ok]
+        if len(lat) < 2:
+            return []
+        lat0 = float(lat.mean()); kx = 111_320.0 * np.cos(np.radians(lat0)); ky = 110_540.0
+        x = (lon - float(lon.mean())) * kx; y = (lat - lat0) * ky
+        keep = np.zeros(len(x), dtype=bool); keep[0] = keep[-1] = True
+        stack = [(0, len(x) - 1)]
+        while stack:
+            a, b = stack.pop()
+            if b <= a + 1:
+                continue
+            dx, dy = x[b] - x[a], y[b] - y[a]
+            L = float(np.hypot(dx, dy))
+            if L == 0:
+                d = np.hypot(x[a + 1:b] - x[a], y[a + 1:b] - y[a])
+            else:
+                d = np.abs(dy * x[a + 1:b] - dx * y[a + 1:b] + x[b] * y[a] - y[b] * x[a]) / L
+            i = int(np.argmax(d))
+            if d[i] > tolerance_m:
+                keep[a + 1 + i] = True
+                stack.append((a, a + 1 + i)); stack.append((a + 1 + i, b))
+        return [[round(float(la), 6), round(float(lo), 6)] for la, lo, k in zip(lat, lon, keep) if k]
+
     def _along_shape(self, route_id: str, direction: str, seq: list[str], pts: list) -> list | None:
         if self.shapes is None or self.shapes.empty or "shape_id" not in self.trips.columns:
             return None
