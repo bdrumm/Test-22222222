@@ -41,7 +41,9 @@ enum Alerts {
             let id = (ent["id"] as? String) ?? UUID().uuidString
             for (i, p) in periods.enumerated() {
                 let start = num(p["start"]), end = num(p["end"])
-                let endEff: Double? = end ?? (updated.map { $0 + 3 * 3600 } ?? start.map { $0 + 3 * 3600 })
+                var endEff: Double? = end
+                if endEff == nil, let u = updated { endEff = u + 3 * 3600 }
+                if endEff == nil, let s = start { endEff = s + 3 * 3600 }
                 if let s = start, s > now { continue }
                 if let e = endEff, e < now { continue }
                 out.append(RouteAlert(id: "\(id)#\(i)", kind: kind(type: type, header: header), type: type, header: header, routes: routes, start: start, end: end))
