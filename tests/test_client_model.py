@@ -187,7 +187,7 @@ def test_js_predictor_matches_python(static, tmp_path):
     line = _line()
     trains = [_train("held", 3, now, lateness=60.0, eff=250.0, sched=now + 40, pos={"status": "STOPPED_AT", "since_sec": 330, "holding": True, "stalled": False}),
               _train("follower", 1, now, lateness=-20.0, sched=now + 80), _train("leader", 6, now, lateness=400.0, eff=400.0, sched=now + 30, step=80.0),
-              _train("nosched", 2, now, lateness=None, eff=None)]
+              _train("nosched", 2, now, lateness=None, eff=None), _train("twin", 1, now, lateness=30.0, sched=now + 95, step=110.0)]
     trains[3]["effective_lateness_sec"] = None
     inp = {"trains": trains, "line": line, "model": model, "now": now, "scenarios": list(cm.SCENARIOS), "elapsed": [100, 200, 330, 1000, 5000], "horizons": [-10, 0, 150, 700, 9000]}
     (tmp_path / "in.json").write_text(json.dumps(inp))

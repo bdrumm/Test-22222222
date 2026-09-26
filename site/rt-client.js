@@ -639,7 +639,7 @@ export function predictTrain(train, line, model, now, scenario = "baseline") {
 }
 /** All trains of one line direction, furthest along first, with the headway cascade applied. */
 export function predictLine(trains, line, model, now, scenario = "baseline", minHeadwaySec = 90, horizonSec = 3600) {
-  const firstTs = t => Math.min(...(t.points || []).map(p => Number(p[1])), now);
+  const firstTs = t => { const ts = (t.points || []).filter(p => p[1] != null).map(p => Number(p[1])); return ts.length ? Math.min(...ts) : now; };
   const order = [...trains].sort((a, b) => ((b.next_idx ?? 0) - (a.next_idx ?? 0)) || (firstTs(a) - firstTs(b)));
   const projs = []; const lastAt = new Map();
   for (const t of order) {
