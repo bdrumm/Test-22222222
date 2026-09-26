@@ -952,9 +952,31 @@ async function modelPage(idx) {
       if (fe.held && fe.held.n) h("div", "small secondary", `Trains that were holding or stalled when predicted (${fe.held.n}): feed MAE ${secTxt(fe.held.feed.mae_sec)}, simulation baseline ${secTxt(fe.held.sim.mae_sec)}${fe.held.hold_persists && fe.held.hold_persists.n ? `, "hold persists" scenario ${secTxt(fe.held.hold_persists.mae_sec)}` : ""}.`, c5);
     }
   } catch (e) { /* optional */ }
+  // the client prediction engine's fitted tables (what the browser and the phone actually run)
+  try {
+    const cm = await load("client_model.json");
+    if (cm && cm.eta_calibration) {
+      const cal = cm.eta_calibration, hz = cal.horizons || [], hs = cm.hold_survival || {}, lc = cm.lateness_carry || {};
+      const secFmt = v => v == null ? "–" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(0)} s`, minFmt = v => v == null ? "–" : `${(v / 60).toFixed(1)} min`;
+      h("h2", null, "Prediction engine on the client: the fitted tables", root);
+      const c6 = h("div", "card", null, root);
+      h("p", "secondary", `The browser and the phone cannot run the learned model (it needs the arrival store), so they run a table-driven engine fitted from the same history at every build: the feed's error by line and forecast horizon (${fmt.compact(cal.n || 0)} sampled ETAs matched to arrivals; ${Object.keys(cal.by_route || {}).length} lines with their own table, the rest inherit the network's), the remaining hold given the time a train has already been held (${fmt.compact(hs.n_holds || 0)} logged holds), and how lateness carries from a train's current stop to each stop ahead (${fmt.compact(lc.n || 0)} stop pairs, ${Object.keys(lc.by_route || {}).length} lines). Every live surface (Travel, Live, Line view, the iOS app) applies it to each train after each poll. Methodology §9n.`, c6);
+      const labels = hz.slice(0, -1).map((lo, i) => i === hz.length - 2 ? `${lo / 60}+ min` : `${lo / 60}–${hz[i + 1] / 60} min`);
+      const g = h("div", "two", null, c6);
+      lineChart(h("div", null, null, g), { title: "Feed ETA error by forecast horizon (all lines)", subtitle: "arrival minus the feed's ETA: positive = the train came later than promised; median (bias) and the 10th / 90th percentiles",
+        x: labels, series: [{ name: "bias", values: (cal.all || []).map(b => b.bias) }, { name: "p10", values: (cal.all || []).map(b => b.p10) }, { name: "p90", values: (cal.all || []).map(b => b.p90) }], format: secFmt, height: 220 });
+      const rows = Object.entries(cal.by_route || {}).map(([r, t]) => [r, t[1] || t[0]]).filter(([, b]) => b && b.n >= 30).sort((a, b) => b[1].bias - a[1].bias);
+      if (rows.length) barChart(h("div", null, null, g), { title: "Feed bias by line, 2–5 minutes out", subtitle: "seconds the train arrives after the promised time (median); the L, with CBTC, is nearly unbiased", categories: rows.map(r => r[0]), series: [{ name: "bias", values: rows.map(r => r[1].bias) }], format: secFmt, height: 220, labelEvery: 1 });
+      if (hs.elapsed && hs.elapsed.length) lineChart(h("div", null, null, g), { title: "Remaining hold, given the time already held", subtitle: "from the hold log (terminals excluded): the baseline scenario adds the expectation (winsorized at 30 min), \"hold persists\" the 90th percentile",
+        x: hs.elapsed.map(e => `${(e / 60).toFixed(1).replace(/\.0$/, "")} min`), series: [{ name: "expected", values: hs.expected }, { name: "median", values: hs.p50 }, { name: "p90", values: hs.p90 }], format: minFmt, height: 220 });
+      if (lc.all && lc.all.slope) lineChart(h("div", null, null, g), { title: "How lateness carries downstream (all lines)", subtitle: "lateness k stops ahead ≈ intercept + slope × lateness now; the residual spread is the state estimate's uncertainty",
+        x: lc.all.slope.map((_, i) => `${i + 1}`), series: [{ name: "slope ×100", values: lc.all.slope.map(v => v * 100) }, { name: "intercept (s)", values: lc.all.intercept }, { name: "residual σ (s)", values: lc.all.resid_std }], format: v => v == null ? "–" : v.toFixed(0), height: 220 });
+      h("div", "tiny muted", "Each cell is shrunk toward the coarser table with a prior weight of 20 samples (a line's cell toward the network's, the network's toward a physical prior), so the engine behaves with minutes of history and sharpens as days accumulate.", c6);
+    }
+  } catch (e) { /* optional */ }
   const det = h("details", null, null, root); det.style.marginTop = "1rem"; h("summary", null, "How it is used", det);
   const ul = h("ul", "small secondary", null, det);
-  h("li", null, "Live page: each upcoming train's ETA and range come from this model when it is ready (source 'learned'); otherwise from the look-back calibration of the feed.", ul);
+  h("li", null, "Live page: each upcoming train's ETA and range come from this model when it is ready (source 'learned'); otherwise from the look-back calibration of the feed. The browser's live feeds mode and the iOS app use the client prediction engine above instead.", ul);
   h("li", null, "Trip planner: ride times and the arrival at the boarding stop use the model for trains already under way; the feed's ETA is a feature when sampled, or blended in by inverse variance when not.", ul);
   h("li", null, "The training table grows with every hourly run (all stops of every feed) and with the subwaydata.nyc backfill of recent days; the model is refitted at every site build on a strict time split.", ul);
 }
