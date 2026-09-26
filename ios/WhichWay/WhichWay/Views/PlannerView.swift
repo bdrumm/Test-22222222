@@ -1,14 +1,26 @@
 import SwiftUI
+import CoreLocation
 
 /// Go tab: origin and destination, every viable path (direct or one change) ranked by expected time and by the
-/// next live itinerary, and the selected path's live track diagram, itineraries and insights.
+/// next live itinerary, and the selected path's live track diagram, itineraries and insights. Saved commutes
+/// switch the trip on their own by time of day; the origin can come from the phone's location.
 struct PlannerView: View {
     @Environment(DataService.self) private var data
+    @Environment(PresetStore.self) private var presets
+    @Environment(LocationService.self) private var loc
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("originId") private var originId = ""
     @AppStorage("destId") private var destId = ""
+    /// "<day>|<preset id>" of the last commute applied automatically: once per window per day.
+    @AppStorage("appliedPreset") private var appliedPreset = ""
     @State private var selectedPath: String? = nil
     @State private var pickingOrigin = false
     @State private var pickingDest = false
+    @State private var nearbySheet = false
+    @State private var editing: CommutePreset? = nil
+    @State private var currentPresetId: UUID? = nil
+    @State private var pendingNearest = false
+    @State private var pendingDest = ""
     @State private var paths: [PathOption] = []
     @State private var reach: [String: Reach] = [:]
 
@@ -32,17 +44,33 @@ struct PlannerView: View {
             .navigationTitle("Which way?")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { StatusDot() } }
         }
-        .onAppear { recompute() }
+        .onAppear {
+            recompute()
+            autoApply()
+        }
         .onChange(of: originId) { _, _ in recompute() }
         .onChange(of: destId) { _, _ in recompute() }
-        .onChange(of: data.staticVersion) { _, _ in recompute() }
+        .onChange(of: data.staticVersion) { _, _ in
+            recompute()
+            autoApply()
+            resolveNearest()
+        }
         .onChange(of: data.tick) { _, _ in refreshLive() }
+        .onChange(of: loc.location?.timestamp) { _, _ in resolveNearest() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { autoApply() } }
     }
 
     private func content(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                PresetChips(presets: presets.presets, activeId: presets.active(at: data.now)?.id, currentId: currentPresetId,
+                            canAdd: !originId.isEmpty && !destId.isEmpty,
+                            onPick: { applyPreset($0, byHand: true) },
+                            onAdd: { editing = newPresetFromCurrent() })
                 pickers(index)
+                if pendingNearest {
+                    Text(loc.error ?? "Finding the nearest station…").font(.footnote).foregroundStyle(loc.error == nil ? Color.secondary : Color.red)
+                }
                 if originId.isEmpty {
                     Text("Pick where you are and where you're going. Paths come from the timetable; which train to take, when it gets you there and where it is right now come from the live MTA feeds.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -66,16 +94,93 @@ struct PlannerView: View {
             .padding(.bottom, 24)
         }
         .sheet(isPresented: $pickingOrigin) {
-            StationPickerSheet(title: "From", stations: index.sorted, reach: nil) { st in originId = st.id }
+            StationPickerSheet(title: "From", stations: index.sorted, reach: nil) { st in
+                originId = st.id
+                pickedByHand()
+            }
         }
         .sheet(isPresented: $pickingDest) {
-            StationPickerSheet(title: "To", stations: index.sorted, reach: reach) { st in destId = st.id }
+            StationPickerSheet(title: "To", stations: index.sorted, reach: reach) { st in
+                destId = st.id
+                pickedByHand()
+            }
         }
+        .sheet(isPresented: $nearbySheet) {
+            NearbyStationsSheet { st in
+                originId = st.id
+                pickedByHand()
+            }
+        }
+        .sheet(item: $editing) { p in
+            PresetEditorView(preset: p) { saved in
+                presets.update(saved)
+                applyPreset(saved, byHand: true)
+            }
+        }
+    }
+
+    // MARK: - commutes and location
+
+    /// The first commute whose window covers now, once per window per day; stations picked by hand keep.
+    private func autoApply() {
+        guard data.index != nil, let p = presets.active(at: data.now) else { return }
+        let stamp = "\(Fmt.dayStamp(data.now))|\(p.id.uuidString)"
+        if appliedPreset == stamp { return }
+        appliedPreset = stamp
+        applyPreset(p, byHand: false)
+    }
+
+    private func applyPreset(_ p: CommutePreset, byHand: Bool) {
+        if byHand, let a = presets.active(at: data.now) { appliedPreset = "\(Fmt.dayStamp(data.now))|\(a.id.uuidString)" }
+        currentPresetId = p.id
+        if p.useNearestOrigin {
+            pendingDest = p.destId
+            pendingNearest = true
+            data.requestGeometry()
+            loc.request()
+            resolveNearest()
+        } else {
+            pendingNearest = false
+            originId = p.originId
+            destId = p.destId
+        }
+    }
+
+    /// With a fix and the station coordinates: the nearest station from which the destination is reachable with
+    /// at most one change (else simply the nearest) becomes the origin.
+    private func resolveNearest() {
+        guard pendingNearest, let l = loc.location, let sched = data.schedule, let index = data.index, let geo = data.geometry else { return }
+        let coords = stationCoordinates(schedule: sched, index: index, geometry: geo)
+        let near = nearestStations(to: (l.coordinate.latitude, l.coordinate.longitude), coords: coords, index: index, n: 6)
+        let dest = pendingDest
+        let pick = near.first(where: { dest.isEmpty || reachableStations(schedule: sched, index: index, from: $0.station.id)[dest] != nil }) ?? near.first
+        pendingNearest = false
+        guard let s = pick else { return }
+        originId = s.station.id
+        if !dest.isEmpty { destId = dest }
+    }
+
+    private func pickedByHand() {
+        currentPresetId = nil
+        pendingNearest = false
+        if let a = presets.active(at: data.now) { appliedPreset = "\(Fmt.dayStamp(data.now))|\(a.id.uuidString)" }
+    }
+
+    private func newPresetFromCurrent() -> CommutePreset {
+        let w = PresetStore.suggestedWindow(at: data.now)
+        return CommutePreset(name: PresetStore.suggestedName(at: data.now), originId: originId, destId: destId, startMinute: w.start, endMinute: w.end)
     }
 
     private func pickers(_ index: StationIndex) -> some View {
         VStack(spacing: 8) {
-            StationButton(label: "From", station: index.stations[originId]) { pickingOrigin = true }
+            HStack(spacing: 8) {
+                StationButton(label: "From", station: index.stations[originId]) { pickingOrigin = true }
+                Button { nearbySheet = true } label: {
+                    Image(systemName: "location.fill")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Nearest station")
+            }
             HStack(spacing: 8) {
                 StationButton(label: "To", station: index.stations[destId]) { pickingDest = true }
                     .disabled(originId.isEmpty)
@@ -119,7 +224,11 @@ struct PlannerView: View {
         guard let sched = data.schedule, let index = data.index else { return }
         if !originId.isEmpty && index.stations[originId] == nil { originId = "" }
         reach = originId.isEmpty ? [:] : reachableStations(schedule: sched, index: index, from: originId)
-        if !destId.isEmpty && (originId.isEmpty || reach[destId] == nil) {
+        if originId.isEmpty {
+            paths = []
+            return
+        }
+        if !destId.isEmpty && reach[destId] == nil {
             destId = ""
             paths = []
             return

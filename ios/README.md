@@ -7,7 +7,13 @@ every train, and layers the published data from this repository's site on top.
 ## What it does
 
 - **Go** tab. Pick where you are and where you're going (searchable station pickers; destinations are limited
-  to stations reachable direct or with one change, each showing how). The **Now card** says which train to
+  to stations reachable direct or with one change, each showing how). The location button next to *From* lists
+  the stations nearest to you with the walk to each. **Commutes** are saved trips with a daily window: the first
+  one whose window covers the current time is applied on its own when the tab opens or the app comes back to
+  the foreground (once per day per window; stations picked by hand keep for the rest of the day), and a
+  commute can start from the nearest station instead of a fixed one, choosing the nearest from which the
+  destination is reachable with at most one change. Save the current trip from the chip row; manage commutes
+  in Settings. The **Now card** says which train to
   take, counts down to boarding, and gives the predicted arrival with its 80% window and the feed's own time.
   Every viable path is ranked, first by expected time (half the scheduled headway as the wait, the scheduled
   ride, the time trains typically lose on those stretches at this hour, the hold risk from the hold log, the
@@ -33,7 +39,8 @@ every train, and layers the published data from this repository's site on top.
   with each train's feed and engine ETA, lateness against the timetable (`~` marks a nearest-trip match),
   position and time there, holds, overdue trains, feed-optimistic ETAs, track changes and the last measured
   segment speed.
-- **Settings**. Base URL of the published data (defaults to the GitHub Pages site), poll interval, data status.
+- **Settings**. Commutes (add, edit, reorder, delete), base URL of the published data (defaults to the GitHub
+  Pages site), poll interval, data status.
 
 ## The prediction engine
 
@@ -59,9 +66,12 @@ ios/WhichWay/
     Core/LineBoard.swift       live board of one line: lateness, position fusion, holds/stalls, segment speeds
     Core/Planner.swift         trip candidates, itineraries with connections, headways, expected time
     Core/Predictor.swift       the prediction engine (port of client_model.py)
+    Core/Presets.swift         commute presets (time windows, nearest-origin) and their store
     Core/Format.swift          time and number formatting (New York local time)
     Services/DataService.swift loads the published data, polls the feeds the visible screens need, runs the engine
-    Views/                     ContentView (tabs), PlannerView, PathViews (Now card, scenario switch, view switcher,
+    Services/LocationService.swift one-shot location for the nearest station (when-in-use permission)
+    Views/                     ContentView (tabs), PlannerView, CommuteViews (chips, editor, nearby stations, settings section),
+                               PathViews (Now card, scenario switch, view switcher,
                                departure board, hours), TrackDiagramView, MareyChartView, RouteMapView,
                                LineBoardView, StationPicker, SettingsView, RouteBullet
 ios/WhichWayCore/              SwiftPM package over Models/ and Core/ (symlinks) with the predictor tests
@@ -94,3 +104,5 @@ If you already have a WhichWay Xcode project, drop the `WhichWay/` source folder
 - Trains are matched to the timetable extract by trip stem, then by the nearest scheduled trip within 15 minutes.
 - Feeds are polled only for the lines the visible screens show, just after each expected publication; polling
   pauses in the background and resumes with an immediate refresh in the foreground.
+- Location is requested only when you tap the location button or a commute starts from the nearest station
+  (when-in-use permission, a single fix); station coordinates come from `data/client_geometry.json`.

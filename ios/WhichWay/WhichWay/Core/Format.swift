@@ -45,6 +45,16 @@ enum Fmt {
         return s > 0 ? "\(m) min late" : "\(m) min early"
     }
 
+    /// "07:30" for a minute of the day.
+    static func clock(_ minuteOfDay: Int) -> String {
+        let m = ((minuteOfDay % 1440) + 1440) % 1440
+        return String(format: "%02d:%02d", m / 60, m % 60)
+    }
+
+    private static let dayF = formatter("yyyy-MM-dd")
+    /// The New York calendar day of a timestamp, for once-a-day bookkeeping.
+    static func dayStamp(_ ts: Double) -> String { dayF.string(from: Date(timeIntervalSince1970: ts)) }
+
     static func kmh(_ v: Double?) -> String {
         guard let v = v else { return "–" }
         return String(format: "%.0f km/h", v)

@@ -34,6 +34,7 @@ struct SettingsView: View {
                     if data.isDemo { Text("Demo clock: the schedule pins the current time (demo_now).").font(.caption) }
                     if let e = data.lastError { Text(e).font(.caption).foregroundStyle(Color.red) }
                 }
+                CommutesSection()
                 Section("About") {
                     Text("WhichWay reads the MTA GTFS-Realtime feeds directly and layers the published delay analysis on top: the timetable extract for lateness, the hold log for hold risk, per-line deviation grids for the time trains typically lose at this hour, and measured segment run times for speeds. Times are New York local.")
                         .font(.caption)

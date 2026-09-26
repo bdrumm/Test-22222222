@@ -278,3 +278,48 @@ func enumeratePaths(schedule: ClientSchedule, index: StationIndex, from oId: Str
     out.sort { $0.schedSec < $1.schedSec }
     return Array(out.prefix(maxOptions))
 }
+
+// MARK: - locations
+
+func haversineM(_ a: (lat: Double, lon: Double), _ b: (lat: Double, lon: Double)) -> Double {
+    let r = 6_371_000.0
+    let dLat = (b.lat - a.lat) * .pi / 180, dLon = (b.lon - a.lon) * .pi / 180
+    let h = sin(dLat / 2) * sin(dLat / 2) + cos(a.lat * .pi / 180) * cos(b.lat * .pi / 180) * sin(dLon / 2) * sin(dLon / 2)
+    return 2 * r * asin(min(1, h.squareRoot()))
+}
+
+/// Each station complex's coordinate: the mean of its member stops' coordinates from the geometry file.
+func stationCoordinates(schedule: ClientSchedule, index: StationIndex, geometry: ClientGeometry) -> [String: (lat: Double, lon: Double)] {
+    var sum: [String: (Double, Double, Int)] = [:]
+    for (key, g) in geometry.lines {
+        guard let line = schedule.lines[key] else { continue }
+        for (i, sid) in line.stops.enumerated() {
+            guard let c = g.coord(i) else { continue }
+            let st = index.stationOf(sid)
+            let s = sum[st] ?? (0, 0, 0)
+            sum[st] = (s.0 + c.lat, s.1 + c.lon, s.2 + 1)
+        }
+    }
+    var out: [String: (lat: Double, lon: Double)] = [:]
+    for (k, s) in sum where s.2 > 0 { out[k] = (s.0 / Double(s.2), s.1 / Double(s.2)) }
+    return out
+}
+
+struct NearbyStation: Identifiable {
+    var id: String { station.id }
+    let station: Station
+    let meters: Double
+    /// At a brisk 80 m per minute.
+    var walkMinutes: Int { max(1, Int((meters / 80).rounded())) }
+}
+
+/// The n stations nearest to a point, nearest first.
+func nearestStations(to p: (lat: Double, lon: Double), coords: [String: (lat: Double, lon: Double)], index: StationIndex, n: Int = 6) -> [NearbyStation] {
+    var out: [NearbyStation] = []
+    for (id, c) in coords {
+        guard let st = index.stations[id] else { continue }
+        out.append(NearbyStation(station: st, meters: haversineM(p, c)))
+    }
+    out.sort { $0.meters < $1.meters }
+    return Array(out.prefix(n))
+}
