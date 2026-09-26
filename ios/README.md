@@ -77,19 +77,43 @@ ios/WhichWay/
 ios/WhichWayCore/              SwiftPM package over Models/ and Core/ (symlinks) with the predictor tests
 ```
 
-## Running it
+## Local development (Mac + Xcode)
 
-1. Open `ios/WhichWay/WhichWay.xcodeproj` in Xcode 16 or later.
-2. In the target's *Signing & Capabilities*, pick your team (bundle id `com.whichway.app`; change it if it clashes).
-3. Run on a simulator or a device. The app loads `client_schedule.json`, `client_model.json` and the other files
-   from `https://bdrumm.github.io/Test-22222222/data/` and then polls the MTA feeds the selected paths need.
+Everything the app needs runs locally: the Python pipeline builds the site data (the timetable extract, the
+prediction engine's tables, geometry, hold log, …) and `mta-insights serve` serves it with `live.json` refreshed
+from the MTA feeds every 30 seconds. From the repository root:
 
-`.github/workflows/ios.yml` builds the app for the simulator and runs the package tests on a macOS runner on
-every push that touches `ios/`, so the sources are compiler-checked even when no Mac is at hand.
+```bash
+make venv                 # Python environment with the package and dev tools (once)
+make site-synthetic       # offline preview: synthetic history + recorded feeds, builds _site in ~1 min
+#   or, for real data:
+make site                 # checks out the collected history (data branch), downloads the static GTFS,
+                          # trains the models and fits the engine tables into _site (several minutes)
+make serve                # http://localhost:8000 — the site, /data/*.json and /api/*, live data every 30 s
+make ios                  # opens WhichWay.xcodeproj in Xcode
+```
 
-To run against a local site build (`python -m pipeline.build_site` output served with `python -m http.server`),
-set the base URL in Settings to that server's `data/` folder. The synthetic preview's `demo_now` is honoured, so
-the recorded feeds it ships line up with its clock.
+Then in Xcode:
+
+1. `cp ios/WhichWay/Config/Local.xcconfig.example ios/WhichWay/Config/Local.xcconfig` and fill in your team id and
+   a bundle id of your own (the file is git-ignored; the Debug configuration includes it). Setting the team in
+   *Signing & Capabilities* works too.
+2. With `WHICHWAY_BASE_URL = http:/$()/localhost:8000/data/` in that file the Debug build starts against the
+   local server; otherwise it starts against the published site. Either can be changed at run time in Settings
+   ("Use the local server", "Use the published site"). On a physical device use your Mac's address on the local
+   network instead of localhost.
+3. Pick a Simulator and run. The shared scheme simulates the phone at 14 St-Union Sq
+   (`Simulation/UnionSquare.gpx`), so the location button and nearest-station commutes work in the Simulator;
+   change it under *Debug > Simulate Location*, or use a real device.
+4. `make ios-test` runs the core package tests from the command line (`swift test`); `make ios-build` compiles
+   the app for the Simulator the way CI does.
+
+The Simulator reaches the MTA feeds directly (internet needed); the synthetic preview instead ships recorded
+feeds and pins the clock (`demo_now`), so the app replays that moment offline. Plain HTTP to localhost and local
+network addresses is allowed by App Transport Security, so no exception is needed for the local server.
+
+`.github/workflows/ios.yml` builds the app for the Simulator and runs the package tests on a macOS runner on
+every push that touches `ios/`, so the sources stay compiler-checked from any machine.
 
 ## Existing "whichway" project
 

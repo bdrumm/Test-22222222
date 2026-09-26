@@ -8,6 +8,9 @@
 
 /* Begin PBXFileReference section */
 		5A1C0F0A2D2A00010000A001 /* WhichWay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhichWay.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A1C0F0A2D2A00010000A010 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		5A1C0F0A2D2A00010000A011 /* Local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text; path = Local.xcconfig.example; sourceTree = "<group>"; };
+		5A1C0F0A2D2A00010000A012 /* UnionSquare.gpx */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = UnionSquare.gpx; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -33,8 +36,27 @@
 			isa = PBXGroup;
 			children = (
 				5A1C0F0A2D2A00010000A002 /* WhichWay */,
+				5A1C0F0A2D2A00010000A013 /* Config */,
+				5A1C0F0A2D2A00010000A014 /* Simulation */,
 				5A1C0F0A2D2A00010000A005 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		5A1C0F0A2D2A00010000A013 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				5A1C0F0A2D2A00010000A010 /* Debug.xcconfig */,
+				5A1C0F0A2D2A00010000A011 /* Local.xcconfig.example */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		5A1C0F0A2D2A00010000A014 /* Simulation */ = {
+			isa = PBXGroup;
+			children = (
+				5A1C0F0A2D2A00010000A012 /* UnionSquare.gpx */,
+			);
+			path = Simulation;
 			sourceTree = "<group>";
 		};
 		5A1C0F0A2D2A00010000A005 /* Products */ = {
@@ -246,13 +268,13 @@
 		};
 		5A1C0F0A2D2A00010000A00E /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C0F0A2D2A00010000A010 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WhichWay;
@@ -267,7 +289,6 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.whichway.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

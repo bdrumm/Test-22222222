@@ -1,0 +1,13 @@
+// Debug configuration. Personal values (your Apple team, a local data server) go in Local.xcconfig next to
+// this file, which git ignores; copy Local.xcconfig.example to start. Note: "//" starts a comment in an
+// xcconfig, so URLs are written with the $() trick.
+
+// Where the app starts loading the published data from (Settings can change it at run time).
+WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/Test-22222222/data/
+PRODUCT_BUNDLE_IDENTIFIER = com.whichway.app
+DEVELOPMENT_TEAM =
+
+// Read by DataService.defaultBase from the generated Info.plist.
+INFOPLIST_KEY_WhichWayBaseURL = $(WHICHWAY_BASE_URL)
+
+#include? "Local.xcconfig"

@@ -105,6 +105,12 @@ for each new service date, and `/api/live`, `/api/plan?journey=`,
 `/api/routes`, `/api/station?id=`, `/api/incidents`, `/api/forecast_eval` and
 `/api/health` expose the snapshot. See [deploy/README.md](deploy/README.md).
 
+For local development without Docker, the `Makefile` wraps the same pieces:
+`make venv`, `make site-synthetic` (offline preview) or `make site` (full build
+from the collected history), `make serve` (http://localhost:8000), `make test`,
+and for the iOS app `make ios`, `make ios-build`, `make ios-test`
+(see [ios/README.md](ios/README.md)).
+
 ## Data sources
 
 | kind | feed | what it contributes |

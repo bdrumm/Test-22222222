@@ -9,3 +9,6 @@ data/
 *.db
 reports/
 .DS_Store
+_site/
+data-branch/
+ios/WhichWay/Config/Local.xcconfig

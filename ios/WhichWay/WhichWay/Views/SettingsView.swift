@@ -15,10 +15,10 @@ struct SettingsView: View {
                         .keyboardType(.URL)
                     Stepper("Poll the feeds every \(Int(poll)) s", value: $poll, in: 10...120, step: 5)
                     Button("Apply and reload") { data.configure(baseURL: base, pollSec: poll) }
-                    Button("Reset to the published site") {
-                        base = DataService.defaultBase
-                        poll = 30
-                    }
+                    Button("Use the local server (localhost:8000)") { base = DataService.localBase }
+                    Button("Use the published site") { base = DataService.publishedBase }
+                    Text("`make serve` in the repository serves the built site on port 8000 with live data refreshed from the feeds. The Simulator reaches localhost; a device needs your Mac's address on the local network, e.g. http://192.168.1.20:8000/data/.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Status") {
                     LabeledContent("Schedule", value: data.schedule.map { "\($0.lines.count) line directions · \($0.serviceDate ?? "")" } ?? "not loaded")

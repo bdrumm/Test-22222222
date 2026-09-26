@@ -6,7 +6,14 @@ import Observation
 @MainActor
 @Observable
 final class DataService {
-    static let defaultBase = "https://bdrumm.github.io/Test-22222222/data/"
+    static let publishedBase = "https://bdrumm.github.io/Test-22222222/data/"
+    static let localBase = "http://localhost:8000/data/"
+    /// The Debug build can point at a local server through Config/Local.xcconfig (WHICHWAY_BASE_URL, carried
+    /// into the generated Info.plist); otherwise the published site.
+    static let defaultBase: String = {
+        if let s = Bundle.main.object(forInfoDictionaryKey: "WhichWayBaseURL") as? String, s.hasPrefix("http") { return s }
+        return publishedBase
+    }()
 
     private(set) var baseURL: String
     private(set) var pollSec: Double
