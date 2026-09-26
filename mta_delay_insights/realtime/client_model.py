@@ -6,9 +6,9 @@ prediction engine they run is table-driven and fitted here from the collected hi
 
 * **ETA calibration** — the feed's error (arrival − feed ETA) by route and forecast horizon: bias and the
   p10/p90 spread from the ETA samples matched to arrivals, shrunk toward the all-routes value.
-* **Hold survival** — from the hold log: given a train has already been held ``t`` seconds, the expected,
-  median and p90 remaining hold (the fixed "10 more minutes" scenario was +11 min biased on the scored
-  live forecasts) and the chance it clears within two minutes.
+* **Hold survival** — from the hold log: given a train has already been held ``t`` seconds, the expected
+  (winsorized at 30 min), median and p90 remaining hold (the fixed "10 more minutes" scenario was +11 min
+  biased on the scored live forecasts) and the chance it clears within two minutes.
 * **Lateness carry** — from the arrivals: how lateness at the train's current stop maps to lateness ``k``
   stops later, per route (slope, intercept, residual spread), shrunk toward slope 1 / intercept 0.
 
@@ -38,6 +38,7 @@ MIN_HEADWAY_SEC = 90.0
 MIN_STOP_GAP_SEC = 30.0
 SCENARIOS = ("baseline", "hold_persists", "clears_now")
 PRIOR_HOLD = {"expected": 300.0, "p50": 180.0, "p90": 720.0, "clears_2min": 0.35}
+WINSOR_REMAINING_SEC = 1800.0
 
 
 def prior_spread(h: float) -> tuple[float, float]:
@@ -117,7 +118,9 @@ def fit_hold_survival(holds: pd.DataFrame | None, static=None, hold_sec: float =
         r = d[d >= e] - e if len(d) else d
         n = int(len(r))
         w = n / (n + PRIOR_N)
-        mean = float(r.mean()) if n else 0.0
+        # the expectation is winsorized at 30 minutes: a handful of multi-hour holds would otherwise dominate
+        # the point estimate for trains held long; the percentiles are untouched
+        mean = float(r.clip(upper=WINSOR_REMAINING_SEC).mean()) if n else 0.0
         p50 = float(r.median()) if n else 0.0
         p90 = float(r.quantile(0.9)) if n else 0.0
         clears = float((r <= 120).mean()) if n else 0.0

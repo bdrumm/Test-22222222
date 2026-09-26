@@ -126,7 +126,7 @@ function describePosition(veh, line, targetStop, schedTarget, now, C) {
 }
 
 /** Build the board for every monitored platform from parsed feeds ({feedKey: parsedFeed}). */
-export function computeBoard(schedule, feeds, now) {
+export function computeBoard(schedule, feeds, now, model = null) {
   const C = { hold_sec: 150, stall_slack_sec: 120, past_slack_sec: 90, gap_ratio: 1.5, bunching_ratio: 0.5, hold_extra_sec: 600, min_headway_sec: 90, ...(schedule.constants || {}) };
   const trips = new Map(), vehicles = new Map();
   for (const [key, fd] of Object.entries(feeds)) {
@@ -155,8 +155,13 @@ export function computeBoard(schedule, feeds, now) {
       let corroboration = "position_unknown", effective = lateness;
       if (pos && pos.position_lateness_sec != null && lateness != null) { corroboration = pos.position_lateness_sec - lateness > 60 ? "feed_optimistic" : "agree"; effective = Math.max(lateness, pos.position_lateness_sec); }
       if (pos && started && !seen.has(key)) { seen.add(key); if (pos.holding) summary.holding++; if (pos.stalled) summary.stalled++; if (corroboration === "feed_optimistic") summary.feed_optimistic++; }
+      // the prediction engine's view of this arrival: the feed's ETA calibrated by route and horizon, shifted when the
+      // position proves it optimistic, plus the expected remaining hold for a held train (see predictTrain)
+      const pe = predictTrain({ trip_id: tu.trip.trip_id, route, next_idx: 0, points: [[0, eta]], lateness_sec: lateness, effective_lateness_sec: effective, sched_ts: null,
+        position: pos ? { status: pos.status, since_sec: pos.since_sec, holding: !!pos.holding, stalled: !!pos.stalled } : null }, { stops: [], run_sec: [] }, model, now, "baseline").points[0];
       arrivals.push({ key, trip_id: tu.trip.trip_id, train_id: tu.trip.train_id, route, feed: tu.feed, eta_ts: eta, sched_ts: sched, sched_method: schedMethod, lateness_sec: lateness, effective_lateness_sec: effective,
         stops_away: i, next_stop_id: tu.stops[0] && tu.stops[0].stop_id, started, position: pos, corroboration,
+        model_eta_ts: pe ? pe.eta_ts : null, model_lo_ts: pe ? pe.lo_ts : null, model_hi_ts: pe ? pe.hi_ts : null,
         track_changed: !!(st.actual_track && st.sched_track && st.actual_track !== st.sched_track), actual_track: st.actual_track });
     }
     arrivals.sort((a, b) => a.eta_ts - b.eta_ts);
@@ -176,7 +181,7 @@ export function computeBoard(schedule, feeds, now) {
         for (const a of arrivals) {
           if (a.route !== r) continue;
           let t = a.eta_ts;
-          if (a.position && (a.position.holding || a.position.stalled)) t += C.hold_extra_sec;
+          if (a.position && (a.position.holding || a.position.stalled)) { a.hold_extra_sec = model && model.hold_survival ? remainingHold(model.hold_survival, a.position.since_sec || 0).p90 : C.hold_extra_sec; t += a.hold_extra_sec; }
           if (a.corroboration === "feed_optimistic") t += a.position.position_lateness_sec - a.lateness_sec;
           if (prev != null && t < prev + C.min_headway_sec) t = prev + C.min_headway_sec;
           a.hold_eta_ts = t; prev = t;
@@ -186,7 +191,7 @@ export function computeBoard(schedule, feeds, now) {
     targets.push({ id, stop_id: tgt.stop_id, station_name: tgt.station_name, direction: tgt.direction, routes: tgt.routes, label: tgt.label, per_route: perRoute, arrivals, disturbed,
       n_sched_today: tgt.sched.length });
   }
-  return { now, summary, targets };
+  return { now, summary, targets, hold_model: !!(model && model.hold_survival && model.hold_survival.n_holds) };
 }
 
 const runBetween = (line, a, b) => { let run = 0; for (let q = a; q < b; q++) { if (line.run_sec[q] == null) return null; run += line.run_sec[q]; } return run; };
@@ -525,7 +530,7 @@ export function planJourneys(schedule, feeds, now, maxOptions = 4) {
 /** Poll the feeds every intervalMs and hand computed boards to onUpdate(board, schedule, feeds).
  *  feedKeys limits which feeds are polled (default: the feeds the monitored platforms need). */
 export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, fetchImpl = (u, o) => fetch(u, o), feedKeys = null, feedPeriodSec = 30 }) {
-  let timer = null, schedule = null, running = false, busy = false, ticks = 0, alerts = null, alertsError = null, lastFeedTs = 0, staleRuns = 0;
+  let timer = null, schedule = null, model = null, running = false, busy = false, ticks = 0, alerts = null, alertsError = null, lastFeedTs = 0, staleRuns = 0;
   // The MTA republishes each feed about every feedPeriodSec; polling just after the next publication keeps the
   // board as fresh as the source allows. When a poll returns the previous timestamp, look again shortly.
   function nextDelay() {
@@ -536,7 +541,9 @@ export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, 
   async function tick() {
     if (busy) return; busy = true;
     try {
-      if (!schedule) { const r = await fetchImpl(base + "client_schedule.json", { cache: "no-store" }); if (!r.ok) throw new Error(`client_schedule.json: HTTP ${r.status}`); schedule = await r.json(); }
+      if (!schedule) { const r = await fetchImpl(base + "client_schedule.json", { cache: "no-store" }); if (!r.ok) throw new Error(`client_schedule.json: HTTP ${r.status}`); schedule = await r.json();
+        try { const rm = await fetchImpl(base + "client_model.json", { cache: "no-store" }); if (rm && rm.ok) model = await rm.json(); } catch (e) { model = null; }   // the prediction engine's tables (optional)
+      }
       const now = schedule.demo_now || Date.now() / 1000, feeds = {}, info = [];
       const wanted = (typeof feedKeys === "function" ? feedKeys(schedule) : feedKeys) || schedule.target_feeds || Object.keys(schedule.feeds);
       const keys = wanted.filter(k => schedule.feeds[k]);
@@ -547,7 +554,7 @@ export function createClientLive({ base, onUpdate, onError, intervalMs = 30000, 
         const fd = parseFeed(new Uint8Array(await r.arrayBuffer())); feeds[key] = fd;
         info.push({ key, feed_ts: fd.timestamp, trips: fd.trips.length, vehicles: fd.vehicles.length, ms: Date.now() - t0 });
       }));
-      const board = computeBoard(schedule, feeds, now); board.feeds = info.sort((a, b) => a.key.localeCompare(b.key)); board.schedule_generated_at = schedule.generated_at; board.demo = !!schedule.demo_now;
+      const board = computeBoard(schedule, feeds, now, model); board.feeds = info.sort((a, b) => a.key.localeCompare(b.key)); board.schedule_generated_at = schedule.generated_at; board.demo = !!schedule.demo_now; board.model = model;
       const maxTs = Math.max(0, ...info.map(x => x.feed_ts || 0)); board.fresh = !(lastFeedTs && maxTs <= lastFeedTs); staleRuns = board.fresh ? 0 : staleRuns + 1; lastFeedTs = Math.max(lastFeedTs, maxTs);
       board.feed_ts = maxTs || null; board.next_poll_ms = nextDelay();
       if (schedule.alerts_url && !schedule.demo_now && (ticks % 4 === 0 || alerts == null)) {   // the alerts document is large: every 2 minutes

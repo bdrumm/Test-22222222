@@ -464,20 +464,23 @@ async function renderLineLive(box, board, schedule, feeds, route, direction) {
   const now = board.now, card = h("div", "card", null, box);
   const hd = h("div", "row between", null, card);
   h("h3", null, "Live from the MTA feeds: every train on the line now", hd);
-  h("span", "small secondary", `${board.demo ? "recorded snapshot replayed at" : "polled"} ${hhmmss(now)} ET · every 30 s · ${lb.trains.length} trains · ${lb.n_holding} holding · ${lb.n_stalled} stalled · feed optimistic for ${lb.n_feed_optimistic}`, hd);
+  h("span", "small secondary", `${board.demo ? "recorded snapshot replayed at" : "polled"} ${hhmmss(now)} ET · ${board.demo ? "" : "aligned to the feed's 30-second updates · "}${lb.trains.length} trains · ${lb.n_holding} holding · ${lb.n_stalled} stalled · feed optimistic for ${lb.n_feed_optimistic}`, hd);
   const held = t => t.position && (t.position.holding || t.position.stalled);
   const legs = [{ stops: lb.stops, trains: lb.trains.map(t => ({ trip_id: t.trip_id, train_id: t.train_id, route_id: route, points: t.points, lateness_sec: t.effective_lateness_sec ?? t.lateness_sec, kind: held(t) ? "live-hold" : "live" })) }];
+  const pred = predictBoard(lb, schedule.lines[`${route}_${direction}`], board.model || null, now); const predBy = new Map(pred.baseline.trains.map(t => [t.trip_id, t]));
+  for (const t of pred.baseline.trains) if (t.points.length >= 2) legs[0].trains.push({ trip_id: `${t.trip_id}#model`, train_id: t.trip_id, route_id: route, points: t.points.map(pt => [pt.idx, pt.eta_ts]), lateness_sec: null, kind: t.hold_extra_sec > 0 || t.knock_on_sec >= 60 ? "sim-hold" : "sim" });
   const markers = lb.trains.filter(t => t.position && t.position.stop_idx != null).map(t => { const p = t.position, moving = p.status !== "STOPPED_AT";
     return { leg: 0, stop: moving && p.stop_idx > 0 ? p.stop_idx - 0.5 : p.stop_idx, ts: now, color: held(t) ? "var(--status-critical)" : moving ? "var(--status-good)" : "var(--status-warning)",
       label: `${route} ${(t.train_id || t.trip_id).trim()}`, rows: [["position", `${posText(p)}`], ["lateness", lateTxt(t.effective_lateness_sec ?? t.lateness_sec)], ["feed vs position", t.corroboration.replace(/_/g, " ")]] }; });
   stringline(card, { title: `${route} ${direction === "N" ? "northbound" : "southbound"}: reported positions and the feed's projection for the next hour`,
-    subtitle: "dots: where each train is now (green moving, amber stopped, red holding or stalled); dashed: the feed's ETAs; red dashed: held or stalled trains (lateness from the position when it proves the feed optimistic)",
+    subtitle: "dots: where each train is now (green moving, amber stopped, red holding or stalled); dashed: the feed's ETAs; dotted: the prediction engine (calibrated feed ETA blended with the timetable-carried lateness, held trains given their expected remaining hold, no train within 90 s of the one ahead); red: held or stalled, or held back",
     legs, now, horizonSec: 3600, backSec: 600, routeColor: () => ROUTE_COLORS[route] || null, rowH: 12, markers });
   if (lb.trains.length) {
     const wrap = h("div", "table-wrap", null, card); const tb = h("table", "tiny", null, wrap); const tr = h("tr", null, null, h("thead", null, null, tb));
-    ["train", "position", "next stop", "ETA", "vs schedule", "flags"].forEach((x, i) => h("th", i === 3 || i === 4 ? "num" : "", x, tr)); const body = h("tbody", null, null, tb);
+    ["train", "position", "next stop", "feed ETA", "engine", "vs schedule", "flags"].forEach((x, i) => h("th", i >= 3 && i <= 5 ? "num" : "", x, tr)); const body = h("tbody", null, null, tb);
     lb.trains.forEach(t => { const row = h("tr", null, null, body); const c0 = h("td", null, null, row); routeBullet(route, c0); c0.append(` ${(t.train_id || t.trip_id).trim()}`);
       h("td", "small", t.position ? posText(t.position) : "–", row); h("td", "small", t.next_name, row); h("td", "num eta", hhmm(t.eta_ts), row);
+      const pt = (predBy.get(t.trip_id) || { points: [] }).points.find(x => x.idx === t.next_idx); const mc = h("td", "num eta", pt ? hhmm(pt.eta_ts) : "–", row); if (pt) { const r = h("div", "tiny muted", `${hhmm(pt.lo_ts)}–${hhmm(pt.hi_ts)}`, mc); r.style.whiteSpace = "nowrap"; }
       const lc = h("td", "num", (t.sched_method === "nearest" ? "~" : "") + lateTxt(t.lateness_sec) + (t.corroboration === "feed_optimistic" ? ` → ${lateTxt(t.effective_lateness_sec)}` : ""), row); if (t.sched_method === "nearest") lc.title = "matched to the nearest scheduled trip (the realtime trip id is not in the timetable)";
       posFlags(h("td", "small", null, row), t.position, t.corroboration, { track_changed: t.track_changed }); });
   } else h("div", "small secondary", "No train of this line is under way right now.", card);
@@ -490,7 +493,7 @@ function renderClientBoard(box, board, schedule) {
   const hd = h("div", "row between", null, box);
   h("h2", null, "Live from the MTA feeds", hd);
   const feedTxt = (board.feeds || []).map(f => `${f.key.replace(/^nyct-?/, "") || "1-7"} ${f.feed_ts ? `${Math.max(0, now - f.feed_ts).toFixed(0)} s` : "?"}`).join(" · ");
-  h("span", "small secondary", `${board.demo ? "recorded snapshot replayed at " : "polled "}${hhmmss(now)} ET · every 30 s · feed age: ${feedTxt}`, hd);
+  h("span", "small secondary", `${board.demo ? "recorded snapshot replayed at " : "polled "}${hhmmss(now)} ET · ${board.demo ? "" : `next in ${Math.round((board.next_poll_ms || 30000) / 1000)} s (aligned to the feed's 30-second updates) · `}feed age: ${feedTxt}`, hd);
   const tiles = h("div", "tiles", null, box);
   tile(tiles, "Trips in the feeds", board.summary.trips, `${board.summary.vehicles} with a reported position`);
   tile(tiles, "Holding", board.summary.holding, `stopped ≥ ${((C.hold_sec || 150) / 60).toFixed(1)} min at a station`);
@@ -506,12 +509,13 @@ function renderClientBoard(box, board, schedule) {
     Object.entries(t.per_route).forEach(([r, v]) => { const sp = h("span", null, null, pr); routeBullet(r, sp); sp.append(v.next_eta_ts ? ` next in ${minsFromNow(v.next_eta_ts, now)}` : " none in the next hour"); if (v.sched_headway_sec) sp.append(` (every ${(v.sched_headway_sec / 60).toFixed(0)})`); });
     if (!t.arrivals.length) { h("div", "small secondary", t.n_sched_today ? "No trains predicted for this platform in the next hour." : "No timetable shipped for today: rebuild the site to refresh data/client_schedule.json.", card); continue; }
     const wrap = h("div", "table-wrap", null, card); const tb = h("table", null, null, wrap); const tr = h("tr", null, null, h("thead", null, null, tb));
-    const cols = ["route", "ETA", "in", "vs schedule", "position", "flags"]; if (t.disturbed) cols.splice(3, 0, "if hold persists");
-    cols.forEach(x => h("th", ["ETA", "in", "vs schedule", "if hold persists"].includes(x) ? "num" : "", x, tr));
+    const cols = ["route", "feed ETA", "in", "engine", "vs schedule", "position", "flags"]; if (t.disturbed) cols.splice(4, 0, "if hold persists");
+    cols.forEach(x => h("th", ["feed ETA", "in", "engine", "vs schedule", "if hold persists"].includes(x) ? "num" : "", x, tr));
     const body = h("tbody", null, null, tb);
     t.arrivals.slice(0, 8).forEach(a => {
       const row = h("tr", a.gap ? "gap-row" : "", null, body); const c0 = h("td", null, null, row); routeBullet(a.route, c0); if (a.train_id) { const sp = h("span", "tiny muted", ` ${a.train_id.trim()}`, c0); sp.title = "NYCT train id"; }
       h("td", "num eta", hhmm(a.eta_ts), row); h("td", "num", minsFromNow(a.eta_ts, now), row);
+      const mc = h("td", "num eta", a.model_eta_ts ? hhmm(a.model_eta_ts) : "–", row); if (a.model_lo_ts != null) { const r = h("div", "tiny muted", `${hhmm(a.model_lo_ts)}–${hhmm(a.model_hi_ts)}`, mc); r.style.whiteSpace = "nowrap"; }
       if (t.disturbed) h("td", "num eta", a.hold_eta_ts && a.hold_eta_ts - a.eta_ts >= 30 ? `${hhmm(a.hold_eta_ts)} (+${((a.hold_eta_ts - a.eta_ts) / 60).toFixed(0)})` : "same", row);
       const lc = h("td", "num", (a.sched_method === "nearest" ? "~" : "") + lateTxt(a.lateness_sec) + (a.corroboration === "feed_optimistic" ? ` → ${lateTxt(a.effective_lateness_sec)}` : ""), row); if (a.sched_method === "nearest") lc.title = "matched to the nearest scheduled trip (the realtime trip id is not in the timetable)";
       h("td", "small", !a.started ? "not departed" : posText(a.position), row);
@@ -525,7 +529,7 @@ function renderClientBoard(box, board, schedule) {
     delays.slice(0, 8).forEach(x => { const row = h("div", "rec", null, al); const rc = h("div", null, null, row); x.routes.forEach(r => routeBullet(r, rc)); const bd = h("div", null, null, row); h("div", "small", x.header, bd); h("div", "why", `${x.type || ""}${x.start ? ` · since ${hhmm(x.start)}` : ""}`, bd); });
     if (!delays.length) h("div", "small secondary", "No unplanned delay alert is active.", al);
   } else if (board.alerts_error) h("div", "tiny muted", `Service alerts could not be fetched in the browser (${board.alerts_error}); the snapshot below lists them.`, box);
-  h("p", "tiny muted", `Computed in this browser from the GTFS-Realtime trip updates and vehicle positions (schedule extract from ${(schedule.generated_at || "").slice(0, 16).replace("T", " ")}, service date ${schedule.service_date}). "vs schedule" compares the feed's ETA with the timetable; "feed optimistic" means the train's reported position proves it later than its ETA implies (the arrow shows the corrected lateness); "holding" = stopped ≥ ${((C.hold_sec || 150) / 60).toFixed(1)} min, "stalled" = in transit ${((C.stall_slack_sec || 120) / 60).toFixed(0)} min longer than the scheduled run. The "if hold persists" column adds ${((C.hold_extra_sec || 600) / 60).toFixed(0)} min to held trains and keeps followers of the same route ≥ ${C.min_headway_sec || 90} s behind their leader.`, box);
+  h("p", "tiny muted", `Computed in this browser from the GTFS-Realtime trip updates and vehicle positions (schedule extract from ${(schedule.generated_at || "").slice(0, 16).replace("T", " ")}, service date ${schedule.service_date}). "engine" is the prediction engine's arrival (the feed's ETA calibrated by line and horizon on the collected history, shifted when the position proves it optimistic, plus the expected remaining hold for a held train) with its 80% window${board.hold_model ? `; "if hold persists" adds the 90th percentile of the remaining hold for a train held this long` : ""}. "vs schedule" compares the feed's ETA with the timetable; "feed optimistic" means the train's reported position proves it later than its ETA implies (the arrow shows the corrected lateness); "holding" = stopped ≥ ${((C.hold_sec || 150) / 60).toFixed(1)} min, "stalled" = in transit ${((C.stall_slack_sec || 120) / 60).toFixed(0)} min longer than the scheduled run. The "if hold persists" column adds ${((C.hold_extra_sec || 600) / 60).toFixed(0)} min to held trains and keeps followers of the same route ≥ ${C.min_headway_sec || 90} s behind their leader.`, box);
 }
 
 async function live(idx) {

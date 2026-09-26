@@ -52,6 +52,11 @@ def test_hold_survival_is_conditional_on_time_already_held(static):
     assert sv["clears_2min"][0] > sv["clears_2min"][3]
     # no hold in the log lasted 1800 s: that grid point is the prior
     assert sv["n"][-1] == 0 and sv["expected"][-1] == cm.PRIOR_HOLD["expected"]
+    # a few multi-hour holds must not dominate the expectation for trains held long (winsorized), while the
+    # 90th percentile still reflects them
+    tail = pd.concat([dw, dw.head(12).assign(trip_key=lambda x: "x" + x["trip_key"], dwell_sec=6000.0)])
+    sv2 = cm.fit_hold_survival(tail, static)
+    assert sv2["expected"][3] < 0.5 * (cm.WINSOR_REMAINING_SEC + (1500 - 600)) and sv2["p90"][3] >= 1400 - 600
     r150, r700 = cm.remaining_hold(sv, 150), cm.remaining_hold(sv, 700)
     assert r150["expected"] < r700["expected"] and r700["p90"] >= r700["p50"] >= 0
     # interpolation stays between the grid values; no log falls back to the prior

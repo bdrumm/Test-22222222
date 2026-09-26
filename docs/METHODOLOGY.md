@@ -639,9 +639,10 @@ network's behaviour. On the published data the feed runs about 20–25 s
 optimistic one to three stops out.
 
 **Hold survival.** From the hold log (§9l, terminals excluded): for a train
-already held *e* seconds (150, 240, 360, 600, 900, 1800), the expected, median
-and 90th-percentile *remaining* hold and the chance it clears within two
-minutes, each shrunk toward a prior of 300 / 180 / 720 s. The scored live
+already held *e* seconds (150, 240, 360, 600, 900, 1800), the expected
+(winsorized at 30 minutes, so a few multi-hour holds do not dominate the point
+estimate), median and 90th-percentile *remaining* hold and the chance it clears
+within two minutes, each shrunk toward a prior of 300 / 180 / 720 s. The scored live
 forecasts (§9k) showed the fixed "ten more minutes" scenario was biased by
 +11 minutes for held trains; conditioning on the time already held is what the
 data supports.
