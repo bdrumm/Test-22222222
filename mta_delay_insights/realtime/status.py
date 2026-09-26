@@ -361,7 +361,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
                targets: list[dict], models: dict[str, PropagationModel] | None, now: float | None = None,
                source: str = "live", journeys: list | None = None, journey_models: dict | None = None,
                weather_daily: pd.DataFrame | None = None, events_df: pd.DataFrame | None = None,
-               learned=None, store=None, nws_df=None, climatology: dict | None = None) -> dict:
+               learned=None, store=None, nws_df=None, climatology: dict | None = None, hold_model: dict | None = None) -> dict:
     """Assemble the full live snapshot. ``targets`` are resolved target dicts (see pipeline.lib.resolve_target);
     ``journeys`` are JourneySpec objects with optional fitted ``journey_models``."""
     now = float(now or datetime.now(NY_TZ).timestamp())
@@ -386,7 +386,7 @@ def build_live(feed_bytes: dict[str, bytes], alerts_df: pd.DataFrame | None, sta
                 d = leg.from_stop[-1] if leg.from_stop and leg.from_stop[-1] in "NS" else "N"
                 pairs += [(str(r), d) for r in leg.routes]
         pairs = sorted(set(pairs))
-        sims = simulate_routes(trains, static, pairs, now, lctx)
+        sims = simulate_routes(trains, static, pairs, now, lctx, hold_model=hold_model)
         for st in stations:
             st["scenarios"] = station_scenarios(sims, st["stop_id"], now)
     except Exception as exc:  # the simulation is an add-on; never break the snapshot

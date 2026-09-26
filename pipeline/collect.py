@@ -86,6 +86,13 @@ def main(argv=None) -> int:
                 logging.info("learned model loaded (n_train=%s)", learned.n_train)
             except Exception as exc:
                 logging.warning("learned model unreadable: %s", exc)
+        hold_model = None
+        cmf = Path(args.models_dir).parent / "client_model.json"
+        if cmf.exists():
+            try:
+                hold_model = json.loads(cmf.read_text()).get("hold_survival")
+            except Exception as exc:
+                logging.warning("client model unreadable: %s", exc)
         for t in resolved:
             rr = lib.resolve_target(static, t); t["upstream"], t["terminals"] = rr["upstream"], rr["terminals"]
             mf = Path(args.models_dir) / f"{t['id']}.json"
@@ -102,7 +109,7 @@ def main(argv=None) -> int:
             alerts_df = alerts_src.alerts_frame(c.last_alerts) if c.last_alerts else c.store.alerts()
             live = build_live(dict(c.last_feed_bytes), alerts_df, static, resolved, models, now, source="pipeline-snapshot",
                               journeys=journeys, journey_models=jmodels, weather_daily=weather_daily, events_df=events_df,
-                              learned=learned, store=store, nws_df=nws_df, climatology=climatology)
+                              learned=learned, store=store, nws_df=nws_df, climatology=climatology, hold_model=hold_model)
             Path(args.live_out).write_text(json.dumps(live, default=str))
             try:
                 from mta_delay_insights.realtime.evaluate import projections_from_live

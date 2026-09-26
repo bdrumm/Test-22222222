@@ -36,26 +36,37 @@ class _Proj:
     train: LiveTrain
     times: dict          # stop_id -> projected arrival ts
     knock_on_sec: float = 0.0
+    hold_extra_sec: float = 0.0
+
+
+def hold_extra_for(train: LiveTrain, scenario: str, hold_extra: float, hold_model: dict | None) -> float:
+    """Extra time a held or stalled train still loses under a scenario. With a hold-survival table (from the
+    hold log, see client_model.fit_hold_survival) the baseline adds the expected remaining hold given the time
+    already held and ``hold_persists`` the 90th percentile; without one, only ``hold_persists`` adds the fixed
+    ``hold_extra``."""
+    if not (train.holding or train.stalled):
+        return 0.0
+    if hold_model:
+        from .client_model import remaining_hold
+        rem = remaining_hold(hold_model, float(train.since_update_sec or 0.0))
+        return {"baseline": rem["expected"], "hold_persists": rem["p90"], "clears_now": 0.0}.get(scenario, rem["expected"])
+    return hold_extra if scenario == "hold_persists" else 0.0
 
 
 def _sched(static: StaticGTFS, train: LiveTrain, stop: str) -> float | None:
     return static.scheduled_arrival(train.trip_id, stop, train.service_date) if train.service_date else None
 
 
-def _base_times(train: LiveTrain, seq: list[str], static: StaticGTFS, now: float, learned, scenario: str, hold_extra: float) -> dict:
-    """Unconstrained projected arrival per remaining stop of the sequence."""
+def _base_times(train: LiveTrain, seq: list[str], static: StaticGTFS, now: float, learned, scenario: str, hold_extra: float,
+                hold_model: dict | None = None) -> tuple[dict, float]:
+    """Unconstrained projected arrival per remaining stop of the sequence, and the hold extra applied."""
     times = {}
     idx = {s: i for i, s in enumerate(seq)}
     remaining = [(s, e) for s, e in train.stops if s in idx]
     if not remaining:
-        return times
+        return times, 0.0
     # extra time the train will still lose in its current state
-    extra = 0.0
-    if train.holding or train.stalled:
-        if scenario == "hold_persists":
-            extra = hold_extra
-        elif scenario == "clears_now":
-            extra = 0.0
+    extra = hold_extra_for(train, scenario, hold_extra, hold_model)
     lp_cache = {}
     if learned is not None:
         try:
@@ -76,12 +87,12 @@ def _base_times(train: LiveTrain, seq: list[str], static: StaticGTFS, now: float
             t = max(t, prev_t + 30.0)
         times[s] = t
         prev_t = t
-    return times
+    return times, extra
 
 
 def simulate_line(trains: list[LiveTrain], static: StaticGTFS, route: str, direction: str, now: float, learned=None,
                   scenario: str = "baseline", hold_extra_sec: float = DEFAULT_HOLD_EXTRA_SEC, horizon_sec: float = 3600.0,
-                  min_headway_sec: float = MIN_HEADWAY_SEC) -> dict:
+                  min_headway_sec: float = MIN_HEADWAY_SEC, hold_model: dict | None = None) -> dict:
     seq = static.canonical_stop_sequence(route, direction)
     idx = {s: i for i, s in enumerate(seq)}
     mine = [t for t in trains if str(t.route_id) == str(route) and t.started and (t.direction or direction) == direction and any(s in idx for s, _ in t.stops)]
@@ -94,7 +105,7 @@ def simulate_line(trains: list[LiveTrain], static: StaticGTFS, route: str, direc
     projs: list[_Proj] = []
     last_at: dict[str, float] = {}     # stop -> latest projected arrival of a train ahead
     for t in mine:
-        base = _base_times(t, seq, static, now, learned, scenario, hold_extra_sec)
+        base, extra = _base_times(t, seq, static, now, learned, scenario, hold_extra_sec, hold_model)
         times, knock = {}, 0.0
         shift = 0.0
         for s in seq:
@@ -108,7 +119,7 @@ def simulate_line(trains: list[LiveTrain], static: StaticGTFS, route: str, direc
                 want = ahead + min_headway_sec
             times[s] = want
             last_at[s] = want
-        projs.append(_Proj(t, times, knock))
+        projs.append(_Proj(t, times, knock, extra))
     # per-stop headways from the projected arrivals in the horizon
     stops_out = []
     worst = {"gap_sec": 0.0, "stop_id": None, "at_ts": None}
@@ -120,21 +131,25 @@ def simulate_line(trains: list[LiveTrain], static: StaticGTFS, route: str, direc
             worst = {"gap_sec": float(gap), "stop_id": s, "at_ts": float(arr[int(np.argmax(hws)) + 1])}
         stops_out.append({"stop_id": s, "name": static.stop_name(s), "n_arrivals": len(arr), "next_ts": arr[0] if arr else None,
                           "max_headway_sec": float(gap) if gap else None, "mean_headway_sec": float(np.mean(hws)) if hws else None})
-    return {"route": route, "direction": direction, "scenario": scenario, "hold_extra_sec": hold_extra_sec if scenario == "hold_persists" else 0.0,
+    if scenario == "hold_persists":
+        entry_extra = max((p.hold_extra_sec for p in projs), default=0.0) if hold_model else hold_extra_sec
+    else:
+        entry_extra = 0.0
+    return {"route": route, "direction": direction, "scenario": scenario, "hold_extra_sec": entry_extra, "hold_model": bool(hold_model),
             "now": now, "stops": [{"stop_id": s, "name": static.stop_name(s)} for s in seq],
             "trains": [{"trip_id": p.train.trip_id, "train_id": p.train.train_id, "points": [[idx[s], round(v)] for s, v in p.times.items() if v <= now + horizon_sec + 900],
-                        "knock_on_sec": round(p.knock_on_sec), "holding": p.train.holding, "stalled": p.train.stalled,
+                        "knock_on_sec": round(p.knock_on_sec), "hold_extra_sec": round(p.hold_extra_sec), "holding": p.train.holding, "stalled": p.train.stalled,
                         "lateness_sec": p.train.effective_lateness_sec} for p in projs],
             "per_stop": stops_out, "worst_gap": worst if worst["stop_id"] else None,
             "n_knock_on": sum(1 for p in projs if p.knock_on_sec >= 60), "knock_on_total_sec": round(sum(p.knock_on_sec for p in projs))}
 
 
 def simulate_routes(trains: list[LiveTrain], static: StaticGTFS, routes: list[tuple[str, str]], now: float, learned=None,
-                    scenarios: tuple = SCENARIOS, hold_extra_sec: float = DEFAULT_HOLD_EXTRA_SEC) -> list[dict]:
+                    scenarios: tuple = SCENARIOS, hold_extra_sec: float = DEFAULT_HOLD_EXTRA_SEC, hold_model: dict | None = None) -> list[dict]:
     """Baseline for every (route, direction); the hold scenarios only where a train is holding or stalled."""
     out = []
     for route, direction in routes:
-        base = simulate_line(trains, static, route, direction, now, learned, "baseline", hold_extra_sec)
+        base = simulate_line(trains, static, route, direction, now, learned, "baseline", hold_extra_sec, hold_model=hold_model)
         if not base["trains"]:
             continue
         entry = {"route": route, "direction": direction, "scenarios": {"baseline": base}}
@@ -142,7 +157,7 @@ def simulate_routes(trains: list[LiveTrain], static: StaticGTFS, routes: list[tu
         if disturbed:
             for sc in scenarios:
                 if sc != "baseline":
-                    entry["scenarios"][sc] = simulate_line(trains, static, route, direction, now, learned, sc, hold_extra_sec)
+                    entry["scenarios"][sc] = simulate_line(trains, static, route, direction, now, learned, sc, hold_extra_sec, hold_model=hold_model)
         entry["disturbed"] = disturbed
         out.append(entry)
     return out
@@ -157,7 +172,8 @@ def station_scenarios(sims: list[dict], stop_id: str, now: float, n: int = 4) ->
     headline = None
     if worst:
         he = worst["hold_effect"]
-        lead = f"If the hold on the {worst['route']} persists {he['hold_extra_sec'] / 60:.0f} more minutes, "
+        lead = (f"If the hold on the {worst['route']} lasts {he['hold_extra_sec'] / 60:.0f} more minutes (the 90th percentile for a hold this long), "
+                if worst.get("hold_model") else f"If the hold on the {worst['route']} persists {he['hold_extra_sec'] / 60:.0f} more minutes, ")
         if he["extra_sec"] and max(he["extra_sec"]) < 60:
             headline = lead + f"the next {worst['route']} trains here are unaffected (the held train is behind them)"
         elif he["extra_sec"]:
@@ -192,5 +208,6 @@ def _station_scenario(entry: dict, stop_id: str, now: float, n: int) -> dict | N
             hws = [b - a for a, b in zip([t for t, _ in hp][:-1], [t for t, _ in hp][1:])]
             out["hold_effect"] = {"extra_sec": [round(d) for d in deltas], "max_headway_sec": round(max(hws)) if hws else None,
                                   "hold_extra_sec": entry["scenarios"]["hold_persists"]["hold_extra_sec"]}
+            out["hold_model"] = bool(entry["scenarios"]["hold_persists"].get("hold_model"))
         return out
     return None

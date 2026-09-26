@@ -618,6 +618,72 @@ speed) at all; checked on live feeds, every vehicle carries only
   for the current hour (scheduled speeds until runs exist), and the path
   insights name the slowest measured segment.
 
+## 9n. Client prediction engine
+
+The learned quantile model (§8) and the look-back propagation model (§9a)
+need the arrival store, so a browser or a phone cannot run them. The clients
+therefore run a table-driven engine whose tables the site build fits from the
+same history (`mta_delay_insights/realtime/client_model.py`, published as
+`data/client_model.json`) and whose reference implementation is tested
+against its ports in `site/rt-client.js` and `ios/WhichWay/.../Predictor.swift`
+(a Node harness and a Swift fixture reproduce it to the microsecond).
+
+**ETA calibration.** Every feed ETA sampled during collection is matched to
+the arrival it predicted. The error (arrival − ETA) is summarised by route and
+forecast horizon bucket (0–2, 2–5, 5–10, 10–20, 20–40, 40+ minutes): the
+median as the bias, the 10th and 90th percentiles as the 80% window. Each
+route's cell is shrunk toward the all-routes cell with a prior weight of 20
+samples, and the all-routes cell toward a physical prior (bias 0, spread
+widening with the horizon), so a route with little history inherits the
+network's behaviour. On the published data the feed runs about 20–25 s
+optimistic one to three stops out.
+
+**Hold survival.** From the hold log (§9l, terminals excluded): for a train
+already held *e* seconds (150, 240, 360, 600, 900, 1800), the expected, median
+and 90th-percentile *remaining* hold and the chance it clears within two
+minutes, each shrunk toward a prior of 300 / 180 / 720 s. The scored live
+forecasts (§9k) showed the fixed "ten more minutes" scenario was biased by
++11 minutes for held trains; conditioning on the time already held is what the
+data supports.
+
+**Lateness carry.** From the arrivals matched to the timetable: for each route
+and each *k* = 1…12 stops ahead, the least-squares line from lateness at the
+current stop to lateness *k* stops later (slope clipped to [0, 1.5]) and the
+residual spread, shrunk toward carry-through (slope 1, intercept 0) with a
+prior spread of 60 + 20*k* s. Stops are counted along the canonical pattern.
+
+**Prediction.** For a train and each remaining stop:
+
+1. *Feed estimate*: the feed ETA plus the bias for its route and horizon,
+   window from the calibrated percentiles; when the reported position proves
+   the feed optimistic (§9j), the whole trajectory shifts by the difference.
+2. *State estimate* (stops beyond the next one, when the timetable has the
+   train): scheduled arrival + intercept + slope × the position-fused
+   lateness, variance the residual spread squared.
+3. *Blend*: inverse-variance weights, window ±1.28 σ of the combined variance.
+4. *Hold correction* for a held or stalled train: the expected remaining hold
+   (`baseline`), its 90th percentile (`hold_persists`) or nothing
+   (`clears_now`), added to every stop.
+5. Stops stay monotone (≥ 30 s apart, never before now) and the line's trains
+   are projected furthest-along first with the 90-second minimum headway of
+   §9j, so a held train pushes its followers back (the knock-on).
+
+The web Travel page and the iOS app rank paths, build itineraries and draw the
+timeline from these ETAs, show the 80% window and the feed's own time
+alongside, and expose the three scenarios when a train on the path is held.
+
+## 9o. Hold survival in the server-side scenarios
+
+The forward simulation of §9j uses the same hold-survival table when one is
+available (the site build fits it from the hold log; the collector reads the
+published one; the local server refits from its store every six hours): the
+`baseline` adds the expected remaining hold given the time already held, and
+`hold_persists` the 90th percentile instead of a fixed 600 s. Each projected
+train carries the extra it was given (`hold_extra_sec`), the scenario entry
+the largest one, and the station headline says so ("lasts N more minutes, the
+90th percentile for a hold this long"). Without a table the old fixed
+behaviour is kept, so the scored forecasts remain comparable.
+
 ## 10. Validation
 
 `synthetic.py` builds a mini Lexington-Avenue-style corridor (6 local, 4

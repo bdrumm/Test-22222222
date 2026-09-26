@@ -255,12 +255,12 @@ def train_learned(store: Store, static: StaticGTFS, alerts: pd.DataFrame, contex
 
 def live_snapshot(static: StaticGTFS, resolved: list[dict], models: dict, alerts: pd.DataFrame, now: datetime,
                   feed_bytes: dict[str, bytes] | None, journeys: list | None = None, journey_models: dict | None = None,
-                  context: dict | None = None, learned: ArrivalModel | None = None, store: Store | None = None) -> dict | None:
+                  context: dict | None = None, learned: ArrivalModel | None = None, store: Store | None = None, hold_model: dict | None = None) -> dict | None:
     if not feed_bytes:
         return None
     try:
         ctx = context or {}
-        return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot",
+        return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot", hold_model=hold_model,
                           journeys=journeys, journey_models=journey_models, weather_daily=ctx.get("weather_daily"), events_df=ctx.get("events"),
                           learned=learned, store=store, nws_df=ctx.get("nws_alerts"), climatology=ctx.get("_climatology"))
     except Exception as exc:
@@ -301,7 +301,17 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
         recent = hz[hz["stopped_from_ts"] >= now.timestamp() - 2 * 3600]
         if not recent.empty:
             store.insert_dwells(recent)
-    live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context, learned, store)
+    # the client prediction engine: tables the browser and the phone apply to the live feeds
+    try:
+        from mta_delay_insights.realtime.client_model import fit_client_model
+        cm_arr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
+        client_model = fit_client_model(context.get("_eta_samples"), cm_arr, context.get("_holds"), static, now.isoformat())
+    except Exception as exc:
+        logging.warning("client model failed: %s", exc)
+        from mta_delay_insights.realtime.client_model import fit_client_model
+        client_model = fit_client_model(None, None, None, None, now.isoformat()) | {"error": str(exc)[:200]}
+    (out_data / "client_model.json").write_text(json.dumps(client_model, default=str))
+    live = live_snapshot(static, resolved, models, alerts, now, feed_bytes, specs, jmodels, context, learned, store, hold_model=client_model.get("hold_survival"))
     try:
         from mta_delay_insights.realtime.client_export import export_client_schedule
         _, feeds_all, _ = lib.stops_and_feeds(static, targets)
@@ -375,16 +385,6 @@ def build(data_dir: Path, site_src: Path, out: Path, static: StaticGTFS, targets
     except Exception as exc:
         logging.warning("hold analysis failed: %s", exc); hs = {"n": 0, "error": str(exc)[:200]}
     (out_data / "holds.json").write_text(json.dumps(hs, default=str))
-    # the client prediction engine: tables the browser and the phone apply to the live feeds
-    try:
-        from mta_delay_insights.realtime.client_model import fit_client_model
-        cm_arr = pd.concat([store.arrivals(), context.get("_network_arrivals", pd.DataFrame())], ignore_index=True).drop_duplicates(["trip_key", "stop_id"])
-        client_model = fit_client_model(context.get("_eta_samples"), cm_arr, context.get("_holds"), static, now.isoformat())
-    except Exception as exc:
-        logging.warning("client model failed: %s", exc)
-        from mta_delay_insights.realtime.client_model import fit_client_model
-        client_model = fit_client_model(None, None, None, None, now.isoformat()) | {"error": str(exc)[:200]}
-    (out_data / "client_model.json").write_text(json.dumps(client_model, default=str))
     try:
         from mta_delay_insights.analysis.segments import segment_profile
         sp = segment_profile(context.get("_segment_runs"), static)

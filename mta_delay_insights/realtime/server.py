@@ -40,6 +40,8 @@ class LiveState:
         self.journey_models: dict = {}
         self.learned = None
         self.learned_path = Path(learned_path) if learned_path else None
+        self.hold_model: dict | None = None      # hold survival from the store's dwells (refit every 6 h)
+        self._hold_model_at: float | None = None
         self.last_live: dict = {}
         self.started_at = time.time()
         self.polls = 0
@@ -140,8 +142,15 @@ class LiveState:
             except Exception as exc:
                 log.warning("alerts failed: %s", exc)
         self.polls += 1
+        if self._hold_model_at is None or now - self._hold_model_at > 6 * 3600:
+            try:
+                from .client_model import fit_hold_survival
+                self.hold_model = fit_hold_survival(self.store.dwells(start_ts=now - 30 * 86400), self.static)
+            except Exception as exc:
+                log.warning("hold survival refit failed: %s", exc)
+            self._hold_model_at = now
         live = build_live(feed_bytes, self.alerts_df, self.static, self.targets, self.models, now, source="local-realtime",
-                          journeys=self.journeys, journey_models=self.journey_models, learned=self.learned, store=self.store)
+                          journeys=self.journeys, journey_models=self.journey_models, learned=self.learned, store=self.store, hold_model=self.hold_model)
         self._record_forecasts(live, now)
         with self.lock:
             self.last_live = live

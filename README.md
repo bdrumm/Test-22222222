@@ -263,12 +263,43 @@ profile per segment (median realized run against the scheduled run, by hour,
 `data/segments.json`), which the Travel diagram draws as a km/h layer and
 uses to name the slowest measured segment on a path.
 
+### Prediction engine on the client
+
+Neither the browser nor the phone has the arrival store the learned and
+look-back models need, so the site build fits a table-driven engine from the
+same history and publishes it as `data/client_model.json`: the feed's ETA
+error by line and forecast horizon (bias and 80% window, from 30 000+ sampled
+ETAs matched to arrivals), the remaining hold given the time a train has
+already been held (from the hold log; the fixed "ten more minutes" scenario
+was +11 min biased on the scored forecasts), and how lateness carries from a
+train's current stop to each stop ahead, per line. `site/rt-client.js` and
+the iOS app apply it to every train after each poll: the calibrated feed ETA
+is blended by inverse variance with the timetable-carried state estimate,
+corrected for a feed the position proves optimistic and for a train being
+held, kept monotone, and cascaded through the line's 90-second minimum
+headway. The Travel page and the app rank paths and build itineraries from
+these ETAs, show the 80% window and the feed's own time next to each arrival,
+and offer three hold scenarios (ends as usual, drags on, clears now) whenever a
+train on the path is held. The reference implementation is
+`mta_delay_insights/realtime/client_model.py`; the JavaScript and Swift ports
+are tested against it (`tests/test_client_model.py`, `ios/WhichWayCore`).
+The server-side forward simulation uses the same hold-survival table for its
+scenarios. Methodology §9n–9o.
+
+The Travel page's detail has three views of the selected path: **Track** (the
+horizontal diagram with the trains gliding on it), **Timeline** (a Marey chart
+of the next 45 minutes with the feed's projections dashed, the engine's
+dotted and the recommended itinerary in red) and **Departure board**
+(countdowns to boarding with the predicted arrival and its window).
+
 ### 30-second live mode in the browser
 
 The MTA feed endpoint allows cross-origin requests, so the published site can
 poll the feeds itself. The "live feeds" toggle on the Live page fetches the
-relevant line-group feeds every 30 seconds, decodes the protobuf in the
-browser (`site/rt-client.js`, no dependencies), and computes the board for
+relevant line-group feeds, aligned to the feeds' own 30-second publication
+(the next poll is due just after the next timestamp is expected; a poll that
+returns the previous timestamp looks again after five seconds), decodes the
+protobuf in the browser (`site/rt-client.js`, no dependencies), and computes the board for
 every monitored platform: next arrivals, lateness against today's timetable
 (shipped by the build as `data/client_schedule.json`), positions, holds,
 stalls, feed-optimistic corrections, gaps and bunching, and the "if the hold
@@ -466,7 +497,11 @@ shapes and tested on fixture payloads; run them where the network allows.
 ## iOS app (WhichWay)
 
 `ios/WhichWay/` is a SwiftUI app (iOS 17+, Xcode 16 project) that turns the travel mode into a phone travel
-assistant: origin and destination pickers, every viable path ranked by expected and live time, a live track
-diagram per leg with the trains moving on it, itineraries with connection margins, the line board, and the
-published layers (typical time lost at this hour, hold risk, measured segment speeds, alerts). It reads the MTA
-feeds directly every 30 s and the published `data/` files from the site. See `ios/README.md`.
+assistant running on the prediction engine: a Now card (which train to take, the countdown to boarding, the
+predicted arrival with its 80% window and the feed's own time), every viable path ranked by expected and live
+time, hold scenarios when a train on the path is held, and five views of the selected path (Track, Time, Board,
+Map, Hours), plus itineraries with connection margins, the line board and the published layers (typical time
+lost at this hour, hold risk, measured segment speeds, alerts). It reads the MTA feeds directly, aligned to
+their 30-second publication, and the published `data/` files from the site. The non-UI code is a package
+(`ios/WhichWayCore`) tested against the Python engine, and `.github/workflows/ios.yml` compiles the app and runs
+those tests on a macOS runner on every push. See `ios/README.md`.
