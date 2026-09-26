@@ -28,9 +28,11 @@ every train, and layers the published data from this repository's site on top.
   what happens if you miss it, where each train is and its last measured speed) and insights (worst stop on
   the stretch, slowest measured segment, active alerts, trains held or overdue now, what the engine is
   calibrated on).
-- **Line** tab. One line direction with every started train on the track and a list with lateness against the
-  timetable (`~` marks a nearest-trip match), position and time there, holds, overdue trains, feed-optimistic
-  ETAs, track changes and the last measured segment speed.
+- **Line** tab. One line direction with every started train on the track, the engine's projection for the next
+  hour (largest gap, trains held back by the train ahead, the scenario switch when a train is held) and a list
+  with each train's feed and engine ETA, lateness against the timetable (`~` marks a nearest-trip match),
+  position and time there, holds, overdue trains, feed-optimistic ETAs, track changes and the last measured
+  segment speed.
 - **Settings**. Base URL of the published data (defaults to the GitHub Pages site), poll interval, data status.
 
 ## The prediction engine

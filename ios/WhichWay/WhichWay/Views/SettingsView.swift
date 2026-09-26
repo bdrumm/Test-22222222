@@ -26,6 +26,8 @@ struct SettingsView: View {
                     LabeledContent("Hold log", value: data.holds.map { "\($0.n) holds" } ?? "–")
                     LabeledContent("Segment runs", value: data.segments.map { "\($0.n) runs · \($0.byKey.count) segments" } ?? "–")
                     LabeledContent("Deviation grids", value: "\(data.deviations.count) lines")
+                    LabeledContent("Prediction engine", value: data.model?.summary ?? "no tables yet (physical priors)")
+                    LabeledContent("Next poll", value: data.isDemo ? "demo clock" : "in \(Int(data.nextPollSec.rounded())) s, aligned to the feed")
                     LabeledContent("Feeds", value: data.feeds.keys.sorted().joined(separator: ", "))
                     LabeledContent("Alerts", value: "\(data.alerts.count) active")
                     LabeledContent("Last poll", value: data.lastUpdate.map { Fmt.hhmmss($0.timeIntervalSince1970) } ?? "–")
