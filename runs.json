@@ -4700,5 +4700,135 @@
 "skipped": [
 "ticketmaster"
 ]
+},
+{
+"ts": 1790493819.435447,
+"iso": "2026-09-27T03:23:39.435448-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace",
+"bdfm",
+"g",
+"jz",
+"l",
+"nqrw",
+"si"
+],
+"polls": 96,
+"errors": 0,
+"arrivals": 508,
+"flushed": 88,
+"alerts": 822,
+"forecast_eval": 142,
+"duration_sec": 3002,
+"written": {
+"2026-09-26": 6085,
+"2026-09-27": 494
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 1200
+},
+{
+"feed": "ace",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 485
+},
+{
+"feed": "bdfm",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 586
+},
+{
+"feed": "g",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 58
+},
+{
+"feed": "jz",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 157
+},
+{
+"feed": "l",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 120
+},
+{
+"feed": "nqrw",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 418
+},
+{
+"feed": "si",
+"polls": 96,
+"first_ts": 1790490817.6423182,
+"last_ts": 1790493817.0071104,
+"arrivals": 72
+}
+]
+},
+{
+"ts": 1790493820.4024343,
+"iso": "2026-09-27T03:23:39.969367-04:00",
+"kind": "backfill",
+"fetched": [],
+"failed": {
+"2026-09-26": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-09-26_csv.tar.xz"
+}
+},
+{
+"ts": 1790493842.477829,
+"iso": "2026-09-27T03:24:02.477830-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:6188",
+"delay_incidents:8120",
+"major_incidents:1242",
+"customer_journey:1248",
+"stations:496",
+"ridership_hourly:5880",
+"weather_daily:61",
+"alerts_archive:47307(+168)",
+"nws_alerts:38",
+"elevator_outages:62",
+"nyc_events:5000",
+"news:1",
+"events:2404"
+],
+"failed": {},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636",
+"4av-9st-fg-n": "608",
+"4av-9st-fg-s": "608",
+"4av-9st-r-n": "608",
+"4av-9st-r-s": "608",
+"14st-8av-ace-n": "618",
+"14st-8av-ace-s": "618",
+"8av-l-n": "618",
+"8av-l-s": "618"
+},
+"skipped": [
+"ticketmaster"
+]
 }
 ]
