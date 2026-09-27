@@ -1,0 +1,13 @@
+// Release configuration: what TestFlight and the App Store get. Your team and bundle id come from
+// Local.xcconfig (git-ignored); the data source is always the published site, whatever Local.xcconfig says.
+WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/Test-22222222/data/
+PRODUCT_BUNDLE_IDENTIFIER = com.whichway.app
+DEVELOPMENT_TEAM =
+
+// Carried into the app through Config/Info.plist (see Debug.xcconfig). Read by DataService.defaultBase.
+INFOPLIST_FILE = Config/Info.plist
+
+#include? "Local.xcconfig"
+
+// after the include: a local server address in Local.xcconfig must not reach a release build
+WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/Test-22222222/data/

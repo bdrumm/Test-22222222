@@ -26,7 +26,10 @@ dev = ["pytest>=7", "pytest-cov"]
 mta-insights = "mta_delay_insights.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["mta_delay_insights*"]
+include = ["mta_delay_insights*", "pipeline*"]
+
+[tool.setuptools.package-data]
+pipeline = ["targets.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

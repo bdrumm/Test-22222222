@@ -7,7 +7,8 @@ WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/Test-22222222/data/
 PRODUCT_BUNDLE_IDENTIFIER = com.whichway.app
 DEVELOPMENT_TEAM =
 
-// Read by DataService.defaultBase from the generated Info.plist.
-INFOPLIST_KEY_WhichWayBaseURL = $(WHICHWAY_BASE_URL)
+// Carried into the app through Config/Info.plist, which Xcode merges into the generated Info.plist
+// (INFOPLIST_KEY_* only works for Xcode's own keys). Read by DataService.defaultBase.
+INFOPLIST_FILE = Config/Info.plist
 
 #include? "Local.xcconfig"

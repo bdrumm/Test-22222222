@@ -47,7 +47,8 @@ func segmentTrips(_ lb: LineBoard, line: LineTopology, fromIdx: Int, toIdx: Int,
     var out: [TripCandidate] = []
     for t in lb.trains {
         guard let board = t.points.first(where: { $0.idx == fromIdx })?.ts, let arrive = t.points.first(where: { $0.idx == toIdx })?.ts else { continue }
-        if board < now - 60 || arrive <= board { continue }
+        // a train whose boarding time has passed is gone: the countdown reaching zero moves on to the next one
+        if board < now || arrive <= board { continue }
         var c = TripCandidate(train: t, key: lb.key, boardTs: board, arriveTs: arrive, rideSec: arrive - board, schedRideSec: sched, stopsToOrigin: max(1, fromIdx - t.nextIdx + 1))
         if let pt = t.pred?.point(at: toIdx) { c.arriveLoTs = pt.loTs; c.arriveHiTs = pt.hiTs; c.arriveSource = pt.source }
         c.feedArriveTs = t.feedPoints?.first(where: { $0.idx == toIdx })?.ts

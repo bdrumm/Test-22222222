@@ -6,12 +6,52 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5A1C0F0A2D2A00010000B00C /* WhichWayLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5A1C0F0A2D2A00010000B001 /* WhichWayLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5A1C0F0A2D2A00010000B00E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5A1C0F0A2D2A00010000A00A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5A1C0F0A2D2A00010000B007;
+			remoteInfo = WhichWayLiveActivity;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5A1C0F0A2D2A00010000B00B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				5A1C0F0A2D2A00010000B00C /* WhichWayLiveActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		5A1C0F0A2D2A00010000A001 /* WhichWay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhichWay.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A1C0F0A2D2A00010000A010 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		5A1C0F0A2D2A00010000A011 /* Local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text; path = Local.xcconfig.example; sourceTree = "<group>"; };
 		5A1C0F0A2D2A00010000A012 /* UnionSquare.gpx */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = UnionSquare.gpx; sourceTree = "<group>"; };
+		5A1C0F0A2D2A00010000A015 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		5A1C0F0A2D2A00010000B001 /* WhichWayLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhichWayLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5A1C0F0A2D2A00010000B00F /* Exceptions for "WhichWayLiveActivity" folder in "WhichWayLiveActivity" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 5A1C0F0A2D2A00010000B007 /* WhichWayLiveActivity */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5A1C0F0A2D2A00010000A002 /* WhichWay */ = {
@@ -19,10 +59,30 @@
 			path = WhichWay;
 			sourceTree = "<group>";
 		};
+		5A1C0F0A2D2A00010000B002 /* WhichWayLiveActivity */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5A1C0F0A2D2A00010000B00F /* Exceptions for "WhichWayLiveActivity" folder in "WhichWayLiveActivity" target */,
+			);
+			path = WhichWayLiveActivity;
+			sourceTree = "<group>";
+		};
+		5A1C0F0A2D2A00010000B003 /* WhichWayShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WhichWayShared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		5A1C0F0A2D2A00010000A003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5A1C0F0A2D2A00010000B004 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -36,16 +96,28 @@
 			isa = PBXGroup;
 			children = (
 				5A1C0F0A2D2A00010000A002 /* WhichWay */,
+				5A1C0F0A2D2A00010000B003 /* WhichWayShared */,
+				5A1C0F0A2D2A00010000B002 /* WhichWayLiveActivity */,
 				5A1C0F0A2D2A00010000A013 /* Config */,
 				5A1C0F0A2D2A00010000A014 /* Simulation */,
 				5A1C0F0A2D2A00010000A005 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
+		5A1C0F0A2D2A00010000A005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5A1C0F0A2D2A00010000A001 /* WhichWay.app */,
+				5A1C0F0A2D2A00010000B001 /* WhichWayLiveActivity.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		5A1C0F0A2D2A00010000A013 /* Config */ = {
 			isa = PBXGroup;
 			children = (
 				5A1C0F0A2D2A00010000A010 /* Debug.xcconfig */,
+				5A1C0F0A2D2A00010000A015 /* Release.xcconfig */,
 				5A1C0F0A2D2A00010000A011 /* Local.xcconfig.example */,
 			);
 			path = Config;
@@ -59,14 +131,6 @@
 			path = Simulation;
 			sourceTree = "<group>";
 		};
-		5A1C0F0A2D2A00010000A005 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				5A1C0F0A2D2A00010000A001 /* WhichWay.app */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -77,13 +141,16 @@
 				5A1C0F0A2D2A00010000A008 /* Sources */,
 				5A1C0F0A2D2A00010000A003 /* Frameworks */,
 				5A1C0F0A2D2A00010000A009 /* Resources */,
+				5A1C0F0A2D2A00010000B00B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				5A1C0F0A2D2A00010000B00D /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				5A1C0F0A2D2A00010000A002 /* WhichWay */,
+				5A1C0F0A2D2A00010000B003 /* WhichWayShared */,
 			);
 			name = WhichWay;
 			packageProductDependencies = (
@@ -91,6 +158,29 @@
 			productName = WhichWay;
 			productReference = 5A1C0F0A2D2A00010000A001 /* WhichWay.app */;
 			productType = "com.apple.product-type.application";
+		};
+		5A1C0F0A2D2A00010000B007 /* WhichWayLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5A1C0F0A2D2A00010000B008 /* Build configuration list for PBXNativeTarget "WhichWayLiveActivity" */;
+			buildPhases = (
+				5A1C0F0A2D2A00010000B005 /* Sources */,
+				5A1C0F0A2D2A00010000B004 /* Frameworks */,
+				5A1C0F0A2D2A00010000B006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				5A1C0F0A2D2A00010000B002 /* WhichWayLiveActivity */,
+				5A1C0F0A2D2A00010000B003 /* WhichWayShared */,
+			);
+			name = WhichWayLiveActivity;
+			packageProductDependencies = (
+			);
+			productName = WhichWayLiveActivity;
+			productReference = 5A1C0F0A2D2A00010000B001 /* WhichWayLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -103,6 +193,9 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					5A1C0F0A2D2A00010000A006 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					5A1C0F0A2D2A00010000B007 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -122,12 +215,20 @@
 			projectRoot = "";
 			targets = (
 				5A1C0F0A2D2A00010000A006 /* WhichWay */,
+				5A1C0F0A2D2A00010000B007 /* WhichWayLiveActivity */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		5A1C0F0A2D2A00010000A009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5A1C0F0A2D2A00010000B006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -144,7 +245,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5A1C0F0A2D2A00010000B005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		5A1C0F0A2D2A00010000B00D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5A1C0F0A2D2A00010000B007 /* WhichWayLiveActivity */;
+			targetProxy = 5A1C0F0A2D2A00010000B00E /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		5A1C0F0A2D2A00010000A00C /* Debug */ = {
@@ -278,9 +394,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WhichWay;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WhichWay uses your location to suggest the nearest station as your starting point.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WhichWay uses your location to suggest the nearest station as your starting point.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -298,19 +415,20 @@
 		};
 		5A1C0F0A2D2A00010000A00F /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C0F0A2D2A00010000A015 /* Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WhichWay;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WhichWay uses your location to suggest the nearest station as your starting point.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WhichWay uses your location to suggest the nearest station as your starting point.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -319,8 +437,57 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.whichway.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		5A1C0F0A2D2A00010000B009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C0F0A2D2A00010000A010 /* Debug.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WhichWayLiveActivity/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WhichWay;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(inherited).LiveActivity";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		5A1C0F0A2D2A00010000B00A /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A1C0F0A2D2A00010000A015 /* Release.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WhichWayLiveActivity/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WhichWay;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(inherited).LiveActivity";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -330,6 +497,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		5A1C0F0A2D2A00010000A007 /* Build configuration list for PBXNativeTarget "WhichWay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A1C0F0A2D2A00010000A00E /* Debug */,
+				5A1C0F0A2D2A00010000A00F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		5A1C0F0A2D2A00010000A00B /* Build configuration list for PBXProject "WhichWay" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -339,11 +515,11 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		5A1C0F0A2D2A00010000A007 /* Build configuration list for PBXNativeTarget "WhichWay" */ = {
+		5A1C0F0A2D2A00010000B008 /* Build configuration list for PBXNativeTarget "WhichWayLiveActivity" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				5A1C0F0A2D2A00010000A00E /* Debug */,
-				5A1C0F0A2D2A00010000A00F /* Release */,
+				5A1C0F0A2D2A00010000B009 /* Debug */,
+				5A1C0F0A2D2A00010000B00A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

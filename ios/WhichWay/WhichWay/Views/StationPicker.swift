@@ -2,13 +2,29 @@ import SwiftUI
 
 /// Searchable station list. With `reach` set (destination picker) only stations reachable from the origin are
 /// listed, direct ones first, each with how it is reached (direct lines, or the change to make and where).
+/// With `nearTo` and `coords` set (a commute is on) the stations closest to that station come first, nearest
+/// first with the distance, so an alternative near the commute's own station is one tap away.
 struct StationPickerSheet: View {
     let title: String
     let stations: [Station]
     let reach: [String: Reach]?
+    var nearTo: Station? = nil
+    var coords: [String: (lat: Double, lon: Double)] = [:]
     let onPick: (Station) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+
+    /// The listed stations (reach applied) closest to `nearTo`, nearest first; none while searching.
+    private var nearby: [NearbyStation] {
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty, let a = nearTo, let p = coords[a.id] else { return [] }
+        var out: [NearbyStation] = []
+        for st in stations where st.id != a.id {
+            if let r = reach, r[st.id] == nil { continue }
+            if let c = coords[st.id] { out.append(NearbyStation(station: st, meters: haversineM(p, c))) }
+        }
+        out.sort { $0.meters < $1.meters }
+        return Array(out.prefix(10))
+    }
 
     private var filtered: [Station] {
         var base = stations
@@ -29,21 +45,17 @@ struct StationPickerSheet: View {
 
     var body: some View {
         NavigationStack {
-            List(filtered) { st in
-                Button {
-                    onPick(st)
-                    dismiss()
-                } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Text(st.name).foregroundStyle(Color.primary)
-                            Spacer()
-                            RouteBullets(routes: st.routes, size: 18)
-                        }
-                        if let r = reach?[st.id] {
-                            Text(r.summary).font(.caption).foregroundStyle(r.how == "direct" ? Color.green : Color.secondary)
-                        }
+            List {
+                let near = nearby
+                if let a = nearTo, !near.isEmpty {
+                    Section("Near \(a.name)") {
+                        ForEach(near) { n in row(n.station, distance: n) }
                     }
+                    Section("All stations") {
+                        ForEach(filtered) { st in row(st, distance: nil) }
+                    }
+                } else {
+                    ForEach(filtered) { st in row(st, distance: nil) }
                 }
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Station name or line")
@@ -57,6 +69,30 @@ struct StationPickerSheet: View {
             }
         }
     }
+
+    private func row(_ st: Station, distance: NearbyStation?) -> some View {
+        Button {
+            onPick(st)
+            dismiss()
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(st.name).foregroundStyle(Color.primary)
+                    Spacer()
+                    RouteBullets(routes: st.routes, size: 18)
+                }
+                if let n = distance {
+                    Text("\(Self.distanceText(n.meters)) · about \(n.walkMinutes) min walk").font(.caption).foregroundStyle(.secondary)
+                }
+                if let r = reach?[st.id] {
+                    Text(r.summary).font(.caption).foregroundStyle(r.how == "direct" ? Color.green : Color.secondary)
+                }
+            }
+        }
+    }
+
+    /// "300 ft" below a tenth of a mile, else "0.8 mi".
+    static func distanceText(_ m: Double) -> String { Fmt.miles(m) }
 }
 
 struct StationButton: View {
@@ -77,5 +113,27 @@ struct StationButton: View {
             .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A square icon button whose glyph keeps full contrast in light and dark mode.
+struct IconButton: View {
+    let systemImage: String
+    let label: String
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
+                .frame(width: 44, height: 44)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : 0.55)
+        .accessibilityLabel(label)
     }
 }

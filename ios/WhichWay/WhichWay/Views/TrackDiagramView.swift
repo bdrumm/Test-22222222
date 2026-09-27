@@ -54,6 +54,7 @@ struct TrackDiagramView: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: true) {
                     ZStack(alignment: .topLeading) {
+                        scrollAnchors
                         layerRows
                         track
                         stops
@@ -61,10 +62,22 @@ struct TrackDiagramView: View {
                     }
                     .frame(width: width, height: height, alignment: .topLeading)
                 }
-                .onAppear { if let s = scrollTo { proxy.scrollTo("stop-\(s)", anchor: .leading) } }
+                // the first scroll waits a turn of the run loop: the track is not laid out yet when onAppear fires
+                .onAppear { if let s = scrollTo { DispatchQueue.main.async { proxy.scrollTo("stop-\(s)", anchor: .leading) } } }
                 .onChange(of: scrollTo) { _, s in
                     if let s = s { withAnimation { proxy.scrollTo("stop-\(s)", anchor: .leading) } }
                 }
+            }
+        }
+    }
+
+    /// Scroll targets: positioned views report the whole track as their frame, so the reader scrolls to these
+    /// normally laid-out cells instead, one per stop, each starting at its stop's x.
+    private var scrollAnchors: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: left, height: 1)
+            ForEach(0..<max(1, n), id: \.self) { i in
+                Color.clear.frame(width: colW, height: 1).id("stop-\(i)")
             }
         }
     }
@@ -109,7 +122,6 @@ struct TrackDiagramView: View {
                 .overlay(Circle().stroke(special ? Color.primary : Color.secondary, lineWidth: special ? 2 : 1.5))
                 .frame(width: special ? 12 : 8, height: special ? 12 : 8)
                 .position(x: x(Double(i)), y: trackY)
-                .id("stop-\(i)")
             if i == fromIdx {
                 Text("▲ board").font(.system(size: 8, weight: .bold)).fixedSize().position(x: x(Double(i)), y: trackY + 13)
             }

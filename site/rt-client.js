@@ -394,7 +394,7 @@ export function enumeratePaths(schedule, index, oId, dId, maxOptions = 8) {
         const dm2 = destByKey.get(opt.line); if (!dm2 || opt.line.split("_")[0] === m1.route) continue;
         const L2 = schedule.lines[opt.line]; const x2 = L2.stops.indexOf(opt.stop); if (x2 < 0 || dm2.idx <= x2) continue;
         if (L2.stops.slice(x2 + 1, dm2.idx).some(s => stationOf(s) === oId)) continue;   // the second leg passes back through the origin
-        raw.push({ legs: [{ key: m1.key, from: m1.stop, fromIdx: m1.idx, to: xs, toIdx: x }, { key: opt.line, from: opt.stop, fromIdx: x2, to: dm2.stop, toIdx: dm2.idx }], transfer: { stop: xs, stop2: opt.stop, station: stations.get(xst) ? stations.get(xst).name : xs, walk_sec: opt.min_sec || 120 } });
+        raw.push({ legs: [{ key: m1.key, from: m1.stop, fromIdx: m1.idx, to: xs, toIdx: x }, { key: opt.line, from: opt.stop, fromIdx: x2, to: dm2.stop, toIdx: dm2.idx }], transfer: { stop: xs, stop2: opt.stop, station: stations.get(xst) ? stations.get(xst).name : xs, walk_sec: opt.min_sec ?? 120 } });
       }
     }
   }

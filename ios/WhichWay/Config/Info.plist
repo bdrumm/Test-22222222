@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the generated Info.plist (GENERATE_INFOPLIST_FILE); kept out of the synchronized app folder, where it would also be copied as a resource. Custom keys cannot be set with
+	     INFOPLIST_KEY_*, which Xcode only honors for its own known keys. Read by DataService.defaultBase. -->
+	<key>WhichWayBaseURL</key>
+	<string>$(WHICHWAY_BASE_URL)</string>
+	<!-- Standard HTTPS only: TestFlight builds need no export-compliance answer. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSMotionUsageDescription</key>
+	<string>When you opt in, WhichWay summarises the phone's motion during a route to notice when your train pulls away, so its predictions can be checked against real trips. Nothing that identifies you is kept.</string>
+</dict>
+</plist>

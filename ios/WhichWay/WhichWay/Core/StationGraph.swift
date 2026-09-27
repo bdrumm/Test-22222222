@@ -38,9 +38,11 @@ struct StationIndex {
             if root[x] == nil { root[x] = x }
             return r
         }
+        // the smaller parent id becomes the complex's id, whatever order the lines come in: station ids are
+        // persisted (the remembered trip, saved commutes), so they must not change from one launch to the next
         func union(_ a: String, _ b: String) {
             let ra = find(a), rb = find(b)
-            if ra != rb { root[ra] = rb }
+            if ra != rb { if ra < rb { root[rb] = ra } else { root[ra] = rb } }
         }
         for (_, line) in schedule.lines {
             for sid in line.stops {
@@ -75,6 +77,13 @@ struct StationIndex {
         var r = parentOf(stopId)
         while let n = root[r], n != r { r = n }
         return r
+    }
+
+    /// The station for a persisted id: its own, or the complex any of its stops now belongs to (an id saved
+    /// from an older schedule export may be a member rather than the complex's id today).
+    func station(_ id: String) -> Station? {
+        if id.isEmpty { return nil }
+        return stations[id] ?? stations[stationOf(id)]
     }
 
     var sorted: [Station] {
@@ -234,7 +243,8 @@ func enumeratePaths(schedule: ClientSchedule, index: StationIndex, from oId: Str
                     if l2.stops[(x2 + 1)..<dm2.idx].contains(where: { index.stationOf($0) == oId }) { continue }
                     let station = index.stations[xst]?.name ?? xs
                     raw.append(RawPath(legs: [(m1.key, m1.stop, m1.idx, xs, x), (opt.line, opt.stop, x2, dm2.stop, dm2.idx)],
-                                       transfer: PathTransfer(stop: xs, stop2: opt.stop, station: station, walkSec: opt.minSec > 0 ? opt.minSec : 120)))
+                                       // the feed's minimum transfer time; 0 is a same-platform change and stays 0
+                                       transfer: PathTransfer(stop: xs, stop2: opt.stop, station: station, walkSec: opt.minSec)))
                 }
             }
             x += 1

@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch serve test ios ios-build ios-test ios-fixtures
+.PHONY: help local venv gtfs site-synthetic site data-branch serve test ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -47,6 +47,15 @@ ios-build: ## Compile the app for the Simulator from the command line (what CI d
 
 ios-test: ## The core package tests: predictor against the Python fixture, presets, nearest stations
 	cd ios/WhichWayCore && swift test
+
+ios-ipa: ## Archive the app (Release) and export build/WhichWay.ipa, signed with your team
+	scripts/testflight.sh
+
+ios-testflight: ## Archive the app and upload it to TestFlight (needs an App Store Connect API key, see scripts/testflight.sh)
+	scripts/testflight.sh --upload
+
+ios-organizer: ## Archive the app (Release) and hand it to Xcode's Organizer, to distribute with the signed-in Apple ID
+	scripts/testflight.sh --organizer
 
 ios-fixtures: ## Regenerate the Swift predictor fixture from the Python reference
 	$(PYTHON) ios/WhichWayCore/Tests/make_fixtures.py

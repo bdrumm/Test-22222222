@@ -5,8 +5,10 @@ every analysis query is a range scan on ``(stop_id, arrival_ts)``.
 """
 from __future__ import annotations
 
+import functools
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -50,6 +52,11 @@ CREATE TABLE IF NOT EXISTS alerts (
     UNIQUE(alert_id, active_start) ON CONFLICT REPLACE
 );
 CREATE INDEX IF NOT EXISTS ix_alerts_start ON alerts(active_start);
+CREATE TABLE IF NOT EXISTS telemetry (
+    id TEXT NOT NULL, received_ts REAL NOT NULL, install_id TEXT, created_ts REAL, body TEXT NOT NULL,
+    UNIQUE(id) ON CONFLICT REPLACE
+);
+CREATE INDEX IF NOT EXISTS ix_telemetry_received ON telemetry(received_ts);
 """
 
 ARRIVAL_COLUMNS = [
@@ -65,6 +72,15 @@ ALERT_COLUMNS = [
 ]
 
 
+def _serialized(fn):
+    """Run the method under the store's lock: one connection is shared by the collector thread and the HTTP handlers."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class Store:
     def _migrate(self) -> None:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(arrivals)")}
@@ -77,18 +93,21 @@ class Store:
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL") if self.path != ":memory:" else None
         self.conn.executescript(SCHEMA)
         self._migrate()
 
     # ---- writes ----------------------------------------------------------- #
+    @_serialized
     def insert_snapshot(self, feed: str, fetched_at: float, feed_ts: float | None,
                         n_trip_updates: int, n_vehicles: int, n_arrivals: int) -> None:
         self.conn.execute("INSERT INTO snapshots VALUES (?,?,?,?,?,?)",
                           (feed, fetched_at, feed_ts, n_trip_updates, n_vehicles, n_arrivals))
         self.conn.commit()
 
+    @_serialized
     def insert_predictions(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0
@@ -99,6 +118,7 @@ class Store:
         self.conn.commit()
         return len(rows)
 
+    @_serialized
     def insert_arrivals(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0
@@ -109,6 +129,7 @@ class Store:
         self.conn.commit()
         return len(rows)
 
+    @_serialized
     def upsert_alerts(self, df: pd.DataFrame, seen_ts: float | None = None) -> int:
         if df.empty:
             return 0
@@ -124,6 +145,7 @@ class Store:
         self.conn.commit()
         return len(rows)
 
+    @_serialized
     def insert_eta_samples(self, df: pd.DataFrame) -> int:
         if df is None or df.empty:
             return 0
@@ -133,6 +155,7 @@ class Store:
         self.conn.commit()
         return len(rows)
 
+    @_serialized
     def eta_samples(self, stop_ids=None, start_ts: float | None = None, end_ts: float | None = None) -> pd.DataFrame:
         q = "SELECT * FROM eta_samples WHERE 1=1"; args: list = []
         if stop_ids:
@@ -144,6 +167,7 @@ class Store:
             q += " AND at_ts < ?"; args.append(end_ts)
         return pd.read_sql(q + " ORDER BY at_ts", self.conn, params=args)
 
+    @_serialized
     def insert_dwells(self, df: pd.DataFrame) -> int:
         if df is None or df.empty:
             return 0
@@ -153,6 +177,7 @@ class Store:
         self.conn.commit()
         return len(rows)
 
+    @_serialized
     def dwells(self, stop_ids=None, start_ts: float | None = None, end_ts: float | None = None) -> pd.DataFrame:
         q = "SELECT * FROM dwells WHERE 1=1"; args: list = []
         if stop_ids:
@@ -164,6 +189,7 @@ class Store:
             q += " AND stopped_from_ts < ?"; args.append(end_ts)
         return pd.read_sql(q + " ORDER BY stopped_from_ts", self.conn, params=args)
 
+    @_serialized
     def put_frame(self, name: str, df: pd.DataFrame, replace: bool = True) -> None:
         """Persist a context DataFrame (incidents, ridership, weather...) as its own table."""
         d = df.copy()
@@ -178,12 +204,14 @@ class Store:
         self.conn.commit()
 
     # ---- reads ------------------------------------------------------------ #
+    @_serialized
     def get_frame(self, name: str) -> pd.DataFrame:
         try:
             return pd.read_sql(f"SELECT * FROM ctx_{name}", self.conn)
         except Exception:
             return pd.DataFrame()
 
+    @_serialized
     def arrivals(self, stop_ids: Iterable[str] | str | None = None, start_ts: float | None = None,
                  end_ts: float | None = None, route_ids: Iterable[str] | None = None,
                  min_confidence: float = 0.0) -> pd.DataFrame:
@@ -206,6 +234,7 @@ class Store:
         q += " ORDER BY arrival_ts"
         return pd.read_sql(q, self.conn, params=args)
 
+    @_serialized
     def arrivals_for_trips(self, trip_keys: Iterable[str]) -> pd.DataFrame:
         keys = list(trip_keys)
         if not keys:
@@ -218,6 +247,7 @@ class Store:
                 self.conn, params=chunk))
         return pd.concat(out, ignore_index=True)
 
+    @_serialized
     def alerts(self, start_ts: float | None = None, end_ts: float | None = None) -> pd.DataFrame:
         df = pd.read_sql("SELECT * FROM alerts", self.conn)
         if df.empty:
@@ -232,6 +262,7 @@ class Store:
             df = df[df["active_start"].fillna(0) <= end_ts]
         return df.reset_index(drop=True)
 
+    @_serialized
     def coverage_intervals(self, max_gap_sec: float = 180.0) -> list[tuple[float, float]]:
         """Contiguous polling intervals (any feed), split where polls are further apart than ``max_gap_sec``."""
         ts = pd.read_sql("SELECT DISTINCT fetched_at FROM snapshots ORDER BY fetched_at", self.conn)["fetched_at"].tolist()
@@ -243,9 +274,31 @@ class Store:
                 out.append((t, t))
         return [(a, b) for a, b in out if b > a]
 
+    @_serialized
     def snapshot_stats(self) -> pd.DataFrame:
         return pd.read_sql("SELECT feed, COUNT(*) AS polls, MIN(fetched_at) AS first_ts, MAX(fetched_at) AS last_ts, "
                            "SUM(n_arrivals_emitted) AS arrivals FROM snapshots GROUP BY feed", self.conn)
 
+    # ---- opt-in trip telemetry from the app --------------------------------- #
+    @_serialized
+    def insert_telemetry(self, items: list[dict], received_ts: float) -> int:
+        """Store trip observations posted by opted-in phones, keyed by their own id (a repeat replaces)."""
+        rows = [(str(x["id"]), received_ts, x.get("installId"), x.get("createdTs"), json.dumps(x, separators=(",", ":"))) for x in items]
+        self.conn.executemany("INSERT INTO telemetry (id, received_ts, install_id, created_ts, body) VALUES (?,?,?,?,?)", rows)
+        self.conn.commit()
+        return len(rows)
+
+    @_serialized
+    def telemetry(self, start_ts: float | None = None) -> list[dict]:
+        q, args = "SELECT body FROM telemetry", []
+        if start_ts is not None:
+            q += " WHERE received_ts >= ?"; args.append(start_ts)
+        return [json.loads(b) for (b,) in self.conn.execute(q + " ORDER BY received_ts", args)]
+
+    @_serialized
+    def telemetry_count(self) -> int:
+        return int(self.conn.execute("SELECT COUNT(*) FROM telemetry").fetchone()[0])
+
+    @_serialized
     def close(self) -> None:
         self.conn.close()

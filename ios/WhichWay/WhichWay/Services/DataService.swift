@@ -1,6 +1,28 @@
 import Foundation
 import Observation
 
+struct StopSpan: Equatable {
+    var from: Int
+    var to: Int
+}
+
+/// One leg of the Go tab's selected route, for the Line tab: its line keys, where it boards and alights on each,
+/// and the train the itinerary takes on it when the feeds have one.
+struct FocusLeg: Equatable {
+    var key: String                  // the line shown for this leg (the train's, else the leg's primary line)
+    var keys: [String]               // every line the leg can use
+    var idx: [String: StopSpan]      // board and alight stop index per line key
+    var trainId: String?             // LiveTrain.id
+}
+
+/// The Go tab's selected route: the train it boards (the Line tab follows it) and its legs.
+struct TrainFocus: Equatable {
+    var key: String        // line key of the boarding train's board, else the first leg's line
+    var trainId: String    // LiveTrain.id, empty when no train is in the feeds yet
+    var tripId: String
+    var legs: [FocusLeg] = []
+}
+
 /// Loads the published data (client schedule, timetable extract, hold log, segment run times, per-line deviation
 /// grids) from the site and polls the MTA GTFS-Realtime feeds the visible screens need, every `pollSec` seconds.
 @MainActor
@@ -9,9 +31,17 @@ final class DataService {
     static let publishedBase = "https://bdrumm.github.io/Test-22222222/data/"
     static let localBase = "http://localhost:8000/data/"
     /// The Debug build can point at a local server through Config/Local.xcconfig (WHICHWAY_BASE_URL, carried
-    /// into the generated Info.plist); otherwise the published site.
+    /// into the generated Info.plist); otherwise the published site. A localhost address only means something
+    /// on the Simulator: on a phone it would be the phone itself, so the phone falls back to the published site.
     static let defaultBase: String = {
-        if let s = Bundle.main.object(forInfoDictionaryKey: "WhichWayBaseURL") as? String, s.hasPrefix("http") { return s }
+        if let s = Bundle.main.object(forInfoDictionaryKey: "WhichWayBaseURL") as? String, s.hasPrefix("http") {
+            #if targetEnvironment(simulator)
+            return s
+            #else
+            let host = URL(string: s)?.host?.lowercased() ?? ""
+            if host != "localhost" && host != "127.0.0.1" && host != "::1" { return s }
+            #endif
+        }
         return publishedBase
     }()
 
@@ -51,6 +81,14 @@ final class DataService {
     private(set) var tick = 0
     /// Line keys ("F_N") the visible screens need boards for.
     private(set) var wanted: Set<String> = []
+    /// True after a fetch failed and the copy on disk was used instead; cleared by the next successful fetch.
+    private(set) var offline = false
+    /// The last time a feed came from the network (older data is the copy on disk).
+    private(set) var lastFeedFetch: Date?
+    /// The train the Go tab's selected itinerary boards; the Line tab follows it.
+    var focus: TrainFocus?
+    /// The last successful fetch of every file, so the app keeps working without signal.
+    @ObservationIgnored private var cache: DiskCache
 
     @ObservationIgnored private var wantedBy: [String: Set<String>] = [:]
     @ObservationIgnored private var demoOffset: Double? = nil
@@ -61,16 +99,36 @@ final class DataService {
     static let feedPeriodSec = 30.0
 
     init() {
-        baseURL = UserDefaults.standard.string(forKey: "baseURL") ?? DataService.defaultBase
+        let base = UserDefaults.standard.string(forKey: "baseURL") ?? DataService.defaultBase
+        baseURL = base
         let p = UserDefaults.standard.double(forKey: "pollSec")
         pollSec = p >= 10 ? p : 30
+        cache = DiskCache(baseURL: base)
     }
+
+    var cacheSummary: String {
+        let kb = cache.sizeBytes / 1024
+        let when = cache.date("client_schedule.json").map { Fmt.hhmm($0.timeIntervalSince1970) } ?? "–"
+        return "\(kb) KB · schedule fetched \(when)"
+    }
+
+    func clearCache() { cache.clear() }
 
     /// True when the schedule pins the clock (the synthetic preview's demo_now).
     var isDemo: Bool { demoOffset != nil }
 
     /// Wall clock, shifted to the schedule's demo clock when it has one.
     var now: Double { Date().timeIntervalSince1970 + (demoOffset ?? 0) }
+
+    /// The server behind the data (its /api/...): the data URL without its trailing data/. The published site
+    /// on GitHub Pages is static and has no API, so this is nil there.
+    var apiBase: URL? {
+        var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !base.hasSuffix("/") { base += "/" }
+        guard let u = URL(string: base), let host = u.host, !host.hasSuffix("github.io") else { return nil }
+        if base.hasSuffix("/data/") { base.removeLast("data/".count) }
+        return URL(string: base)
+    }
 
     func url(_ path: String) -> URL? {
         if path.hasPrefix("http://") || path.hasPrefix("https://") { return URL(string: path) }
@@ -84,9 +142,18 @@ final class DataService {
         var req = URLRequest(url: u)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 25
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        if let http = resp as? HTTPURLResponse, http.statusCode >= 400 { throw URLError(.badServerResponse) }
-        return data
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            if let http = resp as? HTTPURLResponse, http.statusCode >= 400 { throw URLError(.badServerResponse) }
+            cache.write(path, data)
+            offline = false
+            return data
+        } catch {
+            // no signal (or no server): the copy from the last successful fetch, when there is one
+            guard let data = cache.read(path) else { throw error }
+            offline = true
+            return data
+        }
     }
 
     private func fetchJSON<T: Decodable>(_ type: T.Type, _ path: String) async throws -> T {
@@ -193,6 +260,7 @@ final class DataService {
         self.pollSec = max(10, pollSec)
         UserDefaults.standard.set(self.baseURL, forKey: "baseURL")
         UserDefaults.standard.set(self.pollSec, forKey: "pollSec")
+        cache = DiskCache(baseURL: self.baseURL)
         restart()
     }
 
@@ -248,7 +316,9 @@ final class DataService {
         }
         var got: [String: RTFeed] = [:]
         var errs: [String] = []
-        await withTaskGroup(of: (String, RTFeed?, String?).self) { group in
+        var fetched = 0
+        let cache = self.cache
+        await withTaskGroup(of: (String, RTFeed?, Data?, String?).self) { group in
             for (k, u) in jobs {
                 group.addTask {
                     do {
@@ -256,17 +326,26 @@ final class DataService {
                         req.cachePolicy = .reloadIgnoringLocalCacheData
                         req.timeoutInterval = 20
                         let (data, resp) = try await URLSession.shared.data(for: req)
-                        if let http = resp as? HTTPURLResponse, http.statusCode >= 400 { return (k, nil, "\(k): HTTP \(http.statusCode)") }
-                        return (k, try GTFSRealtime.parse(data), nil)
+                        if let http = resp as? HTTPURLResponse, http.statusCode >= 400 { return (k, nil, nil, "\(k): HTTP \(http.statusCode)") }
+                        return (k, try GTFSRealtime.parse(data), data, nil)
                     } catch {
-                        return (k, nil, "\(k): \(error.localizedDescription)")
+                        return (k, nil, nil, "\(k): \(error.localizedDescription)")
                     }
                 }
             }
-            for await (k, feed, err) in group {
-                if let feed = feed { got[k] = feed }
+            for await (k, feed, data, err) in group {
+                if let feed = feed, let data = data { got[k] = feed; fetched += 1; cache.write("feed/\(k)", data) }
                 if let err = err { errs.append(err) }
             }
+        }
+        // without signal: the last snapshot on disk for any feed never fetched in this run, so the boards still
+        // show the trains where they were last seen
+        for (k, _) in jobs where got[k] == nil && feeds[k] == nil {
+            if let data = cache.read("feed/\(k)"), let f = try? GTFSRealtime.parse(data) { got[k] = f }
+        }
+        if fetched > 0 { lastFeedFetch = Date(); offline = false } else if !jobs.isEmpty {
+            offline = true
+            if lastFeedFetch == nil { lastFeedFetch = jobs.compactMap { cache.date("feed/\($0.0)") }.max() }
         }
         for (k, f) in got { feeds[k] = f }
         let maxTs = got.values.compactMap { $0.timestamp }.max() ?? 0
@@ -276,11 +355,16 @@ final class DataService {
         }
         pollCount += 1
         if pollCount % 4 == 1, let au = sched.alertsUrl, let u = url(au) {
-            if let r = try? await URLSession.shared.data(from: u) { alerts = Alerts.parse(r.0, now: now) }
+            if let r = try? await URLSession.shared.data(from: u) { alerts = Alerts.parse(r.0, now: now); cache.write("alerts", r.0) }
+            else if alerts.isEmpty, let d = cache.read("alerts") { alerts = Alerts.parse(d, now: now) }
         }
         rebuildBoards()
         lastUpdate = Date()
-        lastError = errs.isEmpty ? nil : errs.joined(separator: " · ")
+        if offline {
+            lastError = "No signal · trains as last seen \(lastFeedFetch.map { Fmt.hhmm($0.timeIntervalSince1970) } ?? "earlier"); times come from the timetable and the saved tables."
+        } else {
+            lastError = errs.isEmpty ? nil : errs.joined(separator: " · ")
+        }
         tick += 1
     }
 
@@ -299,7 +383,10 @@ final class DataService {
     }
 
     /// Replace each train's points with the engine's ETAs for the current scenario, keeping the feed's own.
-    func rebuildPredicted() {
+    func rebuildPredicted() { predictedBoards = predictedBoards(for: scenario) }
+
+    /// The boards under one assumption about a held train (baseline | hold_persists | clears_now).
+    func predictedBoards(for scenario: String) -> [String: LineBoard] {
         var out: [String: LineBoard] = [:]
         for (k, b) in boards {
             guard let sc = predictions[k], let lp = sc[scenario] ?? sc["baseline"] else { out[k] = b; continue }
@@ -314,7 +401,7 @@ final class DataService {
             }
             out[k] = nb
         }
-        predictedBoards = out
+        return out
     }
 
     func alertsFor(routes: [String]) -> [RouteAlert] {

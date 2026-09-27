@@ -10,8 +10,9 @@ enum Fmt {
         f.dateFormat = pattern
         return f
     }
-    private static let hhmmF = formatter("HH:mm")
-    private static let hhmmssF = formatter("HH:mm:ss")
+    // 12-hour clock without a suffix: "1:05", "12:40"
+    private static let hhmmF = formatter("h:mm")
+    private static let hhmmssF = formatter("h:mm:ss")
 
     static func hhmm(_ ts: Double?) -> String {
         guard let ts = ts else { return "–" }
@@ -45,18 +46,27 @@ enum Fmt {
         return s > 0 ? "\(m) min late" : "\(m) min early"
     }
 
-    /// "07:30" for a minute of the day.
+    /// "7:30" for a minute of the day, on the 12-hour clock ("12:15" for 00:15).
     static func clock(_ minuteOfDay: Int) -> String {
         let m = ((minuteOfDay % 1440) + 1440) % 1440
-        return String(format: "%02d:%02d", m / 60, m % 60)
+        let h = m / 60 % 12
+        return String(format: "%d:%02d", h == 0 ? 12 : h, m % 60)
     }
 
     private static let dayF = formatter("yyyy-MM-dd")
     /// The New York calendar day of a timestamp, for once-a-day bookkeeping.
     static func dayStamp(_ ts: Double) -> String { dayF.string(from: Date(timeIntervalSince1970: ts)) }
 
-    static func kmh(_ v: Double?) -> String {
-        guard let v = v else { return "–" }
-        return String(format: "%.0f km/h", v)
+    /// A speed the data keeps in km/h, shown in mph.
+    static func mph(_ kmh: Double?) -> String {
+        guard let v = kmh else { return "–" }
+        return String(format: "%.0f mph", v * 0.621371)
+    }
+
+    /// A distance in metres shown the American way: feet below a tenth of a mile, else miles.
+    static func miles(_ m: Double) -> String {
+        let mi = m / 1609.344
+        if mi < 0.1 { return "\(Int((m * 3.28084 / 10).rounded()) * 10) ft" }
+        return String(format: "%.1f mi", mi)
     }
 }

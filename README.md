@@ -511,3 +511,56 @@ lost at this hour, hold risk, measured segment speeds, alerts). It reads the MTA
 their 30-second publication, and the published `data/` files from the site. The non-UI code is a package
 (`ios/WhichWayCore`) tested against the Python engine, and `.github/workflows/ios.yml` compiles the app and runs
 those tests on a macOS runner on every push. See `ios/README.md`.
+
+### Publishing the app
+
+**To your own iPhone, over Wi-Fi.** Pair the phone once over USB: plug it in, tap *Trust* on the phone, turn on
+*Developer Mode* (Settings > Privacy & Security, the phone restarts), and run the app from Xcode with the phone
+selected as the destination. Xcode 15 and later then reaches the phone over the local network without the cable,
+as long as both are on the same Wi-Fi and *Connect via network* is ticked for it in Window > Devices and
+Simulators (it is by default). From the command line the same works through CoreDevice:
+
+```bash
+xcodebuild -project ios/WhichWay/WhichWay.xcodeproj -scheme WhichWay -configuration Debug \
+  -destination 'id=<the phone's UDID>' -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
+xcrun devicectl device install app --device <UDID> <path to WhichWay.app>
+xcrun devicectl device process launch --device <UDID> com.<you>.whichway
+```
+
+`xcrun devicectl list devices` shows the UDID and whether the phone is reached by `localNetwork` or USB. A Debug
+build on a phone loads from the published site (a localhost data address only means something on the
+Simulator); the Release build always does.
+
+**TestFlight.** Needs a paid Apple Developer Program membership and, once, an app record in App Store Connect
+(*My Apps > +*, with the bundle id from `ios/WhichWay/Config/Local.xcconfig`). Then:
+
+```bash
+make ios-organizer         # archive (Release) and open it in Xcode's Organizer: Distribute App > TestFlight & App Store
+make ios-testflight        # archive and upload from the command line (needs an App Store Connect API key)
+make ios-ipa               # archive and export ios/WhichWay/build/WhichWay.ipa to upload with Transporter (same key)
+```
+
+All three run `scripts/testflight.sh`. Signing is automatic with the team in `Local.xcconfig`; the Release
+configuration (`Config/Release.xcconfig`) takes the team and bundle id from there and always uses the published
+site as the data source. The Organizer route signs with the Apple ID in Xcode > Settings > Accounts and needs
+nothing else. The command-line routes need an App Store Connect API key, because App Store signing from a script
+cannot use that account: *Users and Access > Integrations > App Store Connect API > Team Keys*, role App Manager,
+download the `.p8` once, and set `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_PATH`. Each run stamps the build number from the clock (`BUILD=...` overrides it), the app
+declares standard HTTPS only so no export-compliance answer is asked, and `WhichWay/PrivacyInfo.xcprivacy`
+declares the required-reason APIs it uses (UserDefaults, file timestamps). In App Store Connect > TestFlight,
+add yourself under *Internal Testing* or testers to a group; they install through the TestFlight app.
+
+### Opt-in trip motion (telemetry)
+
+Off unless the rider turns it on in Settings > Improve the predictions. While a route is in progress the
+phone's motion sensors are reduced on the phone to one summary per second (step energy, sustained push,
+vibration) and a small detector (`Core/BoardingDetector.swift`, unit-tested in the core package) marks the
+moment the train pulls away and the moment the rider walks off it. Each trip becomes one observation: the
+route's stations and lines, the predicted boarding and arrival at the time, the train's lateness, and those
+moments, with the first departure within five minutes of the predicted boarding marked as corroborating it.
+Never recorded: location, raw sensor samples, or anything identifying; a random per-install id groups a phone's
+trips and is rotated, with everything deleted, when the switch is turned off. Observations are POSTed to
+`/api/telemetry` of the server behind the data (`mta-insights serve` stores them in the `telemetry` table;
+`/api/health` counts them); the published GitHub Pages site has no API, so there they stay on the phone, where
+Settings can export them as JSON. The app's privacy manifest declares the collection as non-linked usage data.
+

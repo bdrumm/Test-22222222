@@ -23,6 +23,19 @@ struct PlannerView: View {
     @State private var pendingDest = ""
     @State private var paths: [PathOption] = []
     @State private var reach: [String: Reach] = [:]
+    /// Fires when the next boarding time passes: the train that left drops out and the best route is selected afresh.
+    @State private var boardingTimer: Task<Void, Never>? = nil
+    /// The headline itinerary's boarding time at the last refresh; once it has passed, the next refresh reselects.
+    @State private var shownBoardTs: Double? = nil
+    /// A held train's effect on the headline route, when it makes a difference.
+    @State private var outlook: HoldOutlook? = nil
+    /// The route is in progress: GPS put the phone at the origin station, or the rider said so.
+    @State private var routeStarted = false
+    /// Ended by hand: GPS does not start it again for this trip.
+    @State private var routeEndedByHand = false
+    /// How the route in progress began: "gps" or "hand".
+    @State private var routeStartedBy = "gps"
+    @State private var showInsights = false
 
     var body: some View {
         NavigationStack {
@@ -45,45 +58,59 @@ struct PlannerView: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { StatusDot() } }
         }
         .onAppear {
+            if !routeStarted { TripActivityService.shared.endAll() }
             recompute()
             autoApply()
         }
-        .onChange(of: originId) { _, _ in recompute() }
-        .onChange(of: destId) { _, _ in recompute() }
+        .onChange(of: originId) { _, _ in resetTrip(); recompute() }
+        .onChange(of: destId) { _, _ in resetTrip(); recompute() }
         .onChange(of: data.staticVersion) { _, _ in
             recompute()
             autoApply()
             resolveNearest()
         }
-        .onChange(of: data.tick) { _, _ in refreshLive() }
-        .onChange(of: loc.location?.timestamp) { _, _ in resolveNearest() }
+        .onChange(of: data.tick) { _, _ in refreshLive(); pollLocation() }
+        .onChange(of: data.scenario) { _, _ in refreshLive() }
+        .onChange(of: selectedPath) { _, _ in updateFocus() }
+        .onChange(of: loc.location?.timestamp) { _, _ in resolveNearest(); checkArrival() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { autoApply() } }
+        .onChange(of: routeStarted) { _, on in
+            if on { startActivity(); beginTelemetry() }
+            else { TripActivityService.shared.end(); Telemetry.shared.endTrip(by: routeEndedByHand ? "hand" : "changed", api: data.apiBase) }
+        }
+        .onDisappear { boardingTimer?.cancel() }
     }
 
     private func content(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                PresetChips(presets: presets.presets, activeId: presets.active(at: data.now)?.id, currentId: currentPresetId,
-                            canAdd: !originId.isEmpty && !destId.isEmpty,
+                CommuteChip(presets: presets.presets, activeId: presets.active(at: data.now)?.id, currentId: currentPresetId,
                             onPick: { applyPreset($0, byHand: true) },
+                            onEdit: { editing = $0 },
                             onAdd: { editing = newPresetFromCurrent() })
                 pickers(index)
                 if pendingNearest {
                     Text(loc.error ?? "Finding the nearest station…").font(.footnote).foregroundStyle(loc.error == nil ? Color.secondary : Color.red)
-                }
-                if originId.isEmpty {
-                    Text("Pick where you are and where you're going. Paths come from the timetable; which train to take, when it gets you there and where it is right now come from the live MTA feeds.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } else if destId.isEmpty {
-                    Text("\(reach.count) stations are reachable direct or with one change. Pick a destination.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                } else if originId.isEmpty || destId.isEmpty {
+                    SetupPrompt(originSet: !originId.isEmpty, destSet: !destId.isEmpty, reachable: reach.count) { editing = newPresetFromCurrent() }
                 }
                 if !paths.isEmpty {
-                    NowCard(option: ranked.first, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
-                    ScenarioPicker()
+                    NowCard(option: headline, originId: originId, atStation: routeStarted, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "",
+                            onInsights: { showInsights = true })
+                    tripBar(originName: index.stations[originId]?.name ?? "the station")
+                    if let o = outlook { HoldOutlookCard(outlook: o) }
+                    if routeStarted, let sel = headline {
+                        DepartureBoardView(option: sel, schedule: sched, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
+                    }
                     pathList
                     if let sel = paths.first(where: { $0.id == selectedPath }) {
+                        let list = ranked
+                        let pos = (list.firstIndex { $0.id == sel.id } ?? 0) + 1
+                        Text("Route \(pos) of \(list.count) · swipe the route left or right to change")
+                            .font(.caption).foregroundStyle(.secondary)
                         PathDetailView(option: sel, schedule: sched, index: index, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
+                            .contentShape(Rectangle())
+                            .gesture(routeSwipe(enabled: true))
                     }
                 } else if !originId.isEmpty && !destId.isEmpty {
                     Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
@@ -94,15 +121,22 @@ struct PlannerView: View {
             .padding(.bottom, 24)
         }
         .sheet(isPresented: $pickingOrigin) {
-            StationPickerSheet(title: "From", stations: index.sorted, reach: nil) { st in
+            StationPickerSheet(title: "From", stations: index.sorted, reach: nil,
+                               nearTo: currentPreset.flatMap { index.station($0.originId) }, coords: commuteCoords(sched, index)) { st in
                 originId = st.id
                 pickedByHand()
             }
         }
         .sheet(isPresented: $pickingDest) {
-            StationPickerSheet(title: "To", stations: index.sorted, reach: reach) { st in
+            StationPickerSheet(title: "To", stations: index.sorted, reach: reach,
+                               nearTo: currentPreset.flatMap { index.station($0.destId) }, coords: commuteCoords(sched, index)) { st in
                 destId = st.id
                 pickedByHand()
+            }
+        }
+        .sheet(isPresented: $showInsights) {
+            if let p = headline {
+                RouteInsightsView(option: p, schedule: sched, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
             }
         }
         .sheet(isPresented: $nearbySheet) {
@@ -123,9 +157,15 @@ struct PlannerView: View {
 
     /// The first commute whose window covers now, once per window per day; stations picked by hand keep.
     private func autoApply() {
-        guard data.index != nil, let p = presets.active(at: data.now) else { return }
+        guard let index = data.index, let p = presets.active(at: data.now) else { return }
         let stamp = "\(Fmt.dayStamp(data.now))|\(p.id.uuidString)"
-        if appliedPreset == stamp { return }
+        if appliedPreset == stamp {
+            // applied earlier today (maybe in another launch): it is the trip on screen unless a station was picked by hand
+            if currentPresetId == nil, destId == index.station(p.destId)?.id, p.useNearestOrigin || originId == index.station(p.originId)?.id {
+                currentPresetId = p.id
+            }
+            return
+        }
         appliedPreset = stamp
         applyPreset(p, byHand: false)
     }
@@ -133,16 +173,16 @@ struct PlannerView: View {
     private func applyPreset(_ p: CommutePreset, byHand: Bool) {
         if byHand, let a = presets.active(at: data.now) { appliedPreset = "\(Fmt.dayStamp(data.now))|\(a.id.uuidString)" }
         currentPresetId = p.id
+        data.requestGeometry()   // the pickers list the stations near the commute's own while it is on
         if p.useNearestOrigin {
-            pendingDest = p.destId
+            pendingDest = data.index?.station(p.destId)?.id ?? p.destId
             pendingNearest = true
-            data.requestGeometry()
             loc.request()
             resolveNearest()
         } else {
             pendingNearest = false
-            originId = p.originId
-            destId = p.destId
+            originId = data.index?.station(p.originId)?.id ?? p.originId
+            destId = data.index?.station(p.destId)?.id ?? p.destId
         }
     }
 
@@ -160,6 +200,19 @@ struct PlannerView: View {
         if !dest.isEmpty { destId = dest }
     }
 
+    /// The commute the planner is on (picking a station by hand leaves it).
+    private var currentPreset: CommutePreset? {
+        guard let id = currentPresetId else { return nil }
+        return presets.presets.first { $0.id == id }
+    }
+
+    /// Station coordinates for the pickers' "near the commute's station" section: only with a commute on and
+    /// the geometry loaded.
+    private func commuteCoords(_ sched: ClientSchedule, _ index: StationIndex) -> [String: (lat: Double, lon: Double)] {
+        guard currentPresetId != nil, let geo = data.geometry else { return [:] }
+        return stationCoordinates(schedule: sched, index: index, geometry: geo)
+    }
+
     private func pickedByHand() {
         currentPresetId = nil
         pendingNearest = false
@@ -175,34 +228,34 @@ struct PlannerView: View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 StationButton(label: "From", station: index.stations[originId]) { pickingOrigin = true }
-                Button { nearbySheet = true } label: {
-                    Image(systemName: "location.fill")
-                }
-                .buttonStyle(.bordered)
-                .accessibilityLabel("Nearest station")
+                IconButton(systemImage: "location.fill", label: "Nearest station") { nearbySheet = true }
             }
             HStack(spacing: 8) {
                 StationButton(label: "To", station: index.stations[destId]) { pickingDest = true }
                     .disabled(originId.isEmpty)
-                Button {
+                IconButton(systemImage: "arrow.up.arrow.down", label: "Swap stations") {
                     let o = originId
                     originId = destId
                     destId = o
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
                 }
-                .buttonStyle(.bordered)
                 .disabled(originId.isEmpty || destId.isEmpty)
             }
         }
     }
 
+    /// The route the headline card describes: the chosen one, else the best.
+    private var headline: PathOption? { paths.first { $0.id == selectedPath } ?? ranked.first }
+
+    /// Routes with a train in the feeds first, by that itinerary's arrival; the rest by expected time. A route
+    /// nobody can board yet never outranks one with a train on its way.
     private var ranked: [PathOption] {
-        let now = data.now
-        return paths.sorted { a, b in
-            let ta = a.live?.arriveTs ?? (now + a.expectedSec)
-            let tb = b.live?.arriveTs ?? (now + b.expectedSec)
-            return ta < tb
+        paths.sorted { a, b in
+            switch (a.live, b.live) {
+            case let (x?, y?): return x.arriveTs != y.arriveTs ? x.arriveTs < y.arriveTs : a.expectedSec < b.expectedSec
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return a.expectedSec < b.expectedSec
+            }
         }
     }
 
@@ -210,19 +263,39 @@ struct PlannerView: View {
         let list = ranked
         let maxSec = max(60, list.map { p in max(p.expectedSec, p.live?.totalSec ?? 0) }.max() ?? 60)
         return VStack(alignment: .leading, spacing: 6) {
-            Text("\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
+            Text(routeStarted ? "Other ways" : "\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
             ForEach(Array(list.enumerated()), id: \.element.id) { i, p in
-                PathRow(option: p, rank: i + 1, selected: p.id == selectedPath, maxSec: maxSec)
+                PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec)
                     .onTapGesture { selectedPath = p.id }
+                    .gesture(routeSwipe(enabled: p.id == selectedPath))
             }
-            Text("Bars: expected door-to-door time — wait (grey), ride (line colour, including the time trains typically lose on that stretch at this hour and the hold risk), walk at the change (dark). Ranked by the next itinerary's arrival once the feeds are in.")
+            Text("Badge: expected extra minutes to your destination against the timetable — the engine's ride for the train to take, a wait beyond the usual headway, extra time at the change and the risk of missing it; without a train in the feeds, the time typically lost at this hour. Bars: expected door-to-door time — wait (grey), ride (line colour), walk at the change (dark). Routes with a train on its way come first, by arrival.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
 
+    /// A horizontal swipe on the chosen route steps to the next or previous route in the ranked list.
+    private func routeSwipe(enabled: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local).onEnded { v in
+            guard enabled, abs(v.translation.width) > abs(v.translation.height) * 1.5 else { return }
+            stepRoute(v.translation.width < 0 ? 1 : -1)
+        }
+    }
+
+    private func stepRoute(_ delta: Int) {
+        let list = ranked
+        guard !list.isEmpty else { return }
+        let i = list.firstIndex { $0.id == selectedPath } ?? 0
+        let j = ((i + delta) % list.count + list.count) % list.count
+        withAnimation(.easeInOut(duration: 0.2)) { selectedPath = list[j].id }
+    }
+
     private func recompute() {
         guard let sched = data.schedule, let index = data.index else { return }
-        if !originId.isEmpty && index.stations[originId] == nil { originId = "" }
+        shownBoardTs = nil
+        // ids persisted from another launch or export: resolve them to today's station ids (onChange recomputes)
+        if !originId.isEmpty, index.station(originId)?.id != originId { originId = index.station(originId)?.id ?? ""; return }
+        if !destId.isEmpty, index.station(destId)?.id != destId { destId = index.station(destId)?.id ?? ""; return }
         reach = originId.isEmpty ? [:] : reachableStations(schedule: sched, index: index, from: originId)
         if originId.isEmpty {
             paths = []
@@ -250,9 +323,186 @@ struct PlannerView: View {
     private func refreshLive() {
         guard let sched = data.schedule else { return }
         let now = data.now
+        // the countdown on screen reached zero since the last refresh (timer, poll, or coming back to this tab)
+        let departed = shownBoardTs.map { $0 <= now } ?? false
         for i in paths.indices {
             paths[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: paths[i], now: now, maxN: 1).first
         }
+        // a departed train hands over to the best route, or to the next train on this route once it is in progress
+        if departed, !routeStarted, let best = ranked.first?.id { selectedPath = best }
+        shownBoardTs = headline?.live?.boardTs
+        outlook = holdOutlook(sched)
+        if outlook == nil, data.scenario != "baseline" { data.setScenario("baseline") }
+        updateFocus()
+        armBoardingTimer()
+        if routeStarted { updateActivity(); updateTelemetry() }
+    }
+
+    // MARK: - opt-in trip motion
+
+    private func beginTelemetry() {
+        guard Telemetry.shared.optIn, let p = headline else { return }
+        let h = routeHealth(p, data: data)
+        let it = p.live
+        let l0 = it?.legs.first?.train
+        let base = TripObservation(
+            id: "", installId: "", appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "", createdTs: 0,
+            routeLabel: p.label, legs: p.legs.map { TripObservation.Leg(line: $0.primaryKey, from: $0.from, to: $0.to) },
+            transferStation: p.transfer?.station, transferWalkSec: p.transfer?.walkSec,
+            predictedBoardTs: it?.boardTs, predictedArriveTs: it?.arriveTs, expectedSec: p.expectedSec, schedSec: p.schedSec,
+            extraMin: h.extraSec >= 90 ? h.minutes : 0, trainLateSec: l0?.effectiveLatenessSec, trainHeld: l0?.isHeld ?? false,
+            offline: data.offline, startedBy: routeStartedBy)
+        Telemetry.shared.beginTrip(base)
+    }
+
+    private func updateTelemetry() {
+        guard Telemetry.shared.optIn, let p = headline else { return }
+        let h = routeHealth(p, data: data)
+        let l0 = p.live?.legs.first?.train
+        Telemetry.shared.updatePrediction(boardTs: p.live?.boardTs, arriveTs: p.live?.arriveTs, expectedSec: p.expectedSec,
+                                          extraMin: h.extraSec >= 90 ? h.minutes : 0, trainLateSec: l0?.effectiveLatenessSec,
+                                          held: l0?.isHeld ?? false, offline: data.offline)
+    }
+
+    // MARK: - the Live Activity
+
+    private func activityState(_ p: PathOption) -> TripActivityAttributes.ContentState {
+        let h = routeHealth(p, data: data)
+        let it = p.live
+        let l0 = it?.legs.first
+        var status: String
+        if let l0 = l0 {
+            var bits: [String] = []
+            if let pos = l0.train.position { bits.append("train now \(pos.text)") }
+            if let e = l0.train.effectiveLatenessSec, abs(e) >= 60 { bits.append(Fmt.late(e)) }
+            status = bits.joined(separator: " · ")
+        } else {
+            status = data.predictedBoards.isEmpty ? "waiting for the live feeds" : "no train for this path in the feeds yet"
+        }
+        var next: Itinerary? = nil
+        if let it = it, let sched = data.schedule {
+            next = pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
+        }
+        return TripActivityAttributes.ContentState(
+            route: l0?.train.route ?? p.legs[0].primaryRoute, trainLabel: l0.map { shortLabel($0.train) } ?? "",
+            boardTs: it?.boardTs ?? (data.now + p.wait1Sec), arriveTs: it?.arriveTs ?? (data.now + p.expectedSec),
+            nextBoardTs: next?.boardTs, nextRoute: next?.legs.first?.train.route,
+            changeAt: p.transfer?.station, changeRoutes: p.legs.count > 1 ? p.legs[1].routesLabel : nil,
+            extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline)
+    }
+
+    private func startActivity() {
+        guard let p = headline, let index = data.index else { return }
+        let attrs = TripActivityAttributes(originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "", routeLabel: p.label)
+        TripActivityService.shared.start(routeId: p.id, attributes: attrs, state: activityState(p))
+    }
+
+    /// Every refresh while the route is in progress; a different chosen route restarts it with the new label.
+    private func updateActivity() {
+        guard let p = headline else { return }
+        if TripActivityService.shared.routeId != p.id { startActivity(); return }
+        TripActivityService.shared.update(activityState(p))
+    }
+
+    /// The headline route's arrival under each assumption about a held train, when they differ by a minute or
+    /// more; nil when no hold matters for it.
+    private func holdOutlook(_ sched: ClientSchedule) -> HoldOutlook? {
+        guard data.anyHeld, let p = headline else { return nil }
+        let now = data.now
+        func arrive(_ scenario: String) -> Double? {
+            pathTrips(boards: data.predictedBoards(for: scenario), schedule: sched, option: p, now: now, maxN: 1).first?.arriveTs
+        }
+        let u = arrive("baseline"), d = arrive("hold_persists"), c = arrive("clears_now")
+        let vals = [u, d, c].compactMap { $0 }
+        guard let lo = vals.min(), let hi = vals.max(), hi - lo >= 60 else { return nil }
+        var heldAt = "A train is held"
+        for k in p.legs.flatMap({ $0.keys }) {
+            if let b = data.boards[k], let t = b.trains.first(where: { $0.isHeld }) {
+                heldAt = "\(b.route) held \(t.position?.text ?? "")"
+                break
+            }
+        }
+        return HoldOutlook(heldAt: heldAt, usual: u, dragsOn: d, clearsNow: c)
+    }
+
+    /// Wake just after the earliest boarding time on screen (the headline route's or the selected one's): that
+    /// train is then in the past, the itineraries are recomputed and the best route becomes the selection.
+    private func armBoardingTimer() {
+        boardingTimer?.cancel()
+        guard let next = [ranked.first?.live?.boardTs, headline?.live?.boardTs].compactMap({ $0 }).min() else { boardingTimer = nil; return }
+        let delay = max(0.5, next - data.now + 0.5)
+        boardingTimer = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if Task.isCancelled { return }
+            refreshLive()
+        }
+    }
+
+    // MARK: - the route in progress
+
+    /// Start and end the route by hand; it starts on its own when GPS puts the phone at the origin station.
+    private func tripBar(originName: String) -> some View {
+        HStack(spacing: 10) {
+            if routeStarted {
+                Label("At \(originName)", systemImage: "figure.walk.circle.fill").font(.caption.weight(.semibold)).foregroundStyle(Color.green)
+                Spacer()
+                Button("End route") { routeStarted = false; routeEndedByHand = true }
+                    .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
+            } else {
+                Text("Starts by itself at \(originName)").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Start route") { routeStartedBy = "hand"; withAnimation { routeStarted = true } }
+                    .font(.caption.weight(.semibold)).buttonStyle(.borderedProminent).controlSize(.small)
+            }
+        }
+    }
+
+    /// Metres from the phone's last fix to the origin station, when both are known and the fix is recent.
+    private var originDistanceM: Double? {
+        guard !originId.isEmpty, let l = loc.location, Date().timeIntervalSince(l.timestamp) < 180,
+              let sched = data.schedule, let index = data.index, let geo = data.geometry,
+              let c = stationCoordinates(schedule: sched, index: index, geometry: geo)[originId] else { return nil }
+        return haversineM((l.coordinate.latitude, l.coordinate.longitude), c)
+    }
+
+    /// Within 150 m of the origin station: the route starts.
+    private func checkArrival() {
+        guard !routeStarted, !routeEndedByHand, !destId.isEmpty, let d = originDistanceM, d <= 150 else { return }
+        routeStartedBy = "gps"
+        withAnimation { routeStarted = true }
+    }
+
+    /// A fresh fix every poll while a trip is on screen and not started yet (only once location is allowed).
+    private func pollLocation() {
+        guard !routeStarted, !originId.isEmpty, !destId.isEmpty, loc.authorized else { return }
+        data.requestGeometry()
+        loc.request()
+        checkArrival()
+    }
+
+    private func resetTrip() {
+        routeStarted = false
+        routeEndedByHand = false
+        TripActivityService.shared.end()
+    }
+
+    /// The Line tab follows the selected route: its legs, and the train it boards when the feeds have one.
+    private func updateFocus() {
+        guard let sel = paths.first(where: { $0.id == selectedPath }), !sel.legs.isEmpty else {
+            if data.focus != nil { data.focus = nil }
+            return
+        }
+        let it = sel.live
+        var legs: [FocusLeg] = []
+        for (i, leg) in sel.legs.enumerated() {
+            var spans: [String: StopSpan] = [:]
+            for (k, v) in leg.idx { spans[k] = StopSpan(from: v.from, to: v.to) }
+            let tc: TripCandidate? = (it?.legs.indices.contains(i) ?? false) ? it?.legs[i] : nil
+            legs.append(FocusLeg(key: tc?.key ?? leg.primaryKey, keys: leg.keys, idx: spans, trainId: tc?.train.id))
+        }
+        let l0 = it?.legs.first
+        let f = TrainFocus(key: l0?.key ?? sel.legs[0].primaryKey, trainId: l0?.train.id ?? "", tripId: l0?.train.tripId ?? "", legs: legs)
+        if data.focus != f { data.focus = f }
     }
 }
 
@@ -262,32 +512,45 @@ private struct BarSeg {
 }
 
 struct PathRow: View {
+    @Environment(DataService.self) private var data
     let option: PathOption
-    let rank: Int
     let selected: Bool
     let maxSec: Double
 
+    private var health: RouteHealth { routeHealth(option, data: data) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Text("\(rank)")
-                    .font(.caption.bold())
-                    .foregroundStyle(selected ? Color.white : Color.primary)
-                    .frame(width: 18, height: 18)
-                    .background(Circle().fill(selected ? Color.accentColor : Color.secondary.opacity(0.3)))
+        let h = health
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
                 legBullets
-                Spacer()
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(Fmt.minTxt(option.live?.totalSec ?? option.expectedSec)).font(.subheadline.bold())
-                    Text(liveText).font(.caption2).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    HealthDot(health: h).fixedSize()
+                    Text(Fmt.minTxt(option.live?.totalSec ?? option.expectedSec)).font(.title3.bold()).monospacedDigit()
                 }
+                .layoutPriority(1)
             }
-            Text(option.label).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(option.label).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                Spacer(minLength: 8)
+                Text(liveText).font(.caption).foregroundStyle(Color.primary.opacity(0.7)).lineLimit(1).layoutPriority(1)
+            }
+            // notes only once the route runs 5 min or more behind
+            if h.level != .smooth, !h.reasons.isEmpty {
+                Text(h.summary).font(.caption.weight(.medium)).foregroundStyle(h.textColor).lineLimit(2)
+            }
             bar
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(selected ? Color.accentColor.opacity(0.12) : Color(.secondarySystemBackground)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 1))
+        .padding(10)
+        // the tint sits on the same card grey as the other rows, so the selected row is the brighter one in dark mode too
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground))
+                RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(selected ? 0.16 : 0))
+            }
+        }
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: 1))
         .contentShape(Rectangle())
     }
 
@@ -308,12 +571,12 @@ struct PathRow: View {
     private var segments: [BarSeg] {
         var out: [BarSeg] = []
         let l0 = option.legs[0]
-        out.append(BarSeg(sec: option.wait1Sec, color: Color.secondary.opacity(0.45)))
+        out.append(BarSeg(sec: option.wait1Sec, color: Color.primary.opacity(0.22)))
         out.append(BarSeg(sec: Double(l0.schedRideSec ?? 0) + (l0.typicalSec ?? 0) + l0.holdRiskSec, color: RouteStyle.color(l0.primaryRoute)))
         if option.legs.count > 1, let tr = option.transfer {
             let l1 = option.legs[1]
-            out.append(BarSeg(sec: Double(tr.walkSec), color: Color.primary.opacity(0.7)))
-            out.append(BarSeg(sec: option.wait2Sec, color: Color.secondary.opacity(0.45)))
+            if tr.walkSec > 0 { out.append(BarSeg(sec: Double(tr.walkSec), color: Color.primary.opacity(0.7))) }
+            out.append(BarSeg(sec: option.wait2Sec, color: Color.primary.opacity(0.22)))
             out.append(BarSeg(sec: Double(l1.schedRideSec ?? 0) + (l1.typicalSec ?? 0) + l1.holdRiskSec, color: RouteStyle.color(l1.primaryRoute)))
         }
         return out.map { BarSeg(sec: max(0, $0.sec), color: $0.color) }
@@ -322,14 +585,17 @@ struct PathRow: View {
     private var bar: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            HStack(spacing: 1) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { _, s in
-                    RoundedRectangle(cornerRadius: 2).fill(s.color).frame(width: max(2, w * CGFloat(s.sec / maxSec)))
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3).fill(Color.primary.opacity(0.06))
+                HStack(spacing: 1.5) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, s in
+                        RoundedRectangle(cornerRadius: 3).fill(s.color).frame(width: max(2, w * CGFloat(s.sec / maxSec)))
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
         }
-        .frame(height: 10)
+        .frame(height: 12)
     }
 }
 
@@ -405,12 +671,12 @@ struct PathDetailView: View {
                         i += 1
                     }
                     if let s = slow, let r = s.ratio, r >= 1.15 {
-                        out.append("slowest measured stretch: \(s.fromName) → \(s.toName), \(Int(s.medianRunSec.rounded())) s vs \(Int((s.schedRunSec ?? 0).rounded())) s scheduled (\(Fmt.kmh(s.speedKmh)))")
+                        out.append("slowest measured stretch: \(s.fromName) → \(s.toName), \(Int(s.medianRunSec.rounded())) s vs \(Int((s.schedRunSec ?? 0).rounded())) s scheduled (\(Fmt.mph(s.speedKmh)))")
                     }
                 }
             }
             for a in data.alertsFor(routes: leg.routes).prefix(2) {
-                out.append("alert (\(a.kind)) on the \(a.routes.joined(separator: "/")): \(a.header)")
+                out.append("alert (\(a.kind)) on the \(a.routes.joined(separator: "/")): \(a.header) — \(alertEvidence(a, data: data).text)")
             }
         }
         if let b = data.boards[option.legs[0].primaryKey] {
@@ -441,7 +707,8 @@ struct LegDiagram: View {
                 }
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     TrackDiagramView(line: line, route: leg.primaryRoute, fromIdx: ix.from, toIdx: ix.to,
-                                     layers: layers(line, key), trains: trains(line, key), colW: 56, scrollTo: max(0, ix.from - 1))
+                                     layers: layers(line, key), trains: trains(line, key), colW: 56,
+                                     scrollTo: focusStop(line, key) ?? max(0, ix.from - 1))
                 }
             }
         }
@@ -472,8 +739,22 @@ struct LegDiagram: View {
             i += 1
         }
         let measured = (data.segments?.n ?? 0) > 0
-        out.append(DiagramLayer(id: "speed", name: measured ? "km/h (measured where known)" : "km/h (scheduled)", values: speeds, color: Color.teal, format: { "\(Int($0.rounded()))" }))
+        out.append(DiagramLayer(id: "speed", name: measured ? "mph (measured where known)" : "mph (scheduled)", values: speeds, color: Color.teal, format: { "\(Int(($0 * 0.621371).rounded()))" }))
         return out
+    }
+
+    /// The stop to scroll to so the train this leg boards is in view (one stop before it), while it is on its way.
+    private func focusStop(_ line: LineTopology, _ key: String) -> Int? {
+        guard let l = option.live, l.legs.indices.contains(legNo - 1) else { return nil }
+        let tc = l.legs[legNo - 1]
+        guard let b = data.boards[tc.key], let t = b.trains.first(where: { $0.id == tc.train.id }), let bl = schedule.lines[tc.key] else { return nil }
+        var idx = trainProgress(t, age: data.now - b.now, line: bl).idx
+        if tc.key != key {
+            let j = Int(idx.rounded(.down))
+            guard j >= 0, j < bl.stops.count, let pj = line.stops.firstIndex(of: bl.stops[j]) else { return nil }
+            idx = Double(pj)
+        }
+        return max(0, Int(idx.rounded(.down)) - 1)
     }
 
     private func trains(_ line: LineTopology, _ key: String) -> [DiagramTrain] {
@@ -501,7 +782,7 @@ struct LegDiagram: View {
                 }
                 var sub = ""
                 if let e = t.effectiveLatenessSec, abs(e) >= 60 { sub = Fmt.late(e) }
-                if sub.isEmpty, let lr = t.lastRun, let sp = lr.speedKmh { sub = Fmt.kmh(sp) }
+                if sub.isEmpty, let lr = t.lastRun, let sp = lr.speedKmh { sub = Fmt.mph(sp) }
                 out.append(DiagramTrain(id: t.id, idx: idx, state: p.state, route: t.route, label: shortLabel(t), sub: sub, emphasis: emphasis))
             }
         }
@@ -561,8 +842,8 @@ struct ItineraryRow: View {
 
     private func positionText(_ leg: TripCandidate) -> String {
         var s = leg.train.position?.text ?? "position unknown"
-        if let seg = leg.train.segment, let sp = seg.schedSpeedKmh { s += " · \(Fmt.kmh(sp)) sched" }
-        if let lr = leg.train.lastRun, let sp = lr.speedKmh { s += " · last run \(Fmt.kmh(sp))" }
+        if let seg = leg.train.segment, let sp = seg.schedSpeedKmh { s += " · \(Fmt.mph(sp)) sched" }
+        if let lr = leg.train.lastRun, let sp = lr.speedKmh { s += " · last run \(Fmt.mph(sp))" }
         return s
     }
 }

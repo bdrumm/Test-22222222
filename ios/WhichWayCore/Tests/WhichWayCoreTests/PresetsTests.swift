@@ -18,7 +18,7 @@ final class PresetsTests: XCTestCase {
         let ts = cal.date(from: DateComponents(year: 2026, month: 9, day: 23, hour: 8, minute: 30))!.timeIntervalSince1970
         XCTAssertTrue(am.isActive(at: ts))
         XCTAssertFalse(night.isActive(at: ts))
-        XCTAssertEqual(am.windowText, "06:00–10:00 weekdays")
+        XCTAssertEqual(am.windowText, "6:00–10:00 weekdays")
         XCTAssertEqual(Fmt.dayStamp(ts), "2026-09-23")
         let w = PresetStore.suggestedWindow(at: ts)
         XCTAssertEqual(w.start, 7 * 60)

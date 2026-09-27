@@ -1,43 +1,81 @@
 import SwiftUI
 import CoreLocation
 
-/// The saved commutes as chips: the one whose window covers now carries a clock, the one on screen is outlined;
-/// the last chip saves the current trip as a new commute.
-struct PresetChips: View {
+/// One chip for the commutes: the one on screen, else the one whose window covers now (with a clock), else an
+/// invitation to add one. Tapping it opens the commute menu: switch, edit, add.
+struct CommuteChip: View {
     let presets: [CommutePreset]
     let activeId: UUID?
     let currentId: UUID?
-    let canAdd: Bool
     let onPick: (CommutePreset) -> Void
+    let onEdit: (CommutePreset) -> Void
+    let onAdd: () -> Void
+
+    private var shown: CommutePreset? { presets.first { $0.id == currentId } ?? presets.first { $0.id == activeId } }
+    private var on: Bool { shown != nil && shown?.id == currentId }
+
+    var body: some View {
+        Menu {
+            ForEach(presets) { p in
+                Button { onPick(p) } label: {
+                    if p.id == currentId {
+                        Label("\(p.name) · \(p.windowText)", systemImage: "checkmark")
+                    } else if p.id == activeId {
+                        Label("\(p.name) · \(p.windowText)", systemImage: "clock")
+                    } else {
+                        Text("\(p.name) · \(p.windowText)")
+                    }
+                }
+            }
+            if !presets.isEmpty {
+                Divider()
+                Menu {
+                    ForEach(presets) { p in Button(p.name) { onEdit(p) } }
+                } label: {
+                    Label("Edit…", systemImage: "pencil")
+                }
+            }
+            Button(action: onAdd) { Label("Add commute", systemImage: "plus") }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: shown == nil ? "plus.circle" : (on ? "briefcase.fill" : "clock")).font(.caption)
+                if let p = shown {
+                    Text(p.name).font(.caption.bold())
+                    Text(p.windowText).font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text(presets.isEmpty ? "Add a commute" : "Commutes").font(.caption.bold())
+                }
+                Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Capsule().fill(on ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground)))
+            .overlay(Capsule().stroke(on ? Color.accentColor : Color.clear, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Shown while the trip is incomplete: the way to get the Go tab to pick the trip on its own.
+struct SetupPrompt: View {
+    let originSet: Bool
+    let destSet: Bool
+    let reachable: Int
     let onAdd: () -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(presets) { p in
-                    Button { onPick(p) } label: {
-                        HStack(spacing: 4) {
-                            if p.id == activeId { Image(systemName: "clock.fill").font(.caption2) }
-                            if p.useNearestOrigin { Image(systemName: "location.fill").font(.caption2) }
-                            Text(p.name).font(.caption.bold())
-                            Text(p.windowText).font(.caption2).foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Capsule().fill(p.id == currentId ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground)))
-                        .overlay(Capsule().stroke(p.id == currentId ? Color.accentColor : Color.clear, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
-                Button(action: onAdd) {
-                    Label(presets.isEmpty ? "Save as commute" : "Add commute", systemImage: "plus")
-                        .font(.caption.bold())
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Capsule().fill(Color(.secondarySystemBackground)))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canAdd)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text(!originSet && !destSet ? "Where are you going?" : (originSet ? "Pick a destination" : "Pick where you start")).font(.headline)
+            Text(originSet && !destSet
+                 ? "\(reachable) stations are reachable direct or with one change. Save the trip as a commute and the Go tab will switch to it by time of day."
+                 : "Save a commute with your usual stations and the Go tab switches to it on its own by time of day; or pick stations above for a one-off trip.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Button(action: onAdd) { Label("Add a commute", systemImage: "plus") }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
     }
 }
 
@@ -67,9 +105,9 @@ struct PresetEditorView: View {
                 Section("Stations") {
                     Toggle("Start from the nearest station (uses your location)", isOn: $preset.useNearestOrigin)
                     if !preset.useNearestOrigin {
-                        StationButton(label: "From", station: data.index?.stations[preset.originId]) { pickingOrigin = true }
+                        StationButton(label: "From", station: data.index?.station(preset.originId)) { pickingOrigin = true }
                     }
-                    StationButton(label: "To", station: data.index?.stations[preset.destId]) { pickingDest = true }
+                    StationButton(label: "To", station: data.index?.station(preset.destId)) { pickingDest = true }
                 }
                 Section("Active") {
                     DatePicker("From", selection: $start, displayedComponents: .hourAndMinute)
@@ -157,7 +195,7 @@ struct NearbyStationsSheet: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(n.station.name).foregroundStyle(Color.primary)
-                                    Text("\(Int(n.meters.rounded())) m · about \(n.walkMinutes) min walk").font(.caption).foregroundStyle(.secondary)
+                                    Text("\(Fmt.miles(n.meters)) · about \(n.walkMinutes) min walk").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 RouteBullets(routes: n.station.routes, size: 18)
@@ -189,7 +227,7 @@ struct CommutesSection: View {
                 Button { editing = p } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(p.name).foregroundStyle(Color.primary)
-                        Text("\(p.useNearestOrigin ? "nearest station" : (data.index?.stations[p.originId]?.name ?? p.originId)) → \(data.index?.stations[p.destId]?.name ?? p.destId) · \(p.windowText)")
+                        Text("\(p.useNearestOrigin ? "nearest station" : (data.index?.station(p.originId)?.name ?? p.originId)) → \(data.index?.station(p.destId)?.name ?? p.destId) · \(p.windowText)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

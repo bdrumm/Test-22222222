@@ -64,19 +64,21 @@ class LiveState:
         self._sched_date = None
 
     def refresh_client_schedule(self, now: float) -> bool:
-        """(Re)write data/client_schedule.json and client_lines.json when the service date changes."""
+        """(Re)write data/client_schedule.json, client_lines.json and client_geometry.json when the service date changes."""
         if self.site_dir is None:
             return False
         from datetime import datetime, timedelta
         from ..sources.gtfs_static import NY_TZ
-        from .client_export import export_client_schedule
+        from .client_export import export_client_geometry, export_client_schedule
         dt = datetime.fromtimestamp(now, NY_TZ)
         sd = (dt - timedelta(hours=3)).date()
         if sd == self._sched_date:
             return False
         out = self.site_dir / "data"
         out.mkdir(parents=True, exist_ok=True)
-        export_client_schedule(self.static, self.targets, self.journeys, out, dt, self.feeds)
+        cs = export_client_schedule(self.static, self.targets, self.journeys, out, dt, self.feeds)
+        # the geometry must describe the same lines, stop for stop: the app maps coordinates onto them by index
+        export_client_geometry(self.static, list(cs.get("lines", {})), out, dt)
         self._sched_date = sd
         log.info("client schedule exported for %s", sd)
         return True
@@ -224,7 +226,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json({"ok": bool(live), "polls": st.polls, "uptime_sec": time.time() - st.started_at,
                                    "last_poll_age_sec": (time.time() - live["generated_ts"]) if live.get("generated_ts") else None,
                                    "learned_model_ready": bool(st.learned and st.learned.ready), "feeds": st.feeds,
-                                   "store_arrivals": int(len(st.store.arrivals(None, time.time() - 86400, time.time()))) if st.store is not None else None})
+                                   "store_arrivals": int(len(st.store.arrivals(None, time.time() - 86400, time.time()))) if st.store is not None else None,
+                                   "telemetry": st.store.telemetry_count() if st.store is not None else None})
             if not live:
                 return self._json({"error": "no snapshot yet"}, 503)
             if path == "/api/routes":
@@ -253,6 +256,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
                 return
         return super().do_GET()
+
+    def do_POST(self):
+        """POST /api/telemetry: one trip observation, or a list of them, from an opted-in phone."""
+        path, _, _ = self.path.partition("?")
+        if path != "/api/telemetry":
+            return self._json({"error": "unknown endpoint", "endpoints": ["POST /api/telemetry"]}, 404)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        if n <= 0 or n > 1_000_000:
+            return self._json({"error": "a JSON body of at most 1 MB is required"}, 400)
+        try:
+            body = json.loads(self.rfile.read(n))
+        except Exception:
+            return self._json({"error": "invalid JSON"}, 400)
+        items = body if isinstance(body, list) else [body]
+        if not items or not all(isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] for x in items):
+            return self._json({"error": "each observation is an object with a string id"}, 400)
+        store = self.state.store
+        if store is None:
+            return self._json({"error": "no store: run serve with --db"}, 503)
+        stored = store.insert_telemetry(items, received_ts=time.time())
+        return self._json({"ok": True, "stored": stored})
 
     def log_message(self, fmt, *args):  # quieter
         log.debug(fmt, *args)
