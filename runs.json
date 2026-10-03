@@ -8146,5 +8146,132 @@
 "skipped": [
 "ticketmaster"
 ]
+},
+{
+"ts": 1791036611.8274965,
+"iso": "2026-10-03T10:10:11.827498-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace",
+"bdfm",
+"g",
+"jz",
+"l",
+"nqrw",
+"si"
+],
+"polls": 88,
+"errors": 0,
+"arrivals": 1074,
+"flushed": 432,
+"alerts": 906,
+"forecast_eval": 375,
+"duration_sec": 3046,
+"written": {
+"2026-10-03": 1635
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 2573
+},
+{
+"feed": "ace",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 821
+},
+{
+"feed": "bdfm",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 985
+},
+{
+"feed": "g",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 255
+},
+{
+"feed": "jz",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 285
+},
+{
+"feed": "l",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 224
+},
+{
+"feed": "nqrw",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 972
+},
+{
+"feed": "si",
+"polls": 88,
+"first_ts": 1791033565.9025261,
+"last_ts": 1791036537.4402928,
+"arrivals": 69
+}
+]
+},
+{
+"ts": 1791036612.2077906,
+"iso": "2026-10-03T10:10:12.206089-04:00",
+"kind": "backfill",
+"fetched": [],
+"failed": {}
+},
+{
+"ts": 1791036624.7140682,
+"iso": "2026-10-03T10:10:24.714069-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:6188",
+"delay_incidents:8120",
+"major_incidents:1242",
+"customer_journey:1248",
+"stations:496",
+"ridership_hourly:6120",
+"weather_daily:61",
+"alerts_archive:47307(+168)",
+"nws_alerts:53",
+"elevator_outages:56",
+"nyc_events:5000",
+"news:6",
+"events:4632"
+],
+"failed": {},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636",
+"4av-9st-fg-n": "608",
+"4av-9st-fg-s": "608",
+"4av-9st-r-n": "608",
+"4av-9st-r-s": "608",
+"14st-8av-ace-n": "618",
+"14st-8av-ace-s": "618",
+"8av-l-n": "618",
+"8av-l-s": "618"
+},
+"skipped": [
+"ticketmaster"
+]
 }
 ]
