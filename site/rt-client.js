@@ -589,8 +589,26 @@ export function calibrationAt(model, route, h) {
   if (table && i < table.length) return table[i];
   const [p10, p90] = priorSpread(Math.max(0, h)); return { n: 0, bias: 0, p10, p90 };
 }
-export function carryAt(model, route, k) {
-  const lc = (model && model.lateness_carry) || {}; const t = (lc.by_route && lc.by_route[route]) || lc.all;
+export const BAND_NAMES = ["night", "am_peak", "midday", "pm_peak", "evening", "weekend_day", "weekend_night"];
+/** Time band index for a New York local hour and weekday (Monday = 0); mirrors client_model.band_of_hour. */
+export function bandOfHour(hour, weekday) {
+  if (weekday >= 5) return (hour >= 7 && hour <= 21) ? 5 : 6;
+  if (hour < 6) return 0; if (hour <= 9) return 1; if (hour <= 15) return 2; if (hour <= 19) return 3; return 4;
+}
+const NY_PARTS = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false, weekday: "short" });
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+export function bandAt(ts) {
+  let hour = 0, wd = 0;
+  for (const p of NY_PARTS.formatToParts(new Date(ts * 1000))) { if (p.type === "hour") hour = Number(p.value) % 24; else if (p.type === "weekday") wd = Math.max(0, WEEKDAYS.indexOf(p.value)); }
+  return BAND_NAMES[bandOfHour(hour, wd)];
+}
+/** Lateness-carry coefficients for k stops ahead: route × band, else route, else band, else all routes. */
+export function carryAt(model, route, k, band = null) {
+  const lc = (model && model.lateness_carry) || {};
+  let t = band && lc.by_route_band && lc.by_route_band[route] ? lc.by_route_band[route][band] : null;
+  if (!t) t = lc.by_route && lc.by_route[route];
+  if (!t && band && lc.by_band) t = lc.by_band[band];
+  if (!t) t = lc.all;
   if (!t || k < 1 || k > (t.slope || []).length) return null;
   return { slope: t.slope[k - 1], intercept: t.intercept[k - 1], resid_std: t.resid_std[k - 1] };
 }
@@ -617,7 +635,7 @@ export function predictTrain(train, line, model, now, scenario = "baseline") {
   let extra = 0;
   if (held) { const rem = remainingHold(model && model.hold_survival, Number(pos.since_sec || 0)); extra = ({ baseline: rem.expected, hold_persists: rem.p90, clears_now: 0 })[scenario] ?? rem.expected; }
   out.hold_extra_sec = extra;
-  const run = line.run_sec || []; const schedNext = train.sched_ts;
+  const run = line.run_sec || []; const schedNext = train.sched_ts; const band = bandAt(now);
   let prevT = null;
   for (const [idx, feed] of pts) {
     const h = feed - now; const cal = calibrationAt(model, route, h);
@@ -628,7 +646,7 @@ export function predictTrain(train, line, model, now, scenario = "baseline") {
     if (schedNext != null && eff != null && k >= 1) {
       let runSum = 0, ok = true;
       for (let s = nextIdx; s < idx; s++) { const r = s < run.length ? run[s] : null; if (r == null) { ok = false; break; } runSum += Number(r); }
-      const carry = carryAt(model, route, k);
+      const carry = carryAt(model, route, k, band);
       if (ok && carry) {
         const schedD = Number(schedNext) + runSum; const etaS = schedD + Number(carry.intercept) + Number(carry.slope) * Number(eff);
         const varS = Math.max(Number(carry.resid_std) ** 2, 1); const w = varF / (varF + varS);

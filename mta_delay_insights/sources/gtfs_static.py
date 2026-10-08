@@ -358,7 +358,15 @@ class StaticGTFS:
     # Topology
     # ------------------------------------------------------------------ #
     def canonical_stop_sequence(self, route_id: str, direction: str) -> list[str]:
-        """Ordered stop ids of the most common trip pattern for a route/direction."""
+        """Ordered stop ids of the most common trip pattern for a route/direction (memoised: a live snapshot asks
+        hundreds of times and the pattern scan costs ~20 ms)."""
+        cache = self.__dict__.setdefault("_seq_cache", {})
+        key = (str(route_id), str(direction).upper())
+        if key not in cache:
+            cache[key] = self._canonical_stop_sequence(route_id, direction)
+        return list(cache[key])
+
+    def _canonical_stop_sequence(self, route_id: str, direction: str) -> list[str]:
         trips = self.trips[self.trips["route_id"] == route_id]
         trips = trips[trips["trip_id"].map(direction_from_trip_id) == direction.upper()]
         if trips.empty:

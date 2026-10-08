@@ -6,129 +6,101 @@ train serves ``u`` (time ``t``):
 
 * the train: route, direction, lateness at ``u``, how its lateness changed over
   the previous 1 and 3 stops (momentum), the scheduled run time ``u -> d``,
-  whether it is on a different track than scheduled;
-* the traffic ahead: gap to the train in front at ``u`` and that train's
-  lateness, the scheduled headway;
+  whether it is on a different track than scheduled, where ``u`` sits on the
+  line (index on the canonical stop sequence, stops left to the end, whether
+  ``d`` is the last stop);
+* the traffic ahead: gap to the train in front at ``u``, that train's lateness
+  and momentum, the scheduled headway;
 * the segment right now: mean excess run time of the last three trains that
-  completed ``u -> d`` before ``t`` and the mean lateness at ``d`` in the
-  previous 15 minutes;
+  completed ``u -> d`` before ``t``, the last one's excess and how long ago it
+  got there, and the mean lateness at ``d`` in the previous 15 minutes;
+* the line right now: mean lateness of the route (same direction) over the last
+  30 minutes, of the whole network over the last 15, and how many arrivals the
+  route logged in the last 30 minutes (throughput);
 * the feed's own forecast for ``d`` at that moment when an ETA sample exists;
-* context: hour (cyclic), weekend, peak, unplanned alert on the route (with
-  cause), planned work, daily precipitation and heat, events / news / holiday.
+* the calendar: hour (cyclic and plain), weekday, service day type, time band,
+  weekend / peak / holiday;
+* the day's pattern: the typical excess on this segment at this day type and
+  hour and the route's typical lateness then (fitted on the training span, see
+  :mod:`.arrival`), plus the alert-archive climatology;
+* weather: the hour's temperature, precipitation (this hour and the last three),
+  snow, wind and weather-code group, the day's total rain and heat, NWS alerts;
+* events and alerts: unplanned alerts on the route (count, cause, age), alerts
+  network-wide, planned work, venue / street / news event weights.
 
 Target: ``delta_sec = lateness at d - lateness at u`` (the excess run time).
 """
 from __future__ import annotations
 
 import math
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
 from ..analysis.schedule_match import match_arrivals
-from ..realtime.journey import context_index
-from ..sources.gtfs_static import NY_TZ, StaticGTFS
-from ..sources import alerts as alerts_src
+from ..sources.gtfs_static import StaticGTFS
+from .context import FeatureContext, cached_context
 
-K_SET = (1, 2, 3, 5, 8, 12)
+K_SET = (1, 2, 3, 5, 8, 12, 16, 20)
 CATEGORICAL = ["route_code", "direction_code", "cause_code"]
-NUMERIC = ["k", "sched_run_sec", "lateness_u", "mom1", "mom3", "gap_ahead_sec", "leader_lateness", "leader_same_route",
-           "sched_headway_sec", "seg_recent_excess", "dest_recent_lateness", "feed_excess", "track_changed",
-           "hour_sin", "hour_cos", "weekend", "peak", "alert_active", "planned_active",
-           "precip_mm", "heat", "holiday", "venue_event_w", "street_event_w", "news_w",
-           "nws_any", "nws_severe", "clim_rate"]
+STATE = ["k", "sched_run_sec", "lateness_u", "mom1", "mom3", "gap_ahead_sec", "leader_lateness", "leader_same_route", "leader_mom1",
+         "sched_headway_sec", "seg_recent_excess", "seg_last_excess", "seg_staleness", "dest_recent_lateness", "feed_excess", "track_changed",
+         "pos_u", "stops_to_end", "d_is_last"]
+TIME = ["hour_sin", "hour_cos", "hour", "dow", "daytype", "band", "weekend", "peak", "holiday"]
+PATTERNS = ["prof_seg_excess", "prof_route_lateness", "route_recent_lateness", "net_recent_lateness", "route_arrivals_30", "clim_rate"]
+WEATHER = ["precip_mm", "heat", "temp_c", "precip_hr_mm", "precip_3h_mm", "snow_cm", "wind_kmh", "wcode_group", "nws_any", "nws_severe"]
+EVENTS = ["alert_active", "planned_active", "alert_n", "alert_age_min", "net_alert_n", "venue_event_w", "street_event_w", "news_w"]
+NUMERIC = STATE + TIME + PATTERNS + WEATHER + EVENTS
 FEATURES = CATEGORICAL + NUMERIC
-CAUSES = ["none", "signal", "track", "police", "medical", "mechanical", "crowding", "weather", "other"]
+PROFILE_FEATURES = ["prof_seg_excess", "prof_route_lateness"]
+# the feature set the first deployed model used (for like-for-like comparisons)
+LEGACY_FEATURES = CATEGORICAL + ["k", "sched_run_sec", "lateness_u", "mom1", "mom3", "gap_ahead_sec", "leader_lateness", "leader_same_route",
+                                 "sched_headway_sec", "seg_recent_excess", "dest_recent_lateness", "feed_excess", "track_changed",
+                                 "hour_sin", "hour_cos", "weekend", "peak", "alert_active", "planned_active",
+                                 "precip_mm", "heat", "holiday", "venue_event_w", "street_event_w", "news_w", "nws_any", "nws_severe", "clim_rate"]
+GROUPS = {"state": ["route_code", "direction_code"] + STATE, "time": TIME, "patterns": PATTERNS, "weather": WEATHER, "events": ["cause_code"] + EVENTS}
 ROUTES = ["1", "2", "3", "4", "5", "6", "6X", "7", "7X", "A", "B", "C", "D", "E", "F", "FX", "G", "J", "L", "M", "N", "Q", "R", "S", "SI", "W", "Z", "FS", "GS", "H"]
 ROUTE_CODE = {r: i for i, r in enumerate(ROUTES)}
-CAUSE_CODE = {c: i for i, c in enumerate(CAUSES)}
 PEAK_HOURS = {7, 8, 9, 16, 17, 18, 19}
+KEY_COLUMNS = ["trip_key", "route_id", "direction", "u", "d", "t", "t_d", "sched_d", "source", "delta_sec"]
 
 
-def _cause_code(c) -> int:
-    if not isinstance(c, str):
-        return 0
-    for name in CAUSES[1:]:
-        if name in c:
-            return CAUSE_CODE[name]
-    return CAUSE_CODE["other"]
-
-
-def _alert_index(alerts_df: pd.DataFrame | None) -> tuple[np.ndarray, np.ndarray, list, np.ndarray, np.ndarray]:
-    """Arrays for fast 'is an alert active for route r at t' checks."""
-    if alerts_df is None or alerts_df.empty:
-        return np.zeros(0), np.zeros(0), [], np.zeros(0, dtype=int), np.zeros(0, dtype=bool)
-    a = alerts_df
-    kinds = np.array([alerts_src.alert_kind(t, h) for t, h in zip(a["alert_type"], a["header"])])
-    start = pd.to_numeric(a["active_start"], errors="coerce").fillna(-np.inf).values.astype(float)
-    upd = pd.to_numeric(a.get("updated_at", pd.Series(index=a.index, dtype=float)), errors="coerce")
-    end = pd.to_numeric(a["active_end"], errors="coerce").fillna(upd.fillna(pd.Series(start, index=a.index)) + 3 * 3600).values.astype(float)
-    routes = [set(map(str, rs)) if isinstance(rs, (list, tuple, set)) and len(rs) else None for rs in a["routes"].values]
-    causes = np.array([_cause_code(c) for c in a.get("cause_category", pd.Series([None] * len(a))).values])
-    planned = (kinds == "planned")
-    delay = (kinds == "delay")
-    keep = planned | delay
-    return start[keep], end[keep], [r for r, k in zip(routes, keep) if k], causes[keep], planned[keep]
-
-
-def _alert_feats(idx, ts: float, route: str) -> tuple[float, float, int]:
-    start, end, routes, causes, planned = idx
-    if not len(start):
-        return 0.0, 0.0, 0
-    on = np.flatnonzero((start <= ts) & (end >= ts))
-    active = planned_on = 0.0
-    cause = 0
-    for i in on:
-        if routes[i] is None or route in routes[i]:
-            if planned[i]:
-                planned_on = 1.0
-            else:
-                active = 1.0
-                cause = cause or int(causes[i])
-    return active, planned_on, cause
-
-
-def _nws_arrays(nws: pd.DataFrame | None):
-    if nws is None or nws.empty:
-        return None
-    on = pd.to_numeric(nws["onset_ts"], errors="coerce").fillna(-1e12).values.astype(float)
-    off = pd.to_numeric(nws["ends_ts"], errors="coerce").fillna(1e12).values.astype(float)
-    sev = nws["severity"].isin(["Severe", "Extreme"]).values
-    return on, off, sev
-
-
-def nws_at(arrs, ts: float) -> tuple[float, float]:
-    if arrs is None:
-        return 0.0, 0.0
-    on, off, sev = arrs
-    m = (on <= ts) & (off >= ts)
-    return float(m.any()), float((m & sev).any())
-
-
-def clim_rate_at(clim: dict | None, route: str, ts: float) -> float:
-    if not clim:
-        return float("nan")
-    grid = clim.get("grid_by_route", {}).get(str(route))
-    if not grid:
-        return float("nan")
-    local = datetime.fromtimestamp(ts, NY_TZ)
-    return float(grid[local.weekday()][local.hour])
+def _recent_mean(m: pd.DataFrame, keys: list[str] | None, window: float, value: str = "lateness_sec") -> tuple[np.ndarray, np.ndarray]:
+    """Mean of ``value`` and count over the arrivals strictly before each row's time within ``window`` seconds, per key group."""
+    mean = np.full(len(m), np.nan); count = np.zeros(len(m))
+    groups = m.groupby(keys, sort=False).indices.values() if keys else [np.arange(len(m))]
+    ts_all = m["arrival_ts"].values.astype(float); val_all = m[value].values.astype(float)
+    for idx in groups:
+        idx = np.asarray(idx)
+        order = np.argsort(ts_all[idx], kind="stable")
+        idx = idx[order]
+        ts = ts_all[idx]; v = np.nan_to_num(val_all[idx])
+        cs = np.concatenate([[0.0], np.cumsum(v)])
+        lo = np.searchsorted(ts, ts - window, side="left"); hi = np.searchsorted(ts, ts, side="left")
+        n = hi - lo
+        mean[idx] = np.where(n > 0, (cs[hi] - cs[lo]) / np.maximum(n, 1), np.nan)
+        count[idx] = n
+    return mean, count
 
 
 def build_training_rows(arrivals: pd.DataFrame, static: StaticGTFS, alerts_df: pd.DataFrame | None = None,
                         weather_daily: pd.DataFrame | None = None, events_df: pd.DataFrame | None = None,
                         eta_samples: pd.DataFrame | None = None, k_set=K_SET, min_confidence: float = 0.6,
-                        nws_df: pd.DataFrame | None = None, climatology: dict | None = None) -> pd.DataFrame:
+                        nws_df: pd.DataFrame | None = None, climatology: dict | None = None, *,
+                        weather_hourly: pd.DataFrame | None = None, alerts_archive: pd.DataFrame | None = None,
+                        ctx: FeatureContext | None = None) -> pd.DataFrame:
     """Vectorised construction of the training table from observed arrivals."""
+    empty = pd.DataFrame(columns=KEY_COLUMNS + FEATURES)
     if arrivals is None or arrivals.empty:
-        return pd.DataFrame(columns=["trip_key", "route_id", "u", "d", "t", "delta_sec"] + FEATURES)
+        return empty
     a = arrivals[arrivals["confidence"] >= min_confidence].copy()
     a = a.drop_duplicates(["trip_key", "stop_id"]).sort_values(["trip_key", "arrival_ts"])
     m = match_arrivals(a, static).dropna(subset=["lateness_sec"])
     m["route_id"] = m["route_id"].astype(str)
     m = m[(m["lateness_sec"] > -900) & (m["lateness_sec"] < 5400)]
     m = m.sort_values(["trip_key", "arrival_ts"]).reset_index(drop=True)
+    if "source" not in m.columns:
+        m["source"] = "unknown"
     m["seq"] = m.groupby("trip_key").cumcount()
     # momentum: lateness change over the previous 1 and 3 observed stops of the same trip
     g = m.groupby("trip_key")["lateness_sec"]
@@ -140,110 +112,138 @@ def build_training_rows(arrivals: pd.DataFrame, static: StaticGTFS, alerts_df: p
     m["gap_ahead_sec"] = m["arrival_ts"] - gs["arrival_ts"].shift(1)
     m["leader_lateness"] = gs["lateness_sec"].shift(1)
     m["leader_same_route"] = (gs["route_id"].shift(1) == m["route_id"]).astype(float)
-    m.loc[m["gap_ahead_sec"] > 3600, ["gap_ahead_sec", "leader_lateness"]] = np.nan
+    m["leader_mom1"] = gs["mom1"].shift(1)
+    m.loc[m["gap_ahead_sec"] > 3600, ["gap_ahead_sec", "leader_lateness", "leader_mom1"]] = np.nan
+    m = m.reset_index(drop=True)
+    # where the stop sits on the line: index on the route's canonical sequence and stops left to its end
+    m["pos"] = np.nan; m["line_len"] = np.nan
+    seq_cache: dict[tuple[str, str], dict[str, int]] = {}
+    for (r, dr), idx in m.groupby(["route_id", "direction"], sort=False).indices.items():
+        key = (str(r), str(dr or "N"))
+        if key not in seq_cache:
+            try:
+                seq_cache[key] = {sid: i for i, sid in enumerate(static.canonical_stop_sequence(*key))}
+            except Exception:
+                seq_cache[key] = {}
+        sq = seq_cache[key]
+        if sq:
+            m.loc[m.index[idx], "pos"] = [sq.get(sid, np.nan) for sid in m["stop_id"].values[idx]]
+            m.loc[m.index[idx], "line_len"] = float(len(sq))
     # recent lateness at each stop over the previous 15 minutes (trains that already arrived)
-    m["dest_recent_lateness"] = np.nan
-    for sid, grp in m.groupby("stop_id"):
-        ts = grp["arrival_ts"].values; lat = grp["lateness_sec"].values
-        cs = np.concatenate([[0.0], np.cumsum(lat)])
-        lo = np.searchsorted(ts, ts - 900, side="left")
-        idx = np.arange(len(ts))
-        n = idx - lo
-        vals = np.where(n > 0, (cs[idx] - cs[lo]) / np.maximum(n, 1), np.nan)
-        m.loc[grp.index, "dest_recent_lateness"] = vals
+    m["dest_recent_lateness"], _ = _recent_mean(m, ["stop_id"], 900.0)
+    # the line and the network right now
+    m["route_recent_lateness"], m["route_arrivals_30"] = _recent_mean(m, ["route_id", "direction"], 1800.0)
+    m["net_recent_lateness"], _ = _recent_mean(m, None, 900.0)
     m = m.sort_values(["trip_key", "seq"]).reset_index(drop=True)
     tracks = ("sched_track" in m.columns) and ("actual_track" in m.columns)
     m["track_changed"] = ((m["actual_track"].notna()) & (m["sched_track"].notna()) & (m["actual_track"] != m["sched_track"])).astype(float) if tracks else 0.0
 
     base_cols = ["trip_key", "route_id", "direction", "stop_id", "arrival_ts", "lateness_sec", "sched_arrival_ts", "sched_headway_sec",
-                 "mom1", "mom3", "gap_ahead_sec", "leader_lateness", "leader_same_route", "track_changed", "seq"]
-    u = m[base_cols].rename(columns={"stop_id": "u", "arrival_ts": "t", "lateness_sec": "lateness_u", "sched_arrival_ts": "sched_u"})
+                 "mom1", "mom3", "gap_ahead_sec", "leader_lateness", "leader_same_route", "leader_mom1", "track_changed", "seq", "source",
+                 "route_recent_lateness", "route_arrivals_30", "net_recent_lateness", "pos", "line_len"]
+    u = m[base_cols].rename(columns={"stop_id": "u", "arrival_ts": "t", "lateness_sec": "lateness_u", "sched_arrival_ts": "sched_u", "pos": "pos_u"})
     parts = []
     for k in k_set:
-        d = m[["trip_key", "stop_id", "arrival_ts", "lateness_sec", "sched_arrival_ts", "seq", "dest_recent_lateness"]].copy()
+        d = m[["trip_key", "stop_id", "arrival_ts", "lateness_sec", "sched_arrival_ts", "seq", "pos"]].copy()
         d["seq"] = d["seq"] - k
-        d = d.rename(columns={"stop_id": "d", "arrival_ts": "t_d", "lateness_sec": "lateness_d", "sched_arrival_ts": "sched_d"})
+        d = d.rename(columns={"stop_id": "d", "arrival_ts": "t_d", "lateness_sec": "lateness_d", "sched_arrival_ts": "sched_d", "pos": "pos_d"})
         j = u.merge(d, on=["trip_key", "seq"], how="inner")
         j["k"] = k
         parts.append(j)
     rows = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     if rows.empty:
-        return pd.DataFrame(columns=["trip_key", "route_id", "u", "d", "t", "delta_sec"] + FEATURES)
+        return empty
     rows["sched_run_sec"] = rows["sched_d"] - rows["sched_u"]
     rows = rows[(rows["sched_run_sec"] > 0) & (rows["sched_run_sec"] < 3 * 3600)]
     rows["delta_sec"] = (rows["lateness_d"] - rows["lateness_u"]).clip(-900, 3600)
-    # dest_recent_lateness must be computed as of t (not t_d): recompute by merge_asof on the destination stop
-    rows = rows.drop(columns=["dest_recent_lateness"])
+    rows["stops_to_end"] = rows["line_len"] - 1 - rows["pos_u"]
+    rows["d_is_last"] = (rows["pos_d"] >= rows["line_len"] - 1).astype(float).where(rows["pos_d"].notna() & rows["line_len"].notna(), np.nan)
+    # dest_recent_lateness as of t (not t_d): look up the destination's state at the moment the train left u
     dest = m[["stop_id", "arrival_ts", "dest_recent_lateness"]].rename(columns={"stop_id": "d", "arrival_ts": "t_ref"}).sort_values("t_ref")
     rows = rows.sort_values("t")
     rows = pd.merge_asof(rows, dest, left_on="t", right_on="t_ref", by="d", direction="backward", allow_exact_matches=False)
     rows = rows.drop(columns=["t_ref"])
-    # recent excess over the same (u, d) pair: mean delta of the last 3 trains that reached d before t
+    # recent excess over the same (u, d) pair: mean delta of the last 3 trains that reached d before t, the last
+    # one's own excess and how long ago it got to d
     seg = rows[["u", "d", "t_d", "delta_sec"]].sort_values("t_d").copy()
     seg["seg_recent_excess"] = seg.groupby(["u", "d"])["delta_sec"].transform(lambda s: s.rolling(3, min_periods=1).mean())
-    seg = seg.rename(columns={"t_d": "t_ref"})[["u", "d", "t_ref", "seg_recent_excess"]].sort_values("t_ref")
+    seg = seg.rename(columns={"t_d": "t_ref", "delta_sec": "seg_last_excess"})[["u", "d", "t_ref", "seg_recent_excess", "seg_last_excess"]].sort_values("t_ref")
     rows = rows.sort_values("t")
     rows = pd.merge_asof(rows, seg, left_on="t", right_on="t_ref", by=["u", "d"], direction="backward", allow_exact_matches=False)
+    rows["seg_staleness"] = (rows["t"] - rows["t_ref"]).clip(upper=7200.0)
     rows = rows.drop(columns=["t_ref"])
-    rows.loc[rows["t"] - rows["t_d"].groupby([rows["u"], rows["d"]]).shift(1).fillna(rows["t"]) > 3600, "seg_recent_excess"] = np.nan
+    stale = rows["seg_staleness"].isna() | (rows["seg_staleness"] > 3600)
+    rows.loc[stale, ["seg_recent_excess", "seg_last_excess"]] = np.nan
     # the feed's own forecast at that moment, when sampled
     rows["feed_excess"] = np.nan
     if eta_samples is not None and not eta_samples.empty:
-        es = eta_samples.rename(columns={"stop_id": "d", "at_stop": "u"})[["trip_key", "u", "d", "eta_ts"]].drop_duplicates(["trip_key", "u", "d"])
-        rows = rows.merge(es, on=["trip_key", "u", "d"], how="left")
-        rows["feed_excess"] = rows["eta_ts"] - (rows["sched_d"] + rows["lateness_u"])
-        rows = rows.drop(columns=["eta_ts"])
-    # context
-    local = pd.to_datetime(rows["t"], unit="s", utc=True).dt.tz_convert(NY_TZ)
-    hour = local.dt.hour + local.dt.minute / 60.0
-    rows["hour_sin"] = np.sin(2 * np.pi * hour / 24); rows["hour_cos"] = np.cos(2 * np.pi * hour / 24)
-    rows["weekend"] = (local.dt.weekday >= 5).astype(float)
-    rows["peak"] = (local.dt.hour.isin(PEAK_HOURS) & (local.dt.weekday < 5)).astype(float)
-    aidx = _alert_index(alerts_df)
-    af = [_alert_feats(aidx, t, r) for t, r in zip(rows["t"].values, rows["route_id"].values)]
-    rows["alert_active"] = [x[0] for x in af]; rows["planned_active"] = [x[1] for x in af]; rows["cause_code"] = [x[2] for x in af]
-    ctx = context_index(None, weather_daily, events_df)
-    day = local.dt.date.astype(str)
-    w = [ctx.weather.get(dd) for dd in day]
-    rows["precip_mm"] = [x[0] if x else 0.0 for x in w]; rows["heat"] = [x[1] if x else 0.0 for x in w]
-    ef = [ctx.event_feats(t, r) for t, r in zip(rows["t"].values, rows["route_id"].values)] if ctx.events is not None else None
-    for key in ("holiday", "venue_event_w", "street_event_w", "news_w"):
-        rows[key] = [e[key] for e in ef] if ef else 0.0
-    nws_arr = _nws_arrays(nws_df)
-    nw = [nws_at(nws_arr, t) for t in rows["t"].values] if nws_arr is not None else None
-    rows["nws_any"] = [x[0] for x in nw] if nw else 0.0
-    rows["nws_severe"] = [x[1] for x in nw] if nw else 0.0
-    rows["clim_rate"] = [clim_rate_at(climatology, r, t) for r, t in zip(rows["route_id"].values, rows["t"].values)] if climatology else np.nan
+        # the feed's forecast for d from the last poll before the train reached u (within 20 minutes)
+        es = eta_samples.rename(columns={"stop_id": "d", "at_stop": "u"})[["trip_key", "u", "d", "at_ts", "eta_ts"]].dropna()
+        es = es[es["trip_key"].isin(rows["trip_key"].unique())].sort_values("at_ts")
+        if not es.empty:
+            rows = rows.sort_values("t")
+            rows = pd.merge_asof(rows, es, left_on="t", right_on="at_ts", by=["trip_key", "u", "d"], direction="backward", tolerance=1200.0)
+            rows["feed_excess"] = rows["eta_ts"] - (rows["sched_d"] + rows["lateness_u"])
+            rows = rows.drop(columns=["eta_ts", "at_ts"])
+    rows = rows.reset_index(drop=True)
+    # context: calendar, alerts, events, weather, NWS, climatology (vectorised)
+    ctx = ctx or FeatureContext.build(alerts_df, weather_daily, events_df, nws_df, climatology, weather_hourly, alerts_archive)
+    cf = ctx.frame(rows["t"].values, rows["route_id"].values)
+    for c in cf.columns:
+        rows[c] = cf[c].values
+    for c in PROFILE_FEATURES:
+        rows[c] = np.nan            # filled by the model's day-pattern profiles (fitted on the training span)
     rows["route_code"] = rows["route_id"].map(lambda r: ROUTE_CODE.get(str(r), len(ROUTES)))
     rows["direction_code"] = rows["direction"].map({"N": 0, "S": 1}).fillna(2).astype(int)
-    keep = ["trip_key", "route_id", "u", "d", "t", "t_d", "sched_d", "delta_sec"] + FEATURES
-    return rows[keep].reset_index(drop=True)
+    return rows[KEY_COLUMNS + FEATURES].reset_index(drop=True)
+
+
+def batch_live_features(rows: list[dict], ctx: FeatureContext) -> pd.DataFrame:
+    """Feature frame for serving rows that carry the state columns plus route_id, direction, u, d and t; the
+    calendar, weather, alert and event columns are added in one vectorised pass. Profile columns are left NaN
+    for the model to fill from its day-pattern profiles."""
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    cf = ctx.frame(df["t"].values.astype(float), df["route_id"].astype(str).values)
+    for c in cf.columns:
+        df[c] = cf[c].values
+    for c in PROFILE_FEATURES:
+        if c not in df.columns:
+            df[c] = np.nan
+    df["route_code"] = df["route_id"].map(lambda r: ROUTE_CODE.get(str(r), len(ROUTES)))
+    df["direction_code"] = df["direction"].map({"N": 0, "S": 1}).fillna(2).astype(int)
+    for c in FEATURES:
+        if c not in df.columns:
+            df[c] = np.nan
+    return df
 
 
 def live_features(route_id: str, direction: str | None, k: int, sched_run_sec: float, lateness_u: float, mom1: float | None,
                   mom3: float | None, gap_ahead_sec: float | None, leader_lateness: float | None, leader_same_route: float | None,
                   sched_headway_sec: float | None, seg_recent_excess: float | None, dest_recent_lateness: float | None,
                   feed_excess: float | None, track_changed: float, t: float, alerts_df=None, weather_daily=None, events_df=None,
-                  nws_df=None, climatology: dict | None = None) -> dict:
-    """A single feature row for serving, mirroring build_training_rows."""
-    nws_any, nws_severe = nws_at(_nws_arrays(nws_df), t)
-    clim = clim_rate_at(climatology, str(route_id), t)
-    local = datetime.fromtimestamp(t, NY_TZ)
-    hour = local.hour + local.minute / 60.0
-    aidx = _alert_index(alerts_df)
-    active, planned, cause = _alert_feats(aidx, t, str(route_id))
-    ctx = context_index(None, weather_daily, events_df)
-    w = ctx.weather.get(local.date().isoformat())
-    ef = ctx.event_feats(t, str(route_id))
+                  nws_df=None, climatology: dict | None = None, *, weather_hourly=None, alerts_archive=None, ctx: FeatureContext | None = None,
+                  route_recent_lateness: float | None = None, net_recent_lateness: float | None = None, route_arrivals_30: float | None = None,
+                  u: str | None = None, d: str | None = None, leader_mom1: float | None = None, seg_last_excess: float | None = None,
+                  seg_staleness: float | None = None, pos_u: float | None = None, stops_to_end: float | None = None, d_is_last: float | None = None) -> dict:
+    """A single feature row for serving, mirroring build_training_rows (profile features are added by the model)."""
+    ctx = ctx or cached_context(alerts_df, weather_daily, events_df, nws_df, climatology, weather_hourly, alerts_archive)
+    cf = ctx.frame(np.array([float(t)]), np.array([str(route_id)])).iloc[0].to_dict()
     nan = float("nan")
-    return {"route_code": ROUTE_CODE.get(str(route_id), len(ROUTES)), "direction_code": {"N": 0, "S": 1}.get(direction or "", 2), "cause_code": cause,
-            "k": k, "sched_run_sec": sched_run_sec, "lateness_u": lateness_u, "mom1": nan if mom1 is None else mom1, "mom3": nan if mom3 is None else mom3,
-            "gap_ahead_sec": nan if gap_ahead_sec is None else gap_ahead_sec, "leader_lateness": nan if leader_lateness is None else leader_lateness,
-            "leader_same_route": nan if leader_same_route is None else leader_same_route, "sched_headway_sec": nan if sched_headway_sec is None else sched_headway_sec,
-            "seg_recent_excess": nan if seg_recent_excess is None else seg_recent_excess, "dest_recent_lateness": nan if dest_recent_lateness is None else dest_recent_lateness,
-            "feed_excess": nan if feed_excess is None else feed_excess, "track_changed": track_changed,
-            "hour_sin": math.sin(2 * math.pi * hour / 24), "hour_cos": math.cos(2 * math.pi * hour / 24),
-            "weekend": float(local.weekday() >= 5), "peak": float(local.hour in PEAK_HOURS and local.weekday() < 5),
-            "alert_active": active, "planned_active": planned, "precip_mm": w[0] if w else 0.0, "heat": w[1] if w else 0.0,
-            "holiday": ef["holiday"], "venue_event_w": ef["venue_event_w"], "street_event_w": ef["street_event_w"], "news_w": ef["news_w"],
-            "nws_any": nws_any, "nws_severe": nws_severe, "clim_rate": clim}
+
+    def f(v):
+        return nan if v is None else float(v)
+    row = {"route_id": str(route_id), "direction": direction, "u": u, "d": d, "t": float(t),
+           "route_code": ROUTE_CODE.get(str(route_id), len(ROUTES)), "direction_code": {"N": 0, "S": 1}.get(direction or "", 2),
+           "k": k, "sched_run_sec": sched_run_sec, "lateness_u": lateness_u, "mom1": f(mom1), "mom3": f(mom3),
+           "gap_ahead_sec": f(gap_ahead_sec), "leader_lateness": f(leader_lateness), "leader_same_route": f(leader_same_route),
+           "sched_headway_sec": f(sched_headway_sec), "seg_recent_excess": f(seg_recent_excess), "dest_recent_lateness": f(dest_recent_lateness),
+           "feed_excess": f(feed_excess), "track_changed": float(track_changed or 0.0),
+           "route_recent_lateness": f(route_recent_lateness), "net_recent_lateness": f(net_recent_lateness), "route_arrivals_30": f(route_arrivals_30),
+           "leader_mom1": f(leader_mom1), "seg_last_excess": f(seg_last_excess), "seg_staleness": f(seg_staleness),
+           "pos_u": f(pos_u), "stops_to_end": f(stops_to_end), "d_is_last": f(d_is_last)}
+    row.update({c: float(cf[c]) for c in cf})
+    for c in PROFILE_FEATURES:
+        row[c] = nan
+    return row

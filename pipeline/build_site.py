@@ -239,7 +239,7 @@ def train_learned(store: Store, static: StaticGTFS, alerts: pd.DataFrame, contex
     arr = _cap_arrivals(arr, MAX_TRAIN_ARRIVALS)
     logging.info("training arrivals: %d of %d", len(arr), n_all)
     rows = build_training_rows(arr, static, alerts, context.get("weather_daily"), context.get("events"), eta_samples,
-                               nws_df=context.get("nws_alerts"), climatology=context.get("_climatology"))
+                               nws_df=context.get("nws_alerts"), climatology=context.get("_climatology"), weather_hourly=context.get("weather_hourly"))
     if len(rows) > TRAIN_ROWS_CAP:
         rows = rows.sample(TRAIN_ROWS_CAP, random_state=1).sort_values("t")
     model = train_arrival_model(rows)
@@ -262,7 +262,8 @@ def live_snapshot(static: StaticGTFS, resolved: list[dict], models: dict, alerts
         ctx = context or {}
         return build_live(feed_bytes, alerts, static, resolved, models, now.timestamp(), source="build-snapshot", hold_model=hold_model,
                           journeys=journeys, journey_models=journey_models, weather_daily=ctx.get("weather_daily"), events_df=ctx.get("events"),
-                          learned=learned, store=store, nws_df=ctx.get("nws_alerts"), climatology=ctx.get("_climatology"))
+                          learned=learned, store=store, nws_df=ctx.get("nws_alerts"), climatology=ctx.get("_climatology"),
+                          weather_hourly=ctx.get("weather_hourly"))
     except Exception as exc:
         logging.warning("live snapshot failed: %s", exc)
         return None
@@ -507,7 +508,7 @@ def build_from_data(args) -> dict:
     if not alerts.empty:
         store.upsert_alerts(alerts, seen_ts=time.time())
     context = {k: lib.load_context(data_dir, k) for k in
-               ("trains_delayed", "delay_incidents", "major_incidents", "customer_journey", "ridership_profile", "weather_daily")}
+               ("trains_delayed", "delay_incidents", "major_incidents", "customer_journey", "ridership_profile", "weather_daily", "weather_hourly")}
     context["events"] = lib.load_events(data_dir)
     context["alerts_archive"] = lib.load_alerts_archive(data_dir)
     context["nws_alerts"] = lib.load_context(data_dir, "nws_alerts")

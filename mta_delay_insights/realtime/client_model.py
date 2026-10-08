@@ -10,7 +10,9 @@ prediction engine they run is table-driven and fitted here from the collected hi
   (winsorized at 30 min), median and p90 remaining hold (the fixed "10 more minutes" scenario was +11 min
   biased on the scored live forecasts) and the chance it clears within two minutes.
 * **Lateness carry** — from the arrivals: how lateness at the train's current stop maps to lateness ``k``
-  stops later, per route (slope, intercept, residual spread), shrunk toward slope 1 / intercept 0.
+  stops later, per route (slope, intercept, residual spread), shrunk toward slope 1 / intercept 0, and per
+  route × time band (night, AM peak, midday, PM peak, evening, weekend day / night) shrunk toward the route:
+  the same lateness grows differently at 8 am than at 10 pm. Lookups fall back route-band → route → band → all.
 
 ``predict_line`` is the reference implementation of what the clients compute (``site/rt-client.js`` and the
 iOS app port it and are tested against it): per train and downstream stop a calibrated feed ETA, a state
@@ -21,6 +23,7 @@ headway cascade (no train arrives within ``min_headway_sec`` of the one ahead) u
 from __future__ import annotations
 
 import math
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -28,8 +31,9 @@ import pandas as pd
 from ..analysis.holds import terminals
 from ..analysis.schedule_match import match_arrivals
 from ..collect.dwells import HOLD_SEC
+from ..sources.gtfs_static import NY_TZ
 
-VERSION = 1
+VERSION = 2
 HORIZON_EDGES = [0, 120, 300, 600, 1200, 2400, 3600]     # the last bucket is open-ended
 ELAPSED_GRID = [150, 240, 360, 600, 900, 1800]           # seconds already held
 PRIOR_N = 20.0
@@ -39,6 +43,28 @@ MIN_STOP_GAP_SEC = 30.0
 SCENARIOS = ("baseline", "hold_persists", "clears_now")
 PRIOR_HOLD = {"expected": 300.0, "p50": 180.0, "p90": 720.0, "clears_2min": 0.35}
 WINSOR_REMAINING_SEC = 1800.0
+BAND_NAMES = ["night", "am_peak", "midday", "pm_peak", "evening", "weekend_day", "weekend_night"]
+MIN_BAND_N = 150
+
+
+def band_of_hour(hour: int, weekday: int) -> int:
+    """Time band index (see BAND_NAMES) for a local hour and weekday (Monday = 0); no holiday rule, the clients share it."""
+    if weekday >= 5:
+        return 5 if 7 <= hour <= 21 else 6
+    if hour < 6:
+        return 0
+    if hour <= 9:
+        return 1
+    if hour <= 15:
+        return 2
+    if hour <= 19:
+        return 3
+    return 4
+
+
+def band_at(ts: float) -> str:
+    local = datetime.fromtimestamp(ts, NY_TZ)
+    return BAND_NAMES[band_of_hour(local.hour, local.weekday())]
 
 
 def prior_spread(h: float) -> tuple[float, float]:
@@ -183,6 +209,7 @@ def fit_lateness_carry(arrivals: pd.DataFrame | None, static, max_rows: int = 20
         return seq_cache[key]
 
     pairs: dict[str, dict[int, list[tuple[float, float]]]] = {}
+    pairs_band: dict[tuple[str, str], dict[int, list[tuple[float, float]]]] = {}
     for (tk, route, direction), g in m.groupby(["trip_key", "route_id", "direction"], sort=False):
         if not isinstance(route, str) or len(g) < 2:
             continue
@@ -190,10 +217,13 @@ def fit_lateness_carry(arrivals: pd.DataFrame | None, static, max_rows: int = 20
         g = g.sort_values("arrival_ts")
         pos = [idx.get(s) for s in g["stop_id"]]
         lat = g["lateness_sec"].astype(float).tolist()
+        ts = g["arrival_ts"].astype(float).tolist()
         if any(p is None for p in pos):
             pos = list(range(len(lat)))
         bucket = pairs.setdefault(route, {})
         for i in range(len(lat)):
+            band = band_at(ts[i])
+            bb = pairs_band.setdefault((route, band), {})
             for j in range(i + 1, len(lat)):
                 k = pos[j] - pos[i]
                 if k < 1:
@@ -201,6 +231,7 @@ def fit_lateness_carry(arrivals: pd.DataFrame | None, static, max_rows: int = 20
                 if k > max_k:
                     break
                 bucket.setdefault(k, []).append((lat[i], lat[j]))
+                bb.setdefault(k, []).append((lat[i], lat[j]))
 
     def fit(rows: dict[int, list[tuple[float, float]]], base: dict) -> dict:
         res = {"slope": [], "intercept": [], "resid_std": [], "n": []}
@@ -234,6 +265,16 @@ def fit_lateness_carry(arrivals: pd.DataFrame | None, static, max_rows: int = 20
     for route, rows in pairs.items():
         if sum(len(v) for v in rows.values()) >= min_route_n:
             out["by_route"][route] = fit(rows, out["all"])
+    # time bands: all routes per band (prior: all), then route × band (prior: the route's own table)
+    band_rows: dict[str, dict[int, list[tuple[float, float]]]] = {}
+    for (route, band), rows in pairs_band.items():
+        for k, pts in rows.items():
+            band_rows.setdefault(band, {}).setdefault(k, []).extend(pts)
+    out["by_band"] = {band: fit(rows, out["all"]) for band, rows in band_rows.items() if sum(len(v) for v in rows.values()) >= min_route_n}
+    out["by_route_band"] = {}
+    for (route, band), rows in pairs_band.items():
+        if sum(len(v) for v in rows.values()) >= MIN_BAND_N and route in out["by_route"]:
+            out["by_route_band"].setdefault(route, {})[band] = fit(rows, out["by_route"][route])
     return out
 
 
@@ -255,9 +296,18 @@ def calibration_at(model: dict, route: str, horizon_sec: float) -> dict:
     return {"n": 0, "bias": 0.0, "p10": p10, "p90": p90}
 
 
-def carry_at(model: dict, route: str, k: int) -> dict | None:
+def carry_at(model: dict, route: str, k: int, band: str | None = None) -> dict | None:
+    """Lateness-carry coefficients for k stops ahead: route × band, else route, else band, else all routes."""
     lc = (model or {}).get("lateness_carry") or {}
-    table = (lc.get("by_route") or {}).get(route) or lc.get("all")
+    table = None
+    if band:
+        table = ((lc.get("by_route_band") or {}).get(route) or {}).get(band)
+    if table is None:
+        table = (lc.get("by_route") or {}).get(route)
+    if table is None and band:
+        table = (lc.get("by_band") or {}).get(band)
+    if table is None:
+        table = lc.get("all")
     if not table or k < 1 or k > len(table.get("slope", [])):
         return None
     return {"slope": table["slope"][k - 1], "intercept": table["intercept"][k - 1], "resid_std": table["resid_std"][k - 1]}
@@ -291,6 +341,7 @@ def predict_train(train: dict, line: dict, model: dict, now: float, scenario: st
     out["hold_extra_sec"] = extra
     run = line.get("run_sec") or []
     sched_next = train.get("sched_ts")
+    band = band_at(now)
     prev_t = None
     for idx, feed in pts:
         h = feed - now
@@ -307,7 +358,7 @@ def predict_train(train: dict, line: dict, model: dict, now: float, scenario: st
                     ok = False
                     break
                 run_sum += float(r)
-            carry = carry_at(model, route, k)
+            carry = carry_at(model, route, k, band)
             if ok and carry is not None:
                 sched_d = float(sched_next) + run_sum
                 eta_s = sched_d + float(carry["intercept"]) + float(carry["slope"]) * float(eff)

@@ -31,7 +31,8 @@ def main(argv=None) -> int:
     data_dir = Path(args.data_dir)
     mpath = data_dir / "arrivals_all" / "backfill_manifest.json"
     manifest = json.loads(mpath.read_text()) if mpath.exists() else {"days": {}}
-    have = set(manifest["days"].keys())
+    # a day recorded without rows (the archive publishes with a lag, so a 404 is normal) is retried
+    have = {d for d, v in manifest["days"].items() if v.get("rows")}
     days = subwaydata.missing_days(have, args.days)[: args.max_fetch]
     logging.info("backfill: %d days to fetch (%s)", len(days), [d.isoformat() for d in days])
     record = {"kind": "backfill", "iso": datetime.now(NY_TZ).isoformat(), "fetched": [], "failed": {}}

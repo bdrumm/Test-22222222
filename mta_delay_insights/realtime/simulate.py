@@ -70,10 +70,14 @@ def _base_times(train: LiveTrain, seq: list[str], static: StaticGTFS, now: float
     lp_cache = {}
     if learned is not None:
         try:
-            for s, _ in remaining[:24]:
-                lp = learned.predict(train, s, feed_spread=240.0)
-                if lp is not None:
-                    lp_cache[s] = lp["eta_ts"]
+            if hasattr(learned, "predict_many"):
+                res = learned.predict_many(train, [s for s, _ in remaining[:24]], feed_spread=240.0)
+                lp_cache = {s: r["eta_ts"] for s, r in res.items() if r}
+            else:
+                for s, _ in remaining[:24]:
+                    lp = learned.predict(train, s, feed_spread=240.0)
+                    if lp is not None:
+                        lp_cache[s] = lp["eta_ts"]
         except Exception:
             lp_cache = {}
     prev_t = None

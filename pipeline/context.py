@@ -77,7 +77,20 @@ def main(argv=None) -> int:
                     profiles.append(prof)
                 if profiles:
                     lib.save_context(data_dir, "ridership_profile", pd.concat(profiles, ignore_index=True))
-    step("weather_daily", lambda: weather.daily_summary(weather.fetch_recent_hourly(args.days)))
+    # hourly weather (the arrival model's features) accumulates across runs; the daily summary derives from it
+    try:
+        new_w = weather.fetch_recent_hourly(args.days)
+        old_w = lib.load_context(data_dir, "weather_hourly")
+        if old_w is not None and not old_w.empty:
+            new_w = pd.concat([old_w.assign(ts=pd.to_datetime(old_w["ts"])), new_w], ignore_index=True).drop_duplicates("ts", keep="last").sort_values("ts")
+            new_w = new_w[new_w["ts"] >= pd.Timestamp.now() - pd.Timedelta(days=400)]
+        lib.save_context(data_dir, "weather_hourly", new_w)
+        record["ok"].append(f"weather_hourly:{len(new_w)}")
+        lib.save_context(data_dir, "weather_daily", weather.daily_summary(weather.add_flags(new_w)))
+        record["ok"].append("weather_daily")
+    except Exception as exc:
+        record["failed"]["weather_hourly"] = str(exc)[:300]
+        logging.warning("weather failed: %s", exc)
 
     # Historical service alerts (incremental), NWS alerts, elevator outages.
     from mta_delay_insights.sources import alerts_archive, context_feeds
