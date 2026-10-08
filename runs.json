@@ -11267,5 +11267,140 @@
 "skipped": [
 "ticketmaster"
 ]
+},
+{
+"ts": 1791484880.6167455,
+"iso": "2026-10-08T14:41:20.616748-04:00",
+"kind": "collect",
+"feeds": [
+"1234567S",
+"ace",
+"bdfm",
+"g",
+"jz",
+"l",
+"nqrw",
+"si"
+],
+"polls": 101,
+"errors": 0,
+"arrivals": 1880,
+"flushed": 446,
+"alerts": 1066,
+"forecast_eval": 557,
+"duration_sec": 3003,
+"written": {
+"2026-10-08": 3468
+},
+"per_feed": [
+{
+"feed": "1234567S",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 4072
+},
+{
+"feed": "ace",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 1316
+},
+{
+"feed": "bdfm",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 1985
+},
+{
+"feed": "g",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 334
+},
+{
+"feed": "jz",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 354
+},
+{
+"feed": "l",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 237
+},
+{
+"feed": "nqrw",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 1556
+},
+{
+"feed": "si",
+"polls": 101,
+"first_ts": 1791481877.1807194,
+"last_ts": 1791484877.1938574,
+"arrivals": 74
+}
+]
+},
+{
+"ts": 1791484886.99302,
+"iso": "2026-10-08T14:41:21.196845-04:00",
+"kind": "backfill",
+"fetched": [
+{
+"day": "2026-10-07",
+"rows": 228767
+}
+],
+"failed": {
+"2026-10-06": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-06_csv.tar.xz"
+}
+},
+{
+"ts": 1791484911.8266199,
+"iso": "2026-10-08T14:41:51.826622-04:00",
+"kind": "context",
+"ok": [
+"trains_delayed:6188",
+"delay_incidents:8120",
+"major_incidents:1242",
+"customer_journey:1248",
+"stations:496",
+"ridership_hourly:6240",
+"weather_hourly:1483",
+"weather_daily",
+"alerts_archive:47307(+168)",
+"nws_alerts:53",
+"elevator_outages:52",
+"nyc_events:5000",
+"news:4",
+"events:6350"
+],
+"failed": {},
+"complex_ids": {
+"grand-central-n": "610",
+"times-sq-s": "611",
+"jay-st-n": "636",
+"4av-9st-fg-n": "608",
+"4av-9st-fg-s": "608",
+"4av-9st-r-n": "608",
+"4av-9st-r-s": "608",
+"14st-8av-ace-n": "618",
+"14st-8av-ace-s": "618",
+"8av-l-n": "618",
+"8av-l-s": "618"
+},
+"skipped": [
+"ticketmaster"
+]
 }
 ]
