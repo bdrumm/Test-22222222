@@ -10,6 +10,8 @@ struct StationPickerSheet: View {
     let reach: [String: Reach]?
     var nearTo: Station? = nil
     var coords: [String: (lat: Double, lon: Double)] = [:]
+    /// Home, Work and the rider's own places, on top.
+    var places: [PlacePick] = []
     let onPick: (Station) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -47,6 +49,27 @@ struct StationPickerSheet: View {
         NavigationStack {
             List {
                 let near = nearby
+                let shownPlaces = query.trimmingCharacters(in: .whitespaces).isEmpty ? places.filter { reach == nil || reach?[$0.station.id] != nil } : []
+                if !shownPlaces.isEmpty {
+                    Section("Places") {
+                        ForEach(shownPlaces) { pp in
+                            Button {
+                                onPick(pp.station)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: pp.place.symbol).foregroundStyle(Color.accentColor).frame(width: 22)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(pp.place.name).foregroundStyle(Color.primary)
+                                        Text(pp.station.name).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    RouteBullets(routes: pp.station.routes, size: 18)
+                                }
+                            }
+                        }
+                    }
+                }
                 if let a = nearTo, !near.isEmpty {
                     Section("Near \(a.name)") {
                         ForEach(near) { n in row(n.station, distance: n) }
@@ -135,5 +158,19 @@ struct IconButton: View {
         .buttonStyle(.plain)
         .opacity(isEnabled ? 1 : 0.55)
         .accessibilityLabel(label)
+    }
+}
+
+/// A place with the station it stands for, for the pickers.
+struct PlacePick: Identifiable {
+    var id: UUID { place.id }
+    let place: Place
+    let station: Station
+}
+
+extension PlaceStore {
+    /// The saved places whose station the index knows, Home and Work first.
+    func picks(_ index: StationIndex) -> [PlacePick] {
+        ordered.compactMap { p in index.station(p.stationId).map { PlacePick(place: p, station: $0) } }
     }
 }

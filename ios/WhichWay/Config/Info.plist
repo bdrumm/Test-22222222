@@ -6,10 +6,23 @@
 	     INFOPLIST_KEY_*, which Xcode only honors for its own known keys. Read by DataService.defaultBase. -->
 	<key>WhichWayBaseURL</key>
 	<string>$(WHICHWAY_BASE_URL)</string>
+	<key>WhichWayTripServer</key>
+	<string>$(WHICHWAY_TRIP_SERVER)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Sends your recorded trips to the local server on your own Mac, when you set one, so the predictions can be checked against real rides.</string>
 	<!-- Standard HTTPS only: TestFlight builds need no export-compliance answer. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSMotionUsageDescription</key>
-	<string>When you opt in, WhichWay summarises the phone's motion during a route to notice when your train pulls away, so its predictions can be checked against real trips. Nothing that identifies you is kept.</string>
+	<string>When you opt in, WhichWay summarises the phone's motion during a route to notice when your train pulls away and when you walk off, to learn your own pace and to check its predictions against real trips. Nothing that identifies you is kept.</string>
 </dict>
 </plist>

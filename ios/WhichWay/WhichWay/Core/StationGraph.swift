@@ -319,8 +319,9 @@ struct NearbyStation: Identifiable {
     var id: String { station.id }
     let station: Station
     let meters: Double
-    /// At a brisk 80 m per minute.
-    var walkMinutes: Int { max(1, Int((meters / 80).rounded())) }
+    /// The rider's street pace: 80 m per minute until the personal model has learned theirs.
+    static var speedMPerMin = 80.0
+    var walkMinutes: Int { max(1, Int((meters / NearbyStation.speedMPerMin).rounded())) }
 }
 
 /// The n stations nearest to a point, nearest first.

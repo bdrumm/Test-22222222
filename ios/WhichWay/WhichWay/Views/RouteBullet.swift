@@ -34,18 +34,25 @@ struct Tile: View {
 /// Feed freshness in the navigation bar: green under 90 s since the last poll, orange after, grey before the first.
 struct StatusDot: View {
     @Environment(DataService.self) private var data
+    /// In the page content (not a toolbar): a small capsule of its own.
+    var chip = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let age: Double? = data.lastUpdate.map { Date().timeIntervalSince($0) }
+            let font: Font = chip ? .system(size: 10, weight: .medium) : .caption2
             HStack(spacing: 4) {
-                Circle().fill(dotColor(age)).frame(width: 8, height: 8)
+                Circle().fill(dotColor(age)).frame(width: chip ? 6 : 8, height: chip ? 6 : 8)
                 if data.offline {
-                    Text("offline · \(data.lastFeedFetch.map { Fmt.hhmm($0.timeIntervalSince1970) } ?? "saved data")").font(.caption2).foregroundStyle(.secondary)
+                    Text("offline · \(data.lastFeedFetch.map { Fmt.hhmm($0.timeIntervalSince1970) } ?? "saved data")").font(font).foregroundStyle(.secondary)
                 } else {
-                    Text(age.map { "\(Int($0)) s" } ?? "…").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                    Text(age.map { "\(Int($0)) s ago" } ?? "checking…").font(font).foregroundStyle(.secondary).monospacedDigit()
                 }
             }
+            .lineLimit(1)
+            .padding(.horizontal, chip ? 10 : 0)
+            .padding(.vertical, chip ? 5 : 0)
+            .background(chip ? Capsule().fill(Color(.secondarySystemBackground)) : nil)
         }
     }
 

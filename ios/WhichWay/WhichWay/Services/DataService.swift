@@ -13,6 +13,7 @@ struct FocusLeg: Equatable {
     var keys: [String]               // every line the leg can use
     var idx: [String: StopSpan]      // board and alight stop index per line key
     var trainId: String?             // LiveTrain.id
+    var walkSec: Double = 0          // walk before boarding this leg (0 for the first)
 }
 
 /// The Go tab's selected route: the train it boards (the Line tab follows it) and its legs.
@@ -28,7 +29,17 @@ struct TrainFocus: Equatable {
 @MainActor
 @Observable
 final class DataService {
-    static let publishedBase = "https://bdrumm.github.io/Test-22222222/data/"
+    static let publishedBase = "https://bdrumm.github.io/whichway/data/"
+    /// Where the published site has lived: the repository was renamed from Test-22222222 to whichway on Oct 7 2026,
+    /// and GitHub Pages does not redirect a renamed project site. A 404 from one is retried on the others, so a
+    /// build from either side of the rename finds the data.
+    static let publishedBases = [publishedBase, "https://bdrumm.github.io/Test-22222222/data/"]
+    /// The disk cache is keyed by the base; the published bases share one key, so the rename keeps the cached copy.
+    static func cacheKey(_ base: String) -> String {
+        var b = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !b.hasSuffix("/") { b += "/" }
+        return publishedBases.contains(b) ? publishedBases[publishedBases.count - 1] : base
+    }
     static let localBase = "http://localhost:8000/data/"
     /// The Debug build can point at a local server through Config/Local.xcconfig (WHICHWAY_BASE_URL, carried
     /// into the generated Info.plist); otherwise the published site. A localhost address only means something
@@ -103,7 +114,7 @@ final class DataService {
         baseURL = base
         let p = UserDefaults.standard.double(forKey: "pollSec")
         pollSec = p >= 10 ? p : 30
-        cache = DiskCache(baseURL: base)
+        cache = DiskCache(baseURL: DataService.cacheKey(base))
     }
 
     var cacheSummary: String {
@@ -144,6 +155,7 @@ final class DataService {
         req.timeoutInterval = 25
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
+            if let http = resp as? HTTPURLResponse, http.statusCode == 404, let moved = await fetchMoved(path) { return moved }
             if let http = resp as? HTTPURLResponse, http.statusCode >= 400 { throw URLError(.badServerResponse) }
             cache.write(path, data)
             offline = false
@@ -154,6 +166,25 @@ final class DataService {
             offline = true
             return data
         }
+    }
+
+    /// The published site answered 404: try where else it has lived, and stay there for the session.
+    private func fetchMoved(_ path: String) async -> Data? {
+        var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !base.hasSuffix("/") { base += "/" }
+        guard DataService.publishedBases.contains(base), !path.hasPrefix("http") else { return nil }
+        for other in DataService.publishedBases where other != base {
+            guard let u = URL(string: other + path) else { continue }
+            var req = URLRequest(url: u)
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            req.timeoutInterval = 25
+            guard let (data, resp) = try? await URLSession.shared.data(for: req), let http = resp as? HTTPURLResponse, http.statusCode < 400 else { continue }
+            baseURL = other
+            cache.write(path, data)
+            offline = false
+            return data
+        }
+        return nil
     }
 
     private func fetchJSON<T: Decodable>(_ type: T.Type, _ path: String) async throws -> T {
@@ -260,7 +291,7 @@ final class DataService {
         self.pollSec = max(10, pollSec)
         UserDefaults.standard.set(self.baseURL, forKey: "baseURL")
         UserDefaults.standard.set(self.pollSec, forKey: "pollSec")
-        cache = DiskCache(baseURL: self.baseURL)
+        cache = DiskCache(baseURL: DataService.cacheKey(self.baseURL))
         restart()
     }
 
@@ -406,5 +437,39 @@ final class DataService {
 
     func alertsFor(routes: [String]) -> [RouteAlert] {
         alerts.filter { a in a.routes.contains(where: { routes.contains($0) }) }
+    }
+
+    /// Alerts that touch the selected route directly: anything naming one of its stations (entrance and
+    /// elevator notices, skipped stops, station closures), and line-wide delays on its lines. Each comes with the
+    /// station it names on the route, when it does.
+    func alertsAffecting(legs: [FocusLeg], schedule: ClientSchedule) -> [(alert: RouteAlert, station: String?)] {
+        var routes = Set<String>()
+        var stationName: [String: String] = [:]      // platform id and its parent station id -> name
+        for leg in legs {
+            routes.insert(String(leg.key.split(separator: "_").first ?? ""))
+            guard let line = schedule.lines[leg.key], let span = leg.idx[leg.key] else { continue }
+            let lo = max(0, min(span.from, span.to)), hi = min(line.stops.count - 1, max(span.from, span.to))
+            guard lo <= hi else { continue }
+            for i in lo...hi {
+                let sid = line.stops[i], name = i < line.names.count ? line.names[i] : sid
+                stationName[sid] = name
+                stationName[String(sid.dropLast())] = name
+            }
+        }
+        var out: [(RouteAlert, String?)] = []
+        for a in alerts {
+            if let hit = a.stops.first(where: { stationName[$0] != nil }) {
+                out.append((a, stationName[hit]))
+            } else if a.stops.isEmpty, a.kind == "delay", a.routes.contains(where: { routes.contains($0) }) {
+                out.append((a, nil))
+            }
+        }
+        let rank = ["delay": 0, "notice": 1, "planned": 2]
+        return out.sorted { x, y in
+            let rx = rank[x.0.kind] ?? 3, ry = rank[y.0.kind] ?? 3
+            if (x.1 != nil) != (y.1 != nil) { return x.1 != nil }        // station-specific first
+            if rx != ry { return rx < ry }
+            return (x.0.start ?? 0) > (y.0.start ?? 0)
+        }
     }
 }

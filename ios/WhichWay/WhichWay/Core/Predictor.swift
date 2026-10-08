@@ -69,14 +69,18 @@ struct LatenessCarry: Decodable {
     var maxK: Int = 12
     var all: CarryTable? = nil
     var byRoute: [String: CarryTable] = [:]
+    var byBand: [String: CarryTable] = [:]
+    var byRouteBand: [String: [String: CarryTable]] = [:]
     var n: Int = 0
-    enum CodingKeys: String, CodingKey { case maxK = "max_k", all, byRoute = "by_route", n }
+    enum CodingKeys: String, CodingKey { case maxK = "max_k", all, byRoute = "by_route", byBand = "by_band", byRouteBand = "by_route_band", n }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         maxK = try c.decodeIfPresent(Int.self, forKey: .maxK) ?? 12
         all = try c.decodeIfPresent(CarryTable.self, forKey: .all)
         byRoute = try c.decodeIfPresent([String: CarryTable].self, forKey: .byRoute) ?? [:]
+        byBand = try c.decodeIfPresent([String: CarryTable].self, forKey: .byBand) ?? [:]
+        byRouteBand = try c.decodeIfPresent([String: [String: CarryTable]].self, forKey: .byRouteBand) ?? [:]
         n = try c.decodeIfPresent(Int.self, forKey: .n) ?? 0
     }
 }
@@ -244,9 +248,36 @@ enum Predictor {
         return CalBucket(n: 0, bias: 0, p10: p10, p90: p90)
     }
 
-    static func carryAt(_ model: ClientModel?, route: String, k: Int) -> (slope: Double, intercept: Double, residStd: Double)? {
+    static let bandNames = ["night", "am_peak", "midday", "pm_peak", "evening", "weekend_day", "weekend_night"]
+
+    /// Time band index for a New York local hour and weekday (Monday = 0); mirrors client_model.band_of_hour.
+    static func bandOfHour(_ hour: Int, weekday: Int) -> Int {
+        if weekday >= 5 { return (hour >= 7 && hour <= 21) ? 5 : 6 }
+        if hour < 6 { return 0 }
+        if hour <= 9 { return 1 }
+        if hour <= 15 { return 2 }
+        if hour <= 19 { return 3 }
+        return 4
+    }
+
+    static func bandAt(_ ts: Double) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/New_York") ?? .current
+        let date = Date(timeIntervalSince1970: ts)
+        let hour = cal.component(.hour, from: date)
+        let weekday = (cal.component(.weekday, from: date) + 5) % 7      // Calendar: 1 = Sunday … 7 = Saturday → Monday = 0
+        return bandNames[bandOfHour(hour, weekday: weekday)]
+    }
+
+    /// Lateness-carry coefficients for k stops ahead: route × band, else route, else band, else all routes.
+    static func carryAt(_ model: ClientModel?, route: String, k: Int, band: String? = nil) -> (slope: Double, intercept: Double, residStd: Double)? {
         let lc = model?.latenessCarry
-        guard let t = lc?.byRoute[route] ?? lc?.all, k >= 1, k <= t.slope.count, k <= t.intercept.count, k <= t.residStd.count else { return nil }
+        var table: CarryTable? = nil
+        if let b = band { table = lc?.byRouteBand[route]?[b] }
+        if table == nil { table = lc?.byRoute[route] }
+        if table == nil, let b = band { table = lc?.byBand[b] }
+        if table == nil { table = lc?.all }
+        guard let t = table, k >= 1, k <= t.slope.count, k <= t.intercept.count, k <= t.residStd.count else { return nil }
         return (t.slope[k - 1], t.intercept[k - 1], t.residStd[k - 1])
     }
 
@@ -290,6 +321,7 @@ enum Predictor {
         }
         out.holdExtraSec = extra
         let run = line.runSec
+        let band = bandAt(now)
         var prevT: Double? = nil
         for (idx, feed) in pts {
             let h = feed - now
@@ -305,7 +337,7 @@ enum Predictor {
                     if s < run.count, let r = run[s] { runSum += r } else { ok = false; break }
                     s += 1
                 }
-                if ok, let carry = carryAt(model, route: train.route, k: k) {
+                if ok, let carry = carryAt(model, route: train.route, k: k, band: band) {
                     let schedD = schedNext + runSum
                     let etaS = schedD + carry.intercept + carry.slope * e
                     let varS = max(carry.residStd * carry.residStd, 1.0)

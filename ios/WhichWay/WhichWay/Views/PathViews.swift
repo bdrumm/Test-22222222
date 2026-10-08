@@ -54,8 +54,11 @@ struct NowCard: View {
     @Environment(LocationService.self) private var loc
     let option: PathOption?
     var originId: String = ""
-    /// The route is in progress: the rider is at the origin station, so no walk is shown.
-    var atStation: Bool = false
+    /// Where the route in progress stands; nil before it starts. Past the approach, no walk is shown.
+    var phase: TripPhase? = nil
+    /// A pinned place the phone is at, and how long the rider usually takes from there to the station.
+    var placeName: String? = nil
+    var placeUsualSec: Double? = nil
     let originName: String
     let destName: String
     /// Opens the route's insights.
@@ -75,64 +78,30 @@ struct NowCard: View {
         return pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
     }
 
+    // The card keeps one fixed row structure whichever route is chosen and whether or not a train is in the
+    // feeds, so its height never changes and the list under it never jumps: every row reserves its space.
+    // Rows read as steps, most significant first: board, the route (change or direct), arrive with its minor
+    // figures; then where you are (the walk, while on the way) and where the train is.
     var body: some View {
         let w = walk
         let nx = nextItinerary
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let now = data.now
-            VStack(alignment: .leading, spacing: 6) {
-                if let p = option, let it = p.live, let l0 = it.legs.first, let ln = it.legs.last {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("Take the").font(.subheadline).foregroundStyle(.secondary)
-                        RouteBullet(route: l0.train.route, size: 26)
-                        Text("at \(Fmt.hhmm(it.boardTs))").font(.title3.bold())
-                        Spacer()
-                        Text(Fmt.mmss(max(0, it.boardTs - now))).font(.system(size: 34, weight: .bold, design: .rounded)).monospacedDigit()
-                    }
-                    if let nx = nx, let n0 = nx.legs.first {
-                        // the train after this one: minutes only, small and quiet
-                        let mins = Int(max(0, nx.boardTs - now) / 60)
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            if n0.train.route != l0.train.route { RouteBullet(route: n0.train.route, size: 16) }
-                            Text("Next at \(Fmt.hhmm(nx.boardTs))").font(.caption).foregroundStyle(.tertiary)
-                            Spacer()
-                            Text(mins < 1 ? "<1 min" : "\(mins) min")
-                                .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    if let w = w, !atStation {
-                        // at an average 80 m per minute: can the walk fit in the countdown, and how far does it get you if not
-                        let left = max(0, it.boardTs - now)
-                        let tight = Double(w.walkMinutes * 60) > left
-                        let reach = 80.0 * left / 60.0
-                        HStack(spacing: 5) {
-                            Image(systemName: tight ? "exclamationmark.triangle.fill" : "figure.walk").font(.caption)
-                            Text("\(Fmt.miles(w.meters)) - \(w.walkMinutes) min" + (tight ? " · \(Fmt.miles(reach))" : ""))
-                                .font(.caption.weight(tight ? .semibold : .regular))
-                        }
-                        .foregroundStyle(tight ? Color.orange : Color.primary.opacity(0.75))
-                    }
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("Arrive \(destName) \(Fmt.hhmm(it.arriveTs))").font(.headline)
-                        Spacer()
-                        Text(Fmt.minTxt(it.totalSec)).font(.subheadline).foregroundStyle(.secondary)
-                        let h = routeHealth(p, data: data)
-                        if h.extraSec >= 90 { Text(h.label).font(.subheadline.weight(.semibold)).foregroundStyle(h.textColor) }
-                    }
-                    if let rt = ln.rangeText { Text("80% window \(rt)").font(.caption).foregroundStyle(.secondary) }
-                    Text(detailLine(p, it, l0)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    insightsButton
-                } else if let p = option {
-                    Text("From \(originName) to \(destName)").font(.headline)
-                    Text(data.predictedBoards.isEmpty ? "Waiting for the live feeds…" : "No train for this path in the feeds right now.").font(.subheadline).foregroundStyle(.secondary)
-                    Text("Expected \(Fmt.minTxt(p.expectedSec)) door to door · \(Fmt.minTxt(Double(p.schedSec))) scheduled").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                if let p = option {
+                    let it = p.live
+                    headerRow(p, it, now: now)
+                    changeRow(p, it)
+                    arriveRow(p, it)
+                    minorRow(p, it, nx, now: now)
+                    walkRow(w, boardTs: it?.boardTs, now: now)
+                    stopsRow(p, it)
                     insightsButton
                 } else {
                     Text("Pick where you are and where you're going.").font(.subheadline).foregroundStyle(.secondary)
                 }
             }
-            .padding(12)
+            .padding(.horizontal, 14).padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 ZStack {
@@ -144,6 +113,171 @@ struct NowCard: View {
         .onAppear {
             data.requestGeometry()
             loc.request()
+        }
+    }
+
+    /// Invisible text in a row's font: the row keeps its height when it has nothing to say.
+    private func ghost(_ text: String, _ font: Font) -> some View {
+        Text(text).font(font).opacity(0).accessibilityHidden(true)
+    }
+
+    private let countdownFont = Font.system(size: 34, weight: .bold, design: .rounded)
+    private let stepFont = Font.subheadline.weight(.semibold)
+    private let detailFont = Font.caption
+
+    /// Step 1, the most prominent: the train to take and the countdown to it.
+    @ViewBuilder private func headerRow(_ p: PathOption, _ it: Itinerary?, now: Double) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            if let it = it, let l0 = it.legs.first {
+                Text("Take the").font(.subheadline).foregroundStyle(.secondary)
+                RouteBullet(route: l0.train.route, size: 26)
+                Text("at \(Fmt.hhmm(it.boardTs))").font(.title2.bold()).lineLimit(1)
+                Spacer()
+                Text(Fmt.mmss(max(0, it.boardTs - now))).font(countdownFont).monospacedDigit()
+            } else {
+                Text("Take the").font(.subheadline).foregroundStyle(.secondary)
+                RouteBullets(routes: Array(p.legs[0].routes.prefix(1)), size: 26)
+                Text("from \(originName)").font(.title2.bold()).lineLimit(1)
+                Spacer()
+                ghost("0:00", countdownFont)
+            }
+        }
+        // the countdown makes this row taller than its text: let the next row sit up a little in that space
+        .padding(.bottom, -5)
+    }
+
+    /// Where that train is: stops from your platform on one line, the stop it is at on the next, a small track to
+    /// the right.
+    @ViewBuilder private func stopsRow(_ p: PathOption, _ it: Itinerary?) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            if let it = it, let l0 = it.legs.first {
+                let away = stopsAway(l0, option: p)
+                Image(systemName: "tram.fill").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(away.text).font(stepFont).lineLimit(1)
+                    Text(l0.train.position?.text ?? "position unknown").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                MiniTrack(fraction: away.fraction, color: RouteStyle.color(l0.train.route)).frame(width: 84, height: 10)
+            } else {
+                Image(systemName: "tram").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(data.predictedBoards.isEmpty ? "Waiting for the live feeds…" : "No train for this path yet").font(stepFont).foregroundStyle(.secondary).lineLimit(1)
+                    Text("the expected time above stands in").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                ghost("0", stepFont)
+            }
+        }
+    }
+
+    /// The walk to the station in the rider's own pace and time to the platform where learned, else 80 m a
+    /// minute; whether it fits in the countdown, and how far it gets them if not.
+    private func walkLine(_ w: NearbyStation, boardTs: Double?, now: Double) -> (text: String, tight: Bool) {
+        let pm = PersonalModelStore.shared.model
+        let access = pm.accessSec(station: originId) ?? 0
+        let walkSec = placeUsualSec ?? (w.meters / pm.walkSpeedMPerMin * 60 + access)
+        let mins = max(1, Int((walkSec / 60).rounded()))
+        let left = boardTs.map { max(0, $0 - now) }
+        let tight = left.map { walkSec > $0 } ?? false
+        let reach = pm.walkSpeedMPerMin * max(0, (left ?? 0) - access) / 60
+        var text = placeName.map { "\($0): " } ?? ""
+        text += placeUsualSec != nil ? "usually \(mins) min" : "\(Fmt.miles(w.meters)) - \(mins) min"
+        if placeUsualSec == nil, access >= 30 { text += " · \(Int((access / 60).rounded())) min to platform" }
+        if tight { text += " · \(Fmt.miles(reach))" }
+        return (text, tight)
+    }
+
+    /// The step before boarding while the rider is still on the way: the walk to the station.
+    @ViewBuilder private func walkRow(_ w: NearbyStation?, boardTs: Double?, now: Double) -> some View {
+        if let w = w, phase == nil || phase == .approaching {
+            let line = walkLine(w, boardTs: boardTs, now: now)
+            HStack(spacing: 6) {
+                Image(systemName: line.tight ? "exclamationmark.triangle.fill" : "figure.walk").font(.subheadline)
+                Text("Walk").font(stepFont)
+                Text(line.text).font(detailFont.weight(line.tight ? .semibold : .regular)).lineLimit(1)
+            }
+            .foregroundStyle(line.tight ? Color.orange : Color.primary)
+        }
+    }
+
+    /// Step 2: the change to make, or that the route is direct, with its details on their own line so nothing is cut off.
+    @ViewBuilder private func changeRow(_ p: PathOption, _ it: Itinerary?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                if p.legs.count > 1, let tr = p.transfer {
+                    Image(systemName: "arrow.triangle.swap").font(.caption).foregroundStyle(.secondary)
+                    Text("Change at \(tr.station)").font(stepFont).lineLimit(1)
+                    Text("to the \(p.legs[1].routesLabel)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                } else {
+                    Image(systemName: "arrow.right").font(.caption).foregroundStyle(.secondary)
+                    Text("Direct").font(stepFont)
+                    Text("\(p.legs[0].nStops) stops").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            Group {
+                if p.legs.count > 1, let tr = p.transfer {
+                    if let it = it, let m = it.connectionMarginSec {
+                        Text("\(Fmt.mmss(m)) margin" + (tr.walkSec > 0 ? " · \(Fmt.mmss(Double(tr.walkSec))) walk" : " · same platform")
+                             + (it.nextIfMissedSec.map { " · +\(Fmt.mmss($0)) if missed" } ?? ""))
+                            .foregroundStyle(m < 60 ? Color.red : Color.secondary)
+                    } else {
+                        Text(tr.walkSec > 0 ? "\(Fmt.mmss(Double(tr.walkSec))) walk between platforms" : "same platform").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("\(Fmt.minTxt(p.legs[0].schedRideSec.map(Double.init))) scheduled ride" + (p.legs[0].typicalSec.map { abs($0) >= 30 ? " · typically \(Fmt.signed($0))" : "" } ?? ""))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption).lineLimit(1).padding(.leading, 20)
+        }
+    }
+
+    /// Step 3: when you get there, with the standing against the timetable.
+    @ViewBuilder private func arriveRow(_ p: PathOption, _ it: Itinerary?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if let it = it {
+                Text("Arrive \(destName) \(Fmt.hhmm(it.arriveTs))").font(.headline).lineLimit(1).minimumScaleFactor(0.85)
+                Spacer()
+                Text(Fmt.minTxt(it.totalSec)).font(.subheadline).foregroundStyle(.secondary)
+                let h = routeHealth(p, data: data)
+                if h.extraSec >= 90 { Text(h.label).font(.subheadline.weight(.semibold)).foregroundStyle(h.textColor) }
+            } else {
+                Text("Expected \(Fmt.minTxt(p.expectedSec)) to \(destName)").font(.headline).lineLimit(1).minimumScaleFactor(0.85)
+                Spacer()
+                Text("door to door").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func minorText(_ it: Itinerary) -> String {
+        var bits: [String] = []
+        if let lo = it.legs.last?.arriveLoTs, let hi = it.legs.last?.arriveHiTs { bits.append("80% window \(Fmt.hhmm(lo))–\(Fmt.hhmm(hi))") }
+        if let f = it.legs.last?.feedArriveTs, abs(f - it.arriveTs) >= 60 { bits.append("feed says \(Fmt.hhmm(f))") }
+        return bits.isEmpty ? "engine estimate" : bits.joined(separator: " · ")
+    }
+
+    /// The minor figures, small: the engine's window and the raw feed time (two lines reserved, so they never cut
+    /// off), and the train after this one on the right.
+    @ViewBuilder private func minorRow(_ p: PathOption, _ it: Itinerary?, _ nx: Itinerary?, now: Double) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            if let it = it {
+                Text(minorText(it).replacingOccurrences(of: " · ", with: "\n")).font(.caption2).foregroundStyle(.tertiary).lineLimit(2, reservesSpace: true)
+                Spacer(minLength: 6)
+                if let nx = nx, let n0 = nx.legs.first {
+                    let mins = Int(max(0, nx.boardTs - now) / 60)
+                    HStack(spacing: 4) {
+                        if n0.train.route != it.legs[0].train.route { RouteBullet(route: n0.train.route, size: 12) }
+                        Text("Next \(Fmt.hhmm(nx.boardTs)) · \(mins < 1 ? "<1" : "\(mins)") min").font(.caption2).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1)
+                    }
+                } else {
+                    ghost("Next 0:00 · 0 min", .caption2)
+                }
+            } else {
+                Text("\(Fmt.minTxt(Double(p.schedSec))) scheduled\nexpected \(Fmt.minTxt(p.expectedSec)) with the waits and typical losses").font(.caption2).foregroundStyle(.tertiary).lineLimit(2, reservesSpace: true)
+                Spacer(minLength: 6)
+            }
         }
     }
 
@@ -160,17 +294,6 @@ struct NowCard: View {
         }
     }
 
-    private func detailLine(_ p: PathOption, _ it: Itinerary, _ l0: TripCandidate) -> String {
-        var bits: [String] = []
-        if let pos = l0.train.position { bits.append("train now \(pos.text)") }
-        if let e = l0.train.effectiveLatenessSec, abs(e) >= 60 { bits.append(Fmt.late(e)) }
-        if it.legs.count > 1, let m = it.connectionMarginSec, let tr = p.transfer {
-            bits.append("change at \(tr.station): \(Fmt.mmss(m)) margin, " + (tr.walkSec > 0 ? "\(Fmt.mmss(Double(tr.walkSec))) walk between platforms" : "same platform"))
-        }
-        bits.append("expected \(Fmt.minTxt(p.expectedSec)) · scheduled \(Fmt.minTxt(Double(p.schedSec)))")
-        if abs(p.typicalSec) >= 20 { bits.append("\(Fmt.signed(p.typicalSec)) typical at this hour") }
-        return bits.joined(separator: " · ")
-    }
 }
 
 /// A held train ahead changes when the headline route arrives: the arrival under each assumption about the
@@ -274,39 +397,47 @@ struct DepartureRow: View {
     var body: some View {
         let l0 = itinerary.legs[0]
         let ln = itinerary.legs[itinerary.legs.count - 1]
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
             Text(Fmt.mmss(max(0, itinerary.boardTs - now)))
-                .font(.system(size: 26, weight: .bold, design: .rounded)).monospacedDigit()
-                .frame(width: 78, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
+                .font(.system(size: 24, weight: .bold, design: .rounded)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .frame(width: 66, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
-                    RouteBullet(route: l0.train.route, size: 18)
-                    Text(shortLabel(l0.train)).font(.caption.monospaced())
+                    RouteBullet(route: l0.train.route, size: 16)
                     Text("boards \(Fmt.hhmm(l0.boardTs))").font(.caption)
+                    Text(stopsAway(l0, option: option).text).font(.caption).foregroundStyle(.secondary)
+                }
+                .lineLimit(1)
+                HStack(spacing: 4) {
                     if l0.train.position?.holding == true { Flag("held", Color.orange) }
                     if l0.train.position?.stalled == true { Flag("overdue", Color.red) }
-                    if l0.train.corroboration == "feed_optimistic" { Flag("feed optimistic", Color.orange) }
+                    if l0.train.corroboration == "feed_optimistic" { Flag("optimistic", Color.orange) }
+                    if let s = subline { Text(s).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 }
-                Text(subline).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 1) {
-                Text(Fmt.hhmm(itinerary.arriveTs)).font(.title3.bold())
-                Text(ln.rangeText ?? "arrive").font(.caption2).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing)
+                Text(Fmt.hhmm(itinerary.arriveTs)).font(.title3.bold()).lineLimit(1)
+                if let lo = ln.arriveLoTs, let hi = ln.arriveHiTs {
+                    Text("\(Fmt.hhmm(lo))–\(Fmt.hhmm(hi))").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
+            .layoutPriority(1)
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 10).fill(first ? Color.accentColor.opacity(0.12) : Color(.secondarySystemBackground)))
     }
 
-    private var subline: String {
+
+    /// The change and the ride against the schedule, when there is something to say.
+    private var subline: String? {
         var bits: [String] = []
-        if let pos = itinerary.legs[0].train.position { bits.append(pos.text) }
         if itinerary.legs.count > 1, let m = itinerary.connectionMarginSec, let tr = option.transfer {
             bits.append("change at \(tr.station): \(m < 120 ? "tight, " : "")\(Fmt.mmss(m)) margin")
         }
         if abs(itinerary.rideVsSchedSec) >= 60 { bits.append("\(Fmt.signed(itinerary.rideVsSchedSec / 60, unit: "min")) vs schedule") }
-        return bits.joined(separator: " · ")
+        return bits.isEmpty ? nil : bits.joined(separator: " · ")
     }
 }
 
@@ -398,5 +529,34 @@ struct HourStrip: View {
                     .frame(height: 18)
             }
         }
+    }
+}
+
+/// How far a train is from the rider's platform: the words, and a fraction along a ten-stop approach for a
+/// small track (0 = ten or more stops out, 1 = at the platform).
+func stopsAway(_ c: TripCandidate, option: PathOption) -> (text: String, fraction: Double) {
+    guard let from = option.legs[0].idx[c.key]?.from else { return ("", 0) }
+    if let p = c.train.position, p.status == "STOPPED_AT", p.stopIdx == from { return ("At the platform", 1) }
+    let n = from - c.train.nextIdx
+    if n <= 0 { return ("Arriving", 0.95) }
+    return ("\(n) stop\(n == 1 ? "" : "s") away", max(0, 1 - Double(min(n, 10)) / 10))
+}
+
+/// A thin track with the train's marker along it and the platform at the right end.
+struct MiniTrack: View {
+    let fraction: Double
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.15)).frame(height: 3).frame(maxHeight: .infinity, alignment: .center)
+                Circle().fill(Color.primary.opacity(0.35)).frame(width: 5, height: 5).offset(x: w - 5).frame(maxHeight: .infinity, alignment: .center)
+                RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 12, height: 7)
+                    .offset(x: max(0, min(w - 12, w * fraction - 6))).frame(maxHeight: .infinity, alignment: .center)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }

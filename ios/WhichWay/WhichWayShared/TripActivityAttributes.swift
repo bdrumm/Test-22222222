@@ -17,6 +17,9 @@ struct TripActivityAttributes: ActivityAttributes {
         var level: Int               // 0 quiet, 1 yellow, 2 red
         var status: String           // "train now at 7 Av · 15 min late"
         var offline: Bool
+        /// The route as it stands now ("G → C at Hoyt-Schermerhorn"): it can change under the rider, while the
+        /// attributes cannot, and an activity cannot be started afresh from the background.
+        var routeLabel: String? = nil
     }
     var originName: String
     var destName: String

@@ -38,6 +38,8 @@ struct SettingsView: View {
                     if let e = data.lastError { Text(e).font(.caption).foregroundStyle(Color.red) }
                 }
                 CommutesSection()
+                PlacesSection()
+                PaceSection()
                 TelemetrySection()
                 Section("About") {
                     Text("WhichWay reads the MTA GTFS-Realtime feeds directly and layers the published delay analysis on top: the timetable extract for lateness, the hold log for hold risk, per-line deviation grids for the time trains typically lose at this hour, and measured segment run times for speeds. Times are New York local.")
@@ -62,21 +64,72 @@ struct TelemetrySection: View {
         Section("Improve the predictions") {
             Toggle("Share anonymous trip motion", isOn: Binding(get: { tele.optIn }, set: { tele.setOptIn($0) }))
                 .disabled(!tele.sensorsAvailable)
-            Text("Off unless you turn it on. While a route is in progress, the phone's motion sensors are summarised once a second to notice when your train pulls away and when you walk off it, so the predictions can be checked against real boardings and changes. Kept: the route's stations and lines, the predicted and observed times, the train's lateness, and those moments. Never kept: your location, raw sensor data, or anything that identifies you. A random id groups this phone's trips; switching this off deletes what was collected and resets the id.")
+            Text("Off unless you turn it on. While a route is in progress, the phone's motion sensors are summarised once a second to notice when your train pulls away and when you walk off it, so the predictions can be checked against real boardings and changes. Kept: the route's stations and lines, the predicted and observed times, the train's lateness, those moments, and the trip's own measurements (walking pace, time to the platform, time changing trains). Never kept: your location, your places, raw sensor data, or anything that identifies you. A random id groups this phone's trips; switching this off deletes what was collected and resets the id.")
                 .font(.caption).foregroundStyle(.secondary)
             if !tele.sensorsAvailable { Text("This device has no motion sensors.").font(.caption).foregroundStyle(.secondary) }
             if tele.optIn {
-                LabeledContent("Motion now", value: tele.current == nil ? "not on a route" : tele.motionState.rawValue)
+                LabeledContent("Motion now", value: TripRecorder.shared.phase == nil ? "not on a route" : TripRecorder.shared.motionState.rawValue)
                 LabeledContent("Trips recorded", value: "\(tele.observations.count) · \(tele.pendingUpload) to send")
-                LabeledContent("Sent to", value: data.apiBase?.host ?? "nowhere: the published site cannot receive, trips stay on the phone")
+                TextField("Trip server, e.g. http://my-mac.local:8000/", text: Binding(get: { tele.server }, set: { tele.setServer($0) }))
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Text("The local server on your Mac (make serve), reached on the home network. Trips are sent when they end and when the app opens; the Mac reviews each one against the trains (data/trips/trip_review.md).")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("Sent to", value: tele.uploadURL(fallback: data.apiBase)?.host ?? "nowhere: the published site cannot receive, trips stay on the phone")
                 if let t = tele.lastUpload { LabeledContent("Last sent", value: Fmt.hhmmss(t.timeIntervalSince1970)) }
                 if let e = tele.lastUploadError { Text(e).font(.caption).foregroundStyle(Color.red) }
-                Button("Send now") { Task { await tele.upload(to: data.apiBase) } }
-                    .disabled(data.apiBase == nil || tele.pendingUpload == 0)
+                Button("Send now") { Task { await tele.upload(to: tele.uploadURL(fallback: data.apiBase)) } }
+                    .disabled(tele.uploadURL(fallback: data.apiBase) == nil || tele.pendingUpload == 0)
                 if let u = tele.exportURL() { ShareLink("Export as JSON", item: u) }
+                #if DEBUG
+                Toggle("Keep motion traces (developer)", isOn: Binding(get: { MotionTrace.shared.enabled }, set: { MotionTrace.shared.enabled = $0 }))
+                Text("Keeps each route's summarised motion, one line a second, on this phone (the last 30 routes), to tune when a train is felt pulling away. Copied off with make trips, and written to your GitHub data repository when that is set up below.")
+                    .font(.caption).foregroundStyle(.secondary)
+                #endif
                 Button("Delete collected data", role: .destructive) { tele.deleteAll() }
                     .disabled(tele.observations.isEmpty)
             }
         }
+        if tele.optIn { GitHubUploadSection() }
+    }
+}
+
+/// Trips to a private GitHub repository the rider owns, from any connection: the repository and a fine-grained
+/// token for it alone (Contents: read and write), kept in the Keychain.
+struct GitHubUploadSection: View {
+    private var gh: GitHubUploader { GitHubUploader.shared }
+    private var tele: Telemetry { Telemetry.shared }
+    @State private var repo = GitHubUploader.shared.repo
+    @State private var tokenField = ""
+    @State private var hasToken = GitHubUploader.shared.hasToken
+    @State private var sending = false
+    @State private var refresh = 0
+
+    var body: some View {
+        Section("Upload trips to GitHub") {
+            TextField("owner/repository", text: $repo)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .onSubmit { gh.repo = repo }
+            if hasToken {
+                LabeledContent("Token", value: "saved in the Keychain")
+                Button("Remove token", role: .destructive) { gh.setToken(nil); hasToken = false }
+            } else {
+                SecureField("Fine-grained token for this repository", text: $tokenField)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Save token") { gh.repo = repo; gh.setToken(tokenField); tokenField = ""; hasToken = gh.hasToken }
+                    .disabled(tokenField.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Text("Each trip, and its motion trace, becomes a file in this repository when it ends and whenever the app opens, over Wi-Fi or cellular. Keep the repository private. Make the token at github.com › Settings › Developer settings › Fine-grained tokens, for this repository only, with Contents: read and write.")
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Waiting to upload", value: "\(tele.pendingGitHub) trip\(tele.pendingGitHub == 1 ? "" : "s")")
+            if let t = gh.lastUpload { LabeledContent("Last upload", value: Fmt.hhmmss(t.timeIntervalSince1970)) }
+            if let e = gh.lastError { Text(e).font(.caption).foregroundStyle(Color.red) }
+            Button(sending ? "Uploading…" : "Upload now") {
+                gh.repo = repo
+                sending = true
+                Task { await tele.uploadToGitHub(); sending = false; refresh += 1 }
+            }
+            .disabled(!hasToken || sending)
+        }
+        .id(refresh)
     }
 }

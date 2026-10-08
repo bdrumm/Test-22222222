@@ -66,7 +66,9 @@ struct RouteInsightsView: View {
                 }
                 if i == 0, option.legs.count > 1, let tr = option.transfer {
                     if tr.walkSec > 0 {
-                        row("Walk at \(tr.station)", Fmt.mmss(Double(tr.walkSec)), "the MTA's minimum transfer time between these platforms")
+                        let mine = PersonalModelStore.shared.model.transfer[tr.station]
+                        row("Walk at \(tr.station)", Fmt.mmss(Double(tr.walkSec)),
+                            (mine?.n ?? 0) >= 2 && Int(mine!.mean.rounded()) >= tr.walkSec ? "your usual change here, from \(mine!.n) trips" : "the MTA's minimum transfer time between these platforms")
                     } else {
                         row("Change at \(tr.station)", "same platform", "no walk: the MTA lists this change as 0 s")
                     }
@@ -95,6 +97,11 @@ struct RouteInsightsView: View {
                 let cal = Predictor.calibrationAt(data.model, route: tc.train.route, horizon: tc.boardTs - data.now)
                 row("Calibration", "bias \(Fmt.signed(cal.bias)) · spread \(Fmt.signed(cal.p10)) to \(Fmt.signed(cal.p90))",
                     cal.n > 0 ? "from \(cal.n) past ETAs at this horizon on the \(tc.train.route)" : "physical prior, no history at this horizon yet")
+                let band = Predictor.bandAt(data.now)
+                let bandTable = data.model?.latenessCarry?.byRouteBand[tc.train.route]?[band]
+                row("Time of day", band.replacingOccurrences(of: "_", with: " "),
+                    bandTable != nil ? "how lateness carries down the \(tc.train.route) in this band, from \(bandTable!.n.reduce(0, +)) past stop pairs"
+                                     : "the \(tc.train.route)'s all-hours carry table; no band-specific history yet")
                 if let p = tc.train.pred {
                     if p.holdExtraSec > 0 { row("Held", "+\(Fmt.mmss(p.holdExtraSec))", "expected remaining hold from the hold-survival table (\(scenarioText))") }
                     if p.knockOnSec >= 30 { row("Held back", "+\(Fmt.mmss(p.knockOnSec))", "pushed back by the train ahead to keep the minimum headway") }

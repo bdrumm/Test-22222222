@@ -29,11 +29,27 @@ final class BoardingDetectorTests: XCTestCase {
         run(3, step: 0.05, push: 0.01, shake: 0.01)         // a few steps inside the car
         run(5, step: 0.002, push: 0.0, shake: 0.04)
         XCTAssertEqual(events.count, 1, "steps inside the car do not end the ride")
-        let off = t                                          // walks off at t = 1284
+        run(12, step: 0.05, push: 0.01, shake: 0.01)        // a longer walk to the far door while the train still rolls
+        run(10, step: 0.002, push: 0.0, shake: 0.04)
+        XCTAssertEqual(events.count, 1, "walking inside a moving car does not end the ride either")
+        run(8, step: 0.002, push: 0.0, shake: 0.005)        // the train stands at the station
+        let off = t                                          // walks off at t = 1314
         run(20, step: 0.05, push: 0.01, shake: 0.0)
         XCTAssertEqual(events.count, 2)
         XCTAssertEqual(events[1], MotionEvent(kind: .alighted, ts: off))
         XCTAssertEqual(d.state, .walking)
+    }
+
+    func testALongWalkEndsTheRideEvenWhenTheStopWentUnfelt() {
+        run(10, step: 0.002, push: 0.005, shake: 0.005)
+        run(6, step: 0.002, push: 0.08, shake: 0.03)
+        run(120, step: 0.002, push: 0.01, shake: 0.04)
+        XCTAssertEqual(events.count, 1)
+        run(29, step: 0.05, push: 0.01, shake: 0.0)         // walking straight out of "rolling": not yet
+        XCTAssertEqual(events.count, 1)
+        run(1, step: 0.05, push: 0.01, shake: 0.0)          // half a minute of walking is an alighting whatever came before
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events[1].kind, .alighted)
     }
 
     func testPassingTrainOnThePlatformIsNotARide() {

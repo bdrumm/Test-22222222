@@ -13,7 +13,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active: data.start(); data.refreshIfStale()
-            case .background: data.stop()
+            case .background: if TripRecorder.shared.phase == nil { data.stop() }     // a route in progress keeps polling
             default: break
             }
         }

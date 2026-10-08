@@ -41,17 +41,21 @@ struct Itinerary: Identifiable {
     var rideVsSchedSec: Double
 }
 
-/// Trains of a line board that carry a rider from fromIdx to toIdx (feed ETAs at both stops).
+/// Trains of a line board that carry a rider from fromIdx to toIdx (feed ETAs at both stops). The times are the
+/// moments at the platform (PlatformTiming): the train pulling in to board, and pulling in at the far end, not
+/// the feed's later time for the stop that the engine is calibrated on.
 func segmentTrips(_ lb: LineBoard, line: LineTopology, fromIdx: Int, toIdx: Int, now: Double, maxN: Int = 6) -> [TripCandidate] {
     let sched = line.runBetween(fromIdx, toIdx).map(Double.init)
     var out: [TripCandidate] = []
     for t in lb.trains {
-        guard let board = t.points.first(where: { $0.idx == fromIdx })?.ts, let arrive = t.points.first(where: { $0.idx == toIdx })?.ts else { continue }
-        // a train whose boarding time has passed is gone: the countdown reaching zero moves on to the next one
-        if board < now || arrive <= board { continue }
+        guard let boardF = t.points.first(where: { $0.idx == fromIdx })?.ts, let arriveF = t.points.first(where: { $0.idx == toIdx })?.ts else { continue }
+        let at = { (ts: Double) in PlatformTiming.atPlatform(ts, route: t.route) }
+        let board = at(boardF), arrive = at(arriveF)
+        // a train that has pulled away is gone: the countdown reaching zero (the train pulling in) keeps it for the dwell
+        if board + PlatformTiming.dwellSec < now || arrive <= board { continue }
         var c = TripCandidate(train: t, key: lb.key, boardTs: board, arriveTs: arrive, rideSec: arrive - board, schedRideSec: sched, stopsToOrigin: max(1, fromIdx - t.nextIdx + 1))
-        if let pt = t.pred?.point(at: toIdx) { c.arriveLoTs = pt.loTs; c.arriveHiTs = pt.hiTs; c.arriveSource = pt.source }
-        c.feedArriveTs = t.feedPoints?.first(where: { $0.idx == toIdx })?.ts
+        if let pt = t.pred?.point(at: toIdx) { c.arriveLoTs = at(pt.loTs); c.arriveHiTs = at(pt.hiTs); c.arriveSource = pt.source }
+        c.feedArriveTs = t.feedPoints?.first(where: { $0.idx == toIdx }).map { at($0.ts) }
         out.append(c)
     }
     out.sort { $0.boardTs < $1.boardTs }
@@ -94,6 +98,48 @@ func pathTrips(boards: [String: LineBoard], schedule: ClientSchedule, option: Pa
                              nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - a.boardTs) - sched))
     }
     return Array(out.sorted { $0.arriveTs < $1.arriveTs }.prefix(maxN))
+}
+
+/// The itinerary of a ride in progress: leg `leg` is the train the rider is on (the departure log's time at the
+/// platform, the feed's latest time at the leg's last stop), and the leg after it, if any, the first train that
+/// makes the connection, as for a fresh itinerary. The planner's own itineraries moved on to the next train when
+/// this one left, so they no longer say when this ride ends; this does. Nil when the train is gone from the feed
+/// with no time kept for the alighting stop. Without a connecting train in the feeds yet, the arrival is the
+/// schedule's (half a headway's wait and the scheduled ride) and the itinerary carries only the leg in hand.
+func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, option: PathOption, leg: Int, boarded c: BoardingCandidate, now: Double) -> Itinerary? {
+    guard option.legs.indices.contains(leg), let ix = option.legs[leg].idx[c.key], let lb = boards[c.key],
+          let t = lb.trains.first(where: { $0.id == c.trainId }) else { return nil }
+    guard let arriveF = t.points.first(where: { $0.idx == ix.to })?.ts ?? c.stopTs[ix.to] else { return nil }
+    let at = { (ts: Double) in PlatformTiming.atPlatform(ts, route: t.route) }
+    let board = at(c.boardTs)
+    let arriveTs = max(at(arriveF), board + 1)
+    var a = TripCandidate(train: t, key: c.key, boardTs: board, arriveTs: arriveTs, rideSec: arriveTs - board,
+                          schedRideSec: schedule.lines[c.key]?.runBetween(ix.from, ix.to).map(Double.init), stopsToOrigin: 0)
+    if let pt = t.pred?.point(at: ix.to) { a.arriveLoTs = at(pt.loTs); a.arriveHiTs = at(pt.hiTs); a.arriveSource = pt.source }
+    a.feedArriveTs = t.feedPoints?.first(where: { $0.idx == ix.to }).map { at($0.ts) }
+    let sched = Double(option.schedSec)
+    if leg == option.legs.count - 1 {
+        return Itinerary(legs: [a], boardTs: board, arriveTs: a.arriveTs, totalSec: a.arriveTs - now, walkSec: 0, waitAtTransferSec: nil, connectionMarginSec: nil,
+                         nextIfMissedSec: nil, schedRideSec: sched, rideVsSchedSec: a.rideSec - sched)
+    }
+    guard leg == 0, option.legs.count == 2, let transfer = option.transfer else { return nil }
+    let walk = Double(transfer.walkSec)
+    // the connection: the first train at the transfer platform after the walk, or after now when the first leg is already behind
+    let earliest = max(a.arriveTs + walk, now)
+    // trains still standing at the platform when the rider gets there are listed too; the connection is one that
+    // pulls in after the rider does
+    let seconds = legTrips(boards: boards, schedule: schedule, leg: option.legs[1], now: earliest, maxN: 40).filter { $0.boardTs >= earliest }
+    if let b = seconds.first {
+        let next = seconds.first(where: { $0.boardTs > b.boardTs })
+        return Itinerary(legs: [a, b], boardTs: board, arriveTs: b.arriveTs, totalSec: b.arriveTs - now, walkSec: walk,
+                         waitAtTransferSec: b.boardTs - a.arriveTs, connectionMarginSec: b.boardTs - a.arriveTs - walk,
+                         nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: (b.arriveTs - board) - sched)
+    }
+    let ride2 = Double(option.legs[1].schedRideSec ?? 0)
+    let arrive2 = earliest + option.wait2Sec + ride2
+    return Itinerary(legs: [a], boardTs: board, arriveTs: arrive2, totalSec: arrive2 - now, walkSec: walk,
+                     waitAtTransferSec: earliest + option.wait2Sec - a.arriveTs, connectionMarginSec: nil,
+                     nextIfMissedSec: nil, schedRideSec: sched, rideVsSchedSec: (arrive2 - board) - sched)
 }
 
 /// Scheduled headway (s) of a leg's routes at a stop around `now`, from the per-line schedules.

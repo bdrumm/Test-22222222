@@ -53,12 +53,6 @@ struct LineBoardView: View {
         withAnimation(.easeInOut(duration: 0.2)) { lineKey = legs[j].key }
     }
 
-    private var lineSwipe: some Gesture {
-        DragGesture(minimumDistance: 24, coordinateSpace: .local).onEnded { v in
-            guard abs(v.translation.width) > abs(v.translation.height) * 1.5 else { return }
-            stepLine(v.translation.width < 0 ? 1 : -1)
-        }
-    }
 
     /// One stop before the train to take, so the diagram opens on it.
     private func focusStop(_ line: LineTopology) -> Int? {
@@ -85,17 +79,41 @@ struct LineBoardView: View {
         ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("Line", selection: $lineKey) {
-                    ForEach(sortedKeys(sched), id: \.self) { k in Text(title(k, sched)).tag(k) }
+                if let legs = data.focus?.legs, !legs.isEmpty {
+                    // one tab per line of the selected route; each is its own page (a swipe steps between them too)
+                    HStack(alignment: .top, spacing: 8) {
+                        LegTabs(legs: legs, schedule: sched, lineKey: $lineKey)
+                        Menu {
+                            Picker("Other lines", selection: $lineKey) {
+                                ForEach(sortedKeys(sched), id: \.self) { k in Text(title(k, sched)).tag(k) }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle").font(.title3).foregroundStyle(.secondary).frame(width: 36, height: 44)
+                        }
+                        .accessibilityLabel("Other lines")
+                    }
+                    if focusLeg == nil, let line = sched.lines[lineKey] {
+                        Text("\(title(lineKey, sched)) is not on your route · \(line.names.first ?? "") to \(line.names.last ?? "")").font(.caption).foregroundStyle(.secondary)
+                    }
+                    // alerts that touch this route directly come first: station and entrance notices at its stops, skipped
+                    // stops, and line-wide delays on its lines
+                    let direct = data.alertsAffecting(legs: legs, schedule: sched)
+                    if !direct.isEmpty {
+                        Text("Affects your route").font(.subheadline.bold()).padding(.top, 2)
+                        ForEach(direct.prefix(4), id: \.alert.id) { item in
+                            AlertCard(alert: item.alert, evidence: alertEvidence(item.alert, data: data), station: item.station)
+                        }
+                    }
+                } else {
+                    Picker("Line", selection: $lineKey) {
+                        ForEach(sortedKeys(sched), id: \.self) { k in Text(title(k, sched)).tag(k) }
+                    }
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
                 if let line = sched.lines[lineKey] {
                     let route = String(lineKey.split(separator: "_").first ?? "")
-                    if let legs = data.focus?.legs, let leg = focusLeg, let n = legs.firstIndex(of: leg) {
-                        Text(legs.count > 1
-                             ? "Line \(n + 1) of \(legs.count) on your route (\(legs.map { String($0.key.split(separator: "_").first ?? "") }.joined(separator: " → "))) · swipe left or right for the other"
-                             : "The line of your route: board and alight are marked.")
-                            .font(.caption).foregroundStyle(.secondary)
+                    if let h = lineHealth(key: lineKey, data: data) {
+                        LineHealthRow(health: h, route: route)
                     }
                     if let id = focusedTrainId, let b = data.boards[lineKey], let t = b.trains.first(where: { $0.id == id }) {
                         Text("Your train: \(shortLabel(t)), \(t.position?.text ?? "position unknown"). From the route selected on the Go tab.")
@@ -106,6 +124,11 @@ struct LineBoardView: View {
                         TrackDiagramView(line: line, route: route, fromIdx: span?.from, toIdx: span?.to, trains: trains(line), colW: 52,
                                          scrollTo: focusStop(line) ?? span.map { max(0, $0.from - 1) })
                     }
+                    if let legs = data.focus?.legs, legs.count > 1, legs.allSatisfy({ data.boards[$0.key] != nil }) {
+                        var preds: [String: LinePrediction] = [:]
+                        let _ = legs.forEach { l in if let p = data.predictions[l.key]?[data.scenario] ?? data.predictions[l.key]?["baseline"] { preds[l.key] = p } }
+                        RouteChartCard(legs: legs, schedule: sched, boards: data.boards, predictions: preds)
+                    }
                     if let b = data.predictedBoards[lineKey] ?? data.boards[lineKey] {
                         HStack(spacing: 8) {
                             Tile(title: "Trains", value: "\(b.trains.count)", sub: "started, in the feed")
@@ -113,16 +136,17 @@ struct LineBoardView: View {
                             Tile(title: "Late ≥ 3 min", value: "\(b.trains.filter { ($0.effectiveLatenessSec ?? 0) >= 180 }.count)", sub: "vs the timetable")
                         }
                         if let lp = data.predictions[lineKey]?[data.scenario] ?? data.predictions[lineKey]?["baseline"] {
-                            EngineSummary(prediction: lp, line: line)
+                            if let raw = data.boards[lineKey], !raw.trains.isEmpty {
+                                PredictionCard(line: line, board: raw, prediction: lp, focusedTrainId: focusedTrainId, span: span, route: route)
+                            }
+                            EngineCards(prediction: lp, line: line)
                         }
                         ScenarioPicker()
-                        let alerts = data.alertsFor(routes: [route])
-                        ForEach(alerts.prefix(3)) { a in
-                            let ev = alertEvidence(a, data: data)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("\(a.kind): \(a.header)").font(.caption).foregroundStyle(a.kind == "delay" ? Color.red : Color.secondary).lineLimit(3)
-                                Text(ev.text).font(.caption2.weight(.medium)).foregroundStyle(ev.corroborated ? Color.red : Color.secondary)
-                            }
+                        let directIds = Set((data.focus?.legs).map { data.alertsAffecting(legs: $0, schedule: sched).map { $0.alert.id } } ?? [])
+                        let alerts = data.alertsFor(routes: [route]).filter { !directIds.contains($0.id) }
+                        if !alerts.isEmpty {
+                            Text(directIds.isEmpty ? "Alerts on the \(route)" : "Other alerts on the \(route)").font(.subheadline.bold()).padding(.top, 2)
+                            ForEach(alerts.prefix(3)) { a in AlertCard(alert: a, evidence: alertEvidence(a, data: data)) }
                         }
                         ForEach(b.trains) { t in TrainRow(train: t, focused: t.id == focusedTrainId).id("train-\(t.id)") }
                         if b.trains.isEmpty { Text("No started train on this line in the feed.").font(.caption).foregroundStyle(.secondary) }
@@ -134,8 +158,7 @@ struct LineBoardView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
-            .contentShape(Rectangle())
-            .gesture(lineSwipe)
+            .background(SwipeCatcher { stepLine($0) })
         }
         .onChange(of: data.focus) { _, f in
             if let f = f, f.key == lineKey { withAnimation { proxy.scrollTo("train-\(f.trainId)", anchor: .center) } }
@@ -212,23 +235,112 @@ struct TrainRow: View {
 }
 
 
-/// What the engine projects for the line in the next hour: the largest gap and the knock-on from held trains.
-struct EngineSummary: View {
+/// The lines of the selected route as tabs: the line's bullet, where it is boarded and left, and the train taken.
+struct LegTabs: View {
+    @Environment(DataService.self) private var data
+    let legs: [FocusLeg]
+    let schedule: ClientSchedule
+    @Binding var lineKey: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(legs.enumerated()), id: \.offset) { i, leg in
+                let route = String(leg.key.split(separator: "_").first ?? "")
+                let selected = leg.keys.contains(lineKey)
+                let names = schedule.lines[leg.key]?.names ?? []
+                let span = leg.idx[leg.key]
+                let board = span.flatMap { $0.from < names.count ? names[$0.from] : nil } ?? ""
+                let alight = span.flatMap { $0.to < names.count ? names[$0.to] : nil } ?? ""
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { lineKey = leg.key }
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            RouteBullets(routes: [route], size: 20)
+                            Text(legs.count > 1 ? "Line \(i + 1)" : "Your line").font(.caption.bold()).foregroundStyle(selected ? Color.primary : Color.secondary)
+                            Spacer(minLength: 0)
+                            if let h = lineHealth(key: leg.key, data: data) {
+                                Circle().fill(h.color).frame(width: 8, height: 8).accessibilityLabel(h.label)
+                            }
+                        }
+                        Text(board.isEmpty || alight.isEmpty ? "the whole line" : "\(board) → \(alight)")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(selected ? Color.accentColor.opacity(0.14) : Color(.secondarySystemBackground)))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(route) line, \(board) to \(alight)")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+    }
+}
+
+/// What the engine projects for the line in the next hour, as two tiles: the largest gap, and the knock-on
+/// from the train ahead.
+struct EngineCards: View {
     let prediction: LinePrediction
     let line: LineTopology
 
-    private var text: String {
-        guard let w = prediction.worstGap else { return "Engine: no gap projected in the next hour." }
-        let name = w.idx < line.names.count ? line.names[w.idx] : "stop \(w.idx)"
-        var s = "Engine: largest projected gap \(Fmt.minTxt(w.gapSec)) at \(name) around \(Fmt.hhmm(w.atTs))"
-        if prediction.nKnockOn > 0 {
-            let plural = prediction.nKnockOn == 1 ? "" : "s"
-            s += " · \(prediction.nKnockOn) train\(plural) held back by the train ahead (\(Fmt.minTxt(prediction.knockOnTotalSec)) in total)"
+    var body: some View {
+        HStack(spacing: 8) {
+            if let w = prediction.worstGap {
+                let name = w.idx < line.names.count ? line.names[w.idx] : "stop \(w.idx)"
+                Tile(title: "Largest gap ahead", value: Fmt.minTxt(w.gapSec), sub: "at \(name) · around \(Fmt.hhmm(w.atTs))")
+            } else {
+                Tile(title: "Largest gap ahead", value: "none", sub: "no gap projected in the next hour")
+            }
+            if prediction.nKnockOn > 0 {
+                Tile(title: "Held back", value: "\(prediction.nKnockOn) train\(prediction.nKnockOn == 1 ? "" : "s")", sub: "by the train ahead · \(Fmt.minTxt(prediction.knockOnTotalSec)) in total")
+            } else {
+                Tile(title: "Held back", value: "none", sub: "no train slowed by the one ahead")
+            }
         }
-        return s
+    }
+}
+
+/// One alert as a card: its kind, what it says, and whether the live boards bear it out.
+struct AlertCard: View {
+    let alert: RouteAlert
+    let evidence: AlertEvidence
+    var station: String? = nil      // the station on your route this alert names
+
+    private var kindColor: Color {
+        switch alert.kind {
+        case "delay": return .red
+        case "planned": return .orange
+        default: return .secondary
+        }
+    }
+
+    private var kindTitle: String {
+        switch alert.kind {
+        case "delay": return "Delays"
+        case "planned": return "Planned work"
+        default: return "Notice"
+        }
     }
 
     var body: some View {
-        Text(text).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Flag(kindTitle, kindColor)
+                RouteBullets(routes: alert.routes, size: 16)
+                if let st = station { Flag("at \(st)", Color.accentColor) }
+                Spacer()
+            }
+            Text(alert.header).font(.subheadline).lineLimit(station == nil ? 3 : 5)
+            HStack(alignment: .top, spacing: 6) {
+                Circle().fill(evidence.corroborated ? Color.red : Color.secondary.opacity(0.6)).frame(width: 7, height: 7).padding(.top, 5)
+                Text(evidence.text).font(.caption).foregroundStyle(evidence.corroborated ? Color.red : Color.secondary).lineLimit(2)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(kindColor.opacity(alert.kind == "delay" ? 0.5 : 0.25), lineWidth: 1))
     }
 }

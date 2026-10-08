@@ -115,6 +115,6 @@ struct LockScreenView: View {
         if !state.status.isEmpty { bits.append(state.status) }
         if let c = state.changeAt, let r = state.changeRoutes { bits.append("change to the \(r) at \(c)") }
         if state.offline { bits.append("offline, times from saved data") }
-        return bits.isEmpty ? attributes.routeLabel : bits.joined(separator: " · ")
+        return bits.isEmpty ? (state.routeLabel ?? attributes.routeLabel) : bits.joined(separator: " · ")
     }
 }

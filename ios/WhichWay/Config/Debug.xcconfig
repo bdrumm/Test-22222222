@@ -3,7 +3,9 @@
 // xcconfig, so URLs are written with the $() trick.
 
 // Where the app starts loading the published data from (Settings can change it at run time).
-WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/Test-22222222/data/
+WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/whichway/data/
+// Where the Debug build sends recorded trips (your Mac on the home network); empty: the data server, if it is one.
+WHICHWAY_TRIP_SERVER =
 PRODUCT_BUNDLE_IDENTIFIER = com.whichway.app
 DEVELOPMENT_TEAM =
 

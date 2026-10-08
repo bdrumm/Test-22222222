@@ -37,21 +37,29 @@ struct CommuteChip: View {
             }
             Button(action: onAdd) { Label("Add commute", systemImage: "plus") }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: shown == nil ? "plus.circle" : (on ? "briefcase.fill" : "clock")).font(.caption)
-                if let p = shown {
-                    Text(p.name).font(.caption.bold())
-                    Text(p.windowText).font(.caption2).foregroundStyle(.secondary)
-                } else {
-                    Text(presets.isEmpty ? "Add a commute" : "Commutes").font(.caption.bold())
-                }
-                Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
+            // one line always: the window text goes first when the row is tight
+            ViewThatFits(in: .horizontal) {
+                label(window: true)
+                label(window: false)
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(Capsule().fill(on ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground)))
             .overlay(Capsule().stroke(on ? Color.accentColor : Color.clear, lineWidth: 1))
         }
         .buttonStyle(.plain)
+    }
+
+    private func label(window: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: shown == nil ? "plus.circle" : (on ? "briefcase.fill" : "clock")).font(.caption)
+            if let p = shown {
+                Text(p.name).font(.caption.bold()).lineLimit(1)
+                if window { Text(p.windowText).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+            } else {
+                Text(presets.isEmpty ? "Add a commute" : "Commutes").font(.caption.bold()).lineLimit(1)
+            }
+            Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -82,6 +90,7 @@ struct SetupPrompt: View {
 /// Create or edit a commute: name, stations (or the nearest station by location), the daily window, weekdays.
 struct PresetEditorView: View {
     @Environment(DataService.self) private var data
+    @Environment(PlaceStore.self) private var placeStore
     @Environment(\.dismiss) private var dismiss
     @State var preset: CommutePreset
     let onSave: (CommutePreset) -> Void
@@ -140,13 +149,13 @@ struct PresetEditorView: View {
             }
             .sheet(isPresented: $pickingOrigin) {
                 if let index = data.index {
-                    StationPickerSheet(title: "From", stations: index.sorted, reach: nil) { st in preset.originId = st.id }
+                    StationPickerSheet(title: "From", stations: index.sorted, reach: nil, places: placeStore.picks(index)) { st in preset.originId = st.id }
                 }
             }
             .sheet(isPresented: $pickingDest) {
                 if let index = data.index, let sched = data.schedule {
                     let reach: [String: Reach]? = (preset.useNearestOrigin || preset.originId.isEmpty) ? nil : reachableStations(schedule: sched, index: index, from: preset.originId)
-                    StationPickerSheet(title: "To", stations: index.sorted, reach: reach) { st in preset.destId = st.id }
+                    StationPickerSheet(title: "To", stations: index.sorted, reach: reach, places: placeStore.picks(index)) { st in preset.destId = st.id }
                 }
             }
         }

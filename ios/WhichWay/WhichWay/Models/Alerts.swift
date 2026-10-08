@@ -11,6 +11,7 @@ struct RouteAlert: Identifiable {
     var routes: [String]
     var start: Double?
     var end: Double?
+    var stops: [String] = []      // GTFS stop ids the alert names (stations or platforms), when it is stop-specific
 }
 
 enum Alerts {
@@ -35,6 +36,7 @@ enum Alerts {
             let type = merc["alert_type"] as? String
             let informed = (a["informed_entity"] as? [[String: Any]]) ?? []
             let routes = Array(Set(informed.compactMap { $0["route_id"] as? String })).sorted()
+            let stops = Array(Set(informed.compactMap { $0["stop_id"] as? String })).sorted()
             let updated = num(merc["updated_at"])
             var periods = (a["active_period"] as? [[String: Any]]) ?? []
             if periods.isEmpty { periods = [[:]] }
@@ -46,7 +48,7 @@ enum Alerts {
                 if endEff == nil, let s = start { endEff = s + 3 * 3600 }
                 if let s = start, s > now { continue }
                 if let e = endEff, e < now { continue }
-                out.append(RouteAlert(id: "\(id)#\(i)", kind: kind(type: type, header: header), type: type, header: header, routes: routes, start: start, end: end))
+                out.append(RouteAlert(id: "\(id)#\(i)", kind: kind(type: type, header: header), type: type, header: header, routes: routes, start: start, end: end, stops: stops))
             }
         }
         let rank = ["delay": 0, "planned": 1, "notice": 2]

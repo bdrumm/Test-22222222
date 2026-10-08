@@ -7,3 +7,6 @@ PRODUCT_BUNDLE_IDENTIFIER = com.yourname.whichway
 // The local server started with `make serve` (the Simulator reaches localhost; a device needs your Mac's
 // address on the local network, e.g. http:/$()/192.168.1.20:8000/data/).
 WHICHWAY_BASE_URL = http:/$()/localhost:8000/data/
+// Where the phone sends its recorded trips: the same local server, reached by your Mac's Bonjour name on the
+// home network (System Settings > General > Sharing > Local hostname), e.g. http:/$()/my-mac.local:8000/.
+WHICHWAY_TRIP_SERVER =
