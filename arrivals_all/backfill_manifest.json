@@ -169,24 +169,39 @@
    "error": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-09-30_csv.tar.xz"
   },
   "2026-10-01": {
-   "rows": 0,
-   "error": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-01_csv.tar.xz"
+   "rows": 232613,
+   "written": {
+    "2026-10-01": 219956,
+    "2026-10-02": 238493
+   }
   },
   "2026-10-02": {
-   "rows": 0,
-   "error": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-02_csv.tar.xz"
+   "rows": 232268,
+   "written": {
+    "2026-10-02": 220337,
+    "2026-10-03": 159123
+   }
   },
   "2026-10-03": {
-   "rows": 0,
-   "error": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-03_csv.tar.xz"
+   "rows": 156391,
+   "written": {
+    "2026-10-03": 141568,
+    "2026-10-04": 148856
+   }
   },
   "2026-10-04": {
-   "rows": 0,
-   "error": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-04_csv.tar.xz"
+   "rows": 143971,
+   "written": {
+    "2026-10-04": 131251,
+    "2026-10-05": 238928
+   }
   },
   "2026-10-05": {
-   "rows": 0,
-   "error": "404 Client Error: Not Found for url: https://subwaydata.nyc/data/subwaydatanyc_2026-10-05_csv.tar.xz"
+   "rows": 235505,
+   "written": {
+    "2026-10-05": 221854,
+    "2026-10-06": 55124
+   }
   },
   "2026-10-06": {
    "rows": 0,
