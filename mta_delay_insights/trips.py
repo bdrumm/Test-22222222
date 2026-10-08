@@ -739,8 +739,10 @@ def render_markdown(reviews: list[dict], s: dict, generated: datetime, legs: lis
     if rows:
         L.append(_table(["change at", "trips", "planner", "measured (median)", "difference"], rows))
     a, w = s.get("access"), s.get("walkSpeed")
-    L.append(f"Time from the station radius to the platform: {('median ' + _mmss(a['median']) + f' over {a['n']} trips') if a else 'not measured yet'} · "
-             f"street pace: {(f'{w['median']:.0f} m/min median over {w['n']} trips') if w else 'not measured yet'}.\n")
+    # spelt out rather than nested in the f-strings: Python before 3.12 cannot reuse a quote inside one
+    access = "median {} over {} trips".format(_mmss(a["median"]), a["n"]) if a else "not measured yet"
+    pace = "{:.0f} m/min median over {} trips".format(w["median"], w["n"]) if w else "not measured yet"
+    L.append(f"Time from the station radius to the platform: {access} · street pace: {pace}.\n")
     L.append("## The server's own forecast on these trains\n")
     sv = s.get("server", {})
     if sv.get("n"):
