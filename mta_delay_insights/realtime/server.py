@@ -8,6 +8,7 @@ the site polls ``data/live.json``; everything else is served from ``--site``.
 from __future__ import annotations
 
 import http.server
+import os
 import json
 import urllib.parse
 import logging
@@ -42,6 +43,10 @@ class LiveState:
         self.learned_path = Path(learned_path) if learned_path else None
         self.hold_model: dict | None = None      # hold survival from the store's dwells (refit every 6 h)
         self._hold_model_at: float | None = None
+        self.weather_hourly = None               # recent + next-day hourly weather for the learned model's features
+        self._weather_at: float | None = None
+        self._goodservice_at: float | None = None  # community status (goodservice.io) sampled into the store every 5 min
+        self._learned_fit_at: float | None = None
         self.last_live: dict = {}
         self.started_at = time.time()
         self.polls = 0
@@ -58,6 +63,9 @@ class LiveState:
         # forecasts made by each snapshot, scored against the arrivals the collector observes later
         self.projections: list[dict] = []
         self.forecast_eval = None
+        self._review_timer: threading.Timer | None = None
+        self._data_repo_at: float | None = None
+        self._review_lock = threading.Lock()
         self._last_eval = 0.0
         # the browser-side live mode needs today's timetable extract next to the site
         self.site_dir = Path(site_dir) if site_dir else None
@@ -103,29 +111,79 @@ class LiveState:
                     self.journey_models[spec.id], _ = fit_journey(self.store, self.static, spec, self.store.alerts(), weather, None, now)
                 except Exception as exc:
                     log.warning("journey fit %s failed: %s", spec.id, exc)
-        # learned arrival model: load a published one, or (re)train from the store when there is enough history
+        # hourly weather (Open-Meteo, past month + tomorrow) for the learned model's features, refreshed every 3 h
+        if self._weather_at is None or now - self._weather_at > 3 * 3600:
+            try:
+                from ..sources import weather
+                w = weather.fetch_recent_hourly(35)
+                if w is not None and len(w):
+                    self.weather_hourly = w
+                    if self.store is not None:
+                        self.store.put_frame("weather_hourly", w)
+                        self.store.put_frame("weather_daily", weather.daily_summary(w))
+            except Exception as exc:
+                if self.weather_hourly is None and self.store is not None:
+                    cached = self.store.get_frame("weather_hourly")
+                    self.weather_hourly = cached if cached is not None and len(cached) else None
+                log.warning("weather refresh failed (%s); cached hours: %s", exc, 0 if self.weather_hourly is None else len(self.weather_hourly))
+            self._weather_at = now
+        # learned arrival model: a published model (pipeline / `make model`, trained on the full history with
+        # weather, alerts and day patterns) is loaded and kept; without one, refit from the store every 6 hours
         try:
             from ..models import ArrivalModel, build_training_rows, train_arrival_model
-            if self.learned_path and self.learned_path.exists() and self.learned is None:
-                self.learned = ArrivalModel.load(self.learned_path)
-            elif self.store is not None:
+            if self.learned_path and self.learned_path.exists():
+                mtime = self.learned_path.stat().st_mtime
+                if self.learned is None or getattr(self, "_learned_mtime", None) != mtime:
+                    self.learned = ArrivalModel.load(self.learned_path)
+                    self._learned_mtime = mtime
+                    log.info("learned model loaded: %s", {k: self.learned.card.get(k) for k in ("n_train", "n_test", "trained_at")})
+            elif self.store is not None and (self._learned_fit_at is None or now - self._learned_fit_at > 6 * 3600):
+                self._learned_fit_at = now
                 arr = self.store.arrivals(None, now - 21 * 86400, now)
                 if len(arr) >= 20000:
-                    rows = build_training_rows(arr, self.static, self.store.alerts(), None, None, self.store.eta_samples(None, now - 21 * 86400, now))
+                    rows = build_training_rows(arr, self.static, self.store.alerts(), self.store.get_frame("weather_daily"), None,
+                                               self.store.eta_samples(None, now - 21 * 86400, now), weather_hourly=self.weather_hourly)
                     m = train_arrival_model(rows)
                     if m.ready:
                         self.learned = m
-                        if self.learned_path:
-                            m.save(self.learned_path)
-                        log.info("learned model refitted: %s", {k: m.card.get(k) for k in ("n_train", "n_test")})
+                        log.info("learned model refitted from the store: %s", {k: m.card.get(k) for k in ("n_train", "n_test")})
         except Exception as exc:
             log.warning("learned model fit failed: %s", exc)
         self._last_fit = now
+
+    def _sample_goodservice(self, now: float) -> None:
+        """Off the poll thread: the community status takes a dozen requests and must not delay the feeds."""
+        try:
+            from ..sources import goodservice
+            gsdf = goodservice.normalize(goodservice.fetch_routes(timeout=15), now)
+            if len(gsdf) and self.store is not None:
+                self.store.put_frame("goodservice", gsdf, replace=False)
+        except Exception as exc:
+            log.warning("goodservice sample failed: %s", exc)
+
+    def _pull_data_repo(self) -> None:
+        """Every five minutes: the trips the phone wrote to the GitHub data repository; new ones are reviewed. Only a
+        repository `make trips` has cloned already (data/trips/github), or one named by WHICHWAY_DATA_REPO."""
+        try:
+            from ..trips import sync_data_repo
+            if not (self.trips_dir() / "github" / ".git").exists() and "WHICHWAY_DATA_REPO" not in os.environ:
+                return
+            if sync_data_repo(self.trips_dir()):
+                log.info("new trips in the data repository: reviewing")
+                self.schedule_trip_review(delay=5)
+        except Exception as exc:
+            log.warning("data repository pull failed: %s", exc)
 
     def tick(self) -> None:
         now = time.time()
         if now - self._last_fit > self.refit_every:
             self.refit(now)
+        if self.store is not None and (self._goodservice_at is None or now - self._goodservice_at >= 300):
+            self._goodservice_at = now
+            threading.Thread(target=self._sample_goodservice, args=(now,), name="goodservice", daemon=True).start()
+        if self.store is not None and (self._data_repo_at is None or now - self._data_repo_at >= 300):
+            self._data_repo_at = now
+            threading.Thread(target=self._pull_data_repo, name="data-repo", daemon=True).start()
         feed_bytes = {}
         for key in self.feeds:
             try:
@@ -151,8 +209,14 @@ class LiveState:
             except Exception as exc:
                 log.warning("hold survival refit failed: %s", exc)
             self._hold_model_at = now
+        t_build = time.time()
         live = build_live(feed_bytes, self.alerts_df, self.static, self.targets, self.models, now, source="local-realtime",
-                          journeys=self.journeys, journey_models=self.journey_models, learned=self.learned, store=self.store, hold_model=self.hold_model)
+                          journeys=self.journeys, journey_models=self.journey_models, learned=self.learned, store=self.store, hold_model=self.hold_model,
+                          weather_daily=self.store.get_frame("weather_daily") if self.store is not None else None, weather_hourly=self.weather_hourly)
+        build_sec = time.time() - t_build
+        if build_sec > 10:
+            n_learned = sum(1 for st in live.get("stations") or [] for a in st.get("arrivals") or [] if a.get("model_source") == "learned")
+            log.warning("snapshot took %.0fs (%d trains, %d learned platform ETAs, %d journeys)", build_sec, live.get("trains_total", 0), n_learned, len(live.get("journeys") or []))
         self._record_forecasts(live, now)
         with self.lock:
             self.last_live = live
@@ -173,9 +237,63 @@ class LiveState:
             with self.lock:
                 if not ev.empty:
                     self.forecast_eval = ev if self.forecast_eval is None else pd.concat([self.forecast_eval, ev], ignore_index=True).tail(50000)
+                kept = self.forecast_eval
             self._last_eval = now
+            if kept is not None and not kept.empty:
+                # kept in the store too, so the trip review can score the rider's trains after the fact
+                threading.Thread(target=self._persist_forecast_eval, args=(kept.copy(),), daemon=True).start()
         except Exception as exc:
             log.warning("forecast evaluation failed: %s", exc)
+
+    def _persist_forecast_eval(self, df) -> None:
+        try:
+            self.store.put_frame("forecast_eval", df)
+        except Exception as exc:
+            log.warning("forecast evaluation not persisted: %s", exc)
+
+    # ---- the rider's trips ------------------------------------------------ #
+
+    def schedule_trip_review(self, delay: float | None = None) -> None:
+        """A trip observation just arrived: review every trip against the trains once the last arrivals are in
+        (two minutes by default, TRIP_REVIEW_DELAY_SEC), the latest arrival resetting the clock."""
+        if self.store is None:
+            return
+        if delay is None:
+            try:
+                delay = float(os.environ.get("TRIP_REVIEW_DELAY_SEC", "120"))
+            except ValueError:
+                delay = 120.0
+        with self._review_lock:
+            if self._review_timer is not None:
+                self._review_timer.cancel()
+            self._review_timer = threading.Timer(delay, self.run_trip_review)
+            self._review_timer.daemon = True
+            self._review_timer.start()
+
+    def trips_dir(self) -> Path:
+        """Where the trip review lives: WHICHWAY_TRIPS_DIR, else trips/ next to the store, else data/trips."""
+        env = os.environ.get("WHICHWAY_TRIPS_DIR")
+        if env:
+            return Path(env)
+        p = getattr(self.store, "path", None) if self.store is not None else None
+        return Path(p).parent / "trips" if p and p != ":memory:" else Path("data/trips")
+
+    def run_trip_review(self) -> dict:
+        """The review itself (after an upload, or on demand through POST /api/trips/review): data/trips/trip_review.md,
+        .json and legs.json next to the store, from the uploads, the pulls and the store's arrivals."""
+        if self.store is None:
+            return {"error": "no store"}
+        try:
+            from ..trips import review_all
+            with self.lock:
+                feval = self.forecast_eval.copy() if self.forecast_eval is not None else None
+            with self._review_lock:
+                res = review_all(self.store, self.static, self.trips_dir(), feval=feval)
+            log.info("trip review: %s", res)
+            return res
+        except Exception as exc:
+            log.warning("trip review failed: %s", exc, exc_info=True)
+            return {"error": f"{type(exc).__name__}: {exc}"}
 
     def forecast_eval_summary(self) -> dict:
         from .evaluate import summarize_forecast_eval
@@ -230,6 +348,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                    "telemetry": st.store.telemetry_count() if st.store is not None else None})
             if not live:
                 return self._json({"error": "no snapshot yet"}, 503)
+            if path == "/api/trips":
+                p = self.state.trips_dir() / "trip_review.json"
+                if not p.exists():
+                    return self._json({"error": "no trip review yet", "hint": "POST /api/telemetry or `make trips`"}, 404)
+                try:
+                    doc = json.loads(p.read_text())
+                except Exception as exc:
+                    return self._json({"error": f"unreadable review: {exc}"}, 500)
+                return self._json({"generated": doc.get("generated"), "summary": doc.get("summary"), "legs": doc.get("legs")})
             if path == "/api/routes":
                 return self._json({"generated_ts": live["generated_ts"], "routes": live.get("routes", [])})
             if path == "/api/incidents":
@@ -246,7 +373,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                        "route_choice": live.get("route_choice", [])}, 404)
                 lb = next((x for x in live.get("leave_by", []) if x.get("id") == jid), None)
                 return self._json({"generated_ts": live["generated_ts"], "plan": plan, "leave_by": lb})
-            return self._json({"error": "unknown endpoint", "endpoints": ["/api/live", "/api/routes", "/api/station?id=", "/api/plan?journey=", "/api/incidents", "/api/health"]}, 404)
+            return self._json({"error": "unknown endpoint", "endpoints": ["/api/live", "/api/routes", "/api/station?id=", "/api/plan?journey=", "/api/incidents", "/api/health", "/api/trips"]}, 404)
         if self.path.startswith("/data/models/"):
             tid = self.path.rsplit("/", 1)[-1].replace(".json", "")
             m = self.state.models.get(tid)
@@ -260,8 +387,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         """POST /api/telemetry: one trip observation, or a list of them, from an opted-in phone."""
         path, _, _ = self.path.partition("?")
+        if path == "/api/trips/review":
+            run = getattr(self.state, "run_trip_review", None)
+            if run is None:
+                return self._json({"error": "no trip review here"}, 503)
+            res = run()
+            return self._json(res, 500 if res.get("error") else 200)
         if path != "/api/telemetry":
-            return self._json({"error": "unknown endpoint", "endpoints": ["POST /api/telemetry"]}, 404)
+            return self._json({"error": "unknown endpoint", "endpoints": ["POST /api/telemetry", "POST /api/trips/review"]}, 404)
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -279,7 +412,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if store is None:
             return self._json({"error": "no store: run serve with --db"}, 503)
         stored = store.insert_telemetry(items, received_ts=time.time())
-        return self._json({"ok": True, "stored": stored})
+        resp = {"ok": True, "stored": stored}
+        schedule = getattr(self.state, "schedule_trip_review", None)
+        if schedule is not None:
+            schedule()
+            resp["review"] = "scheduled"
+        return self._json(resp)
 
     def log_message(self, fmt, *args):  # quieter
         log.debug(fmt, *args)

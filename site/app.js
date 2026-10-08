@@ -419,7 +419,7 @@ async function dataPage(idx) {
   const sb = h("tbody", null, null, s); idx.sources.forEach(x => { const row = h("tr", null, null, sb); const c = h("td", "mono small", null, row); link(x.url, x.key, c); h("td", null, x.kind, row); h("td", null, x.title, row); h("td", "small", x.contributes, row); });
   h("h2", null, "Method in one paragraph", app);
   h("p", "secondary small", "Observed arrivals come from stops dropping off GTFS-Realtime trip updates. Each arrival is matched to the schedule (lateness, the trip's own scheduled headway). Per route and hour we compute gap, bunching, expected platform wait and the MTA-style additional platform time. The window is compared with the baseline using bootstrap confidence intervals, Mann-Whitney tests, Cliff's delta and a practical-magnitude threshold; a per-hour scan finds the hours that worsened. Attribution lenses then locate the origin (upstream vs. approach, run-time loss per segment) and the cause (alerts, run-time pattern, merge conflicts, terminal departures, missing trains, MTA incident categories, weather). Severity combines confidence, effect size and rider exposure; rider impact converts extra wait and lateness into passenger-hours using hourly ridership.", app);
-  link("https://github.com/bdrumm/Test-22222222/blob/claude/train-delay-analysis-framework-auxzv1/docs/METHODOLOGY.md", "Full methodology", app);
+  link("https://github.com/bdrumm/whichway/blob/claude/train-delay-analysis-framework-auxzv1/docs/METHODOLOGY.md", "Full methodology", app);
 }
 
 

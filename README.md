@@ -40,7 +40,7 @@ northbound 6 trains in the morning peak on 70% of weekdays.
 ## Review site and live pipeline (GitHub Pages)
 
 A browsable app lives in `site/` and is published to GitHub Pages by the
-`pipeline` workflow: **https://bdrumm.github.io/Test-22222222/**
+`pipeline` workflow: **https://bdrumm.github.io/whichway/**
 
 One-time setup (the workflow token cannot do this): in the repository go to
 **Settings → Pages → Build and deployment** and set *Source* to **Deploy from a
@@ -278,8 +278,11 @@ error by line and forecast horizon (bias and 80% window, from 30 000+ sampled
 ETAs matched to arrivals), the remaining hold given the time a train has
 already been held (from the hold log; the fixed "ten more minutes" scenario
 was +11 min biased on the scored forecasts), and how lateness carries from a
-train's current stop to each stop ahead, per line. `site/rt-client.js` and
-the iOS app apply it to every train after each poll: the calibrated feed ETA
+train's current stop to each stop ahead, per line and per line × time band
+(night, AM peak, midday, PM peak, evening, weekend day / night: the same
+lateness grows differently at 8 am than at 10 pm; lookups fall back line-band
+→ line → band → all). `site/rt-client.js` and the iOS app apply it to every
+train after each poll: the calibrated feed ETA
 is blended by inverse variance with the timetable-carried state estimate,
 corrected for a feed the position proves optimistic and for a train being
 held, kept monotone, and cascaded through the line's 90-second minimum
@@ -325,18 +328,61 @@ and flags legs whose train is holding or stalled right now.
 
 `mta_delay_insights/models/` turns the collected history into a prediction
 model for train times: for a train that just served stop *u*, how much will
-its lateness change by a stop *k* stops ahead? Three gradient-boosted quantile
-regressors (p10 / p50 / p90, scikit-learn HistGradientBoosting) learn from the
-train's state (lateness, momentum, track change), the traffic ahead (gap to and
-lateness of the leader), the segment's last few trains, the destination's
-recent lateness, the feed's own ETA when sampled, and context (time, alerts and
-their cause, planned work, precipitation, heat, events, news, holidays). The
-range is conformally scaled so 80% of held-out targets fall inside it, and the
-model card (`data/models/arrival.card.json`) reports MAE by horizon and route
-against the schedule, persistence and the MTA feed's ETA at the same moments.
+its lateness change by a stop *k* stops ahead (1 to 20, so the same model
+covers the next platform and the end of a ride)? Three gradient-boosted
+quantile regressors (p10 / p50 / p90, scikit-learn HistGradientBoosting) learn
+from:
+
+* the train's state (lateness, momentum, track change), the traffic ahead
+  (gap to and lateness of the leader), the segment's last few trains, the
+  destination's recent lateness and the feed's own ETA when sampled;
+* the line and the network right now: the route's mean lateness over the last
+  30 minutes, the network's over the last 15, the route's throughput;
+* the calendar: hour (cyclic and plain), weekday, service day type (weekday /
+  Saturday / Sunday-or-holiday), time band (night, AM peak, midday, PM peak,
+  evening, weekend day / night), peak, holiday;
+* the day's pattern: *profiles* fitted on the training span only — the typical
+  excess of every segment by day type and hour and the route's typical
+  lateness then, with hierarchical shrinkage (segment → route and horizon →
+  zero) — plus the alert-archive climatology (disruptions per week for the
+  route at that weekday and hour);
+* weather, hour by hour from Open-Meteo: temperature, rain this hour and over
+  the last three, snow, wind, the weather-code group, the day's total and heat,
+  National Weather Service alerts;
+* alerts and events: unplanned alerts on the route (count, cause, minutes
+  since the newest began), alerts active network-wide, planned work, venue /
+  street / news event weights. Where the alert feed was not being observed
+  the alert features are *unknown* (NaN), never "no alert".
+
+All context lookups are vectorised (`models/context.py`), so a day of the
+archive (230 000 arrivals, 1.7 million rows) labels in half a minute. Capacity
+matters on this much data: the trees are 127 leaves × 800 rounds by default
+(learning rate 0.1) and `make model` fits 255 leaves × 1500 rounds, which the
+capacity sweep in the report found 2.7 s better than the original 31 × 400.
+The range is conformally scaled so 80% of held-out targets fall inside it, and the
+model card (`data/models/arrival.card.json`) reports MAE and bias by horizon,
+route, time band, day type, weather and alert state against the schedule,
+persistence, the clients' lateness-carry tables and the MTA feed's ETA at the
+same moments, plus per-feature and per-group permutation importance.
 Live forecasts and the trip planner use the model as soon as it is ready
 (`model_source: "learned"`), blending with the feed by inverse variance when
 the feed feature is unavailable.
+
+`make model` (`python -m pipeline.train_model`) trains it on everything the
+data branch holds — the subwaydata.nyc archive day files plus our own
+collector — with a strictly time-ordered hold-out, runs a feature-group
+ablation (state only → + time → + patterns → + weather → + alerts/events),
+scores the configured commutes' legs (boarding to alighting, the destination
+arrival the app shows) and re-scores the held-out days on the collector's own
+rows, the data the live server actually has. Results and the discussion are
+in [`docs/model_report.md`](docs/model_report.md). The local server loads the
+published `data/arrival.joblib` (and reloads it when the file changes); without
+one it refits from its store every six hours. It also keeps the last month of
+hourly weather in the store so the live features see the current hour, and
+samples goodservice.io's community status (per-route status, long-headway and
+slow sections, reroutes) into `ctx_goodservice` every five minutes so that
+source can be scored against our own engine once it has history; the report
+discusses the other outside sources that were looked at.
 
 The live forecasts are scored too. Every snapshot's predicted arrivals at the
 monitored platforms (the feed's ETA, the model ETA and the forward
@@ -563,4 +609,95 @@ trips and is rotated, with everything deleted, when the switch is turned off. Ob
 `/api/telemetry` of the server behind the data (`mta-insights serve` stores them in the `telemetry` table;
 `/api/health` counts them); the published GitHub Pages site has no API, so there they stay on the phone, where
 Settings can export them as JSON. The app's privacy manifest declares the collection as non-linked usage data.
+
+### Your own pace, places and habits (on the phone)
+
+**Learn my pace** (Settings, off by default). While a route is in progress the phone measures the rider: the
+street pace from location fixes closing on the station, the time from the station radius to standing still on
+the platform (`Core/TripTracker.swift`), the seconds walking between two trains at a change, and the time from
+a pinned place to its station. `Core/PersonalModel.swift` keeps a running estimate of each (recent trips weigh
+more) and the planner uses them instead of averages: the walk line on the headline card, the "to platform"
+allowance, the change time where the rider's is longer than the MTA's minimum, and "usually N min" from a pinned
+place. It lives in Application Support and is never uploaded; with anonymous telemetry also on, each trip's own
+measurements travel with its observation, never the model, the places or any location.
+
+**Which train you boarded.** The route the planner picks is usually the one taken, but not always: the other
+line on the same platform may come first, or an express instead of a local. While a route is in progress the
+phone keeps a log, poll by poll, of every train of the leg's lines (and of the other lines at that platform in
+the same direction) with the feed's time at the boarding stop, so the train that just left can still be matched
+once the feed has moved it on (`Core/LineInference.swift`, unit-tested in the core package). When the sensors
+feel the train pull away, each train's time at the stop is weighed against that moment, with the plan's line as
+the prior (60% on the first leg, 80% on the transfer leg, pulled toward how often the rider has actually taken
+it on this trip before); the number of station stops felt during the ride and the time the rider walked off
+against each train's arrival corroborate it. The trip bar says "On the F" or "On the G, not the F" once the
+belief settles, the Line tab and the Live Activity follow that train, and the route's lines are offered as
+buttons so the rider can say which one they boarded when the phone is unsure or wrong; their word stands for the
+leg. If no departure is felt, a chosen route is taken as planned: two minutes past the boarding time, standing
+on the platform, the rider is on the plan's train, "presumably", until a felt departure or their own tap says
+otherwise. Each leg's conclusion goes into the trip's record (and, if shared, the observation) and into the
+rider's own history of lines taken, which feeds the next trip's prior.
+
+Four more pieces of evidence sharpen that, all in the same estimator. At the
+pull-away, the feed's own vehicle position: a train it had standing at the
+platform in the last poll before the sensors felt the push is favoured over
+one it did not. During the ride, every poll: the phone times each station stop
+it feels (the train coming to rest) and weighs those times against each
+candidate train's actual times at the stops past the platform — the departure
+log follows every candidate after it leaves, keeping the feed's last published
+time at each stop as its arrival — and the number of stops felt against the
+number the train has reached by now, so a local and an express that left
+together are told apart after a stop or two, before anyone gets off. After the
+walk-off, the first location fix: its distance to each candidate's alighting
+stop says which station the rider is at. And at a transfer the next leg's
+lines are followed at the transfer platform from the start of the first leg,
+so the trains waiting there are known before the rider arrives; where the
+change is on the same platform (no walk for the sensors to see), the ride is
+closed when the phone has stood still at a station for a minute and a half
+while the feed has moved the believed train on past the transfer stop.
+
+The first day of real rides showed where this fails in practice, and each
+point has a rule now. A route runs with the screen off: the app keeps running
+in the background for the length of the route (location background mode, the
+blue indicator) so the sensors, the location fixes and the feed polls go on;
+before, everything stopped about four minutes in. A "departure" within fifteen
+seconds of sensing starting is the rider tapping Start and pocketing the phone,
+not a train. Nobody steps off a moving train: an alighting now needs the train
+to have stood still just before the steps (or half a minute of walking,
+whatever came before), so a walk to the far door no longer ends the ride and
+starts a seventeen-second "change". The pace model learns a change only when
+it took at least half a minute. And a rider found within 800 m of the
+destination two minutes after the expected arrival has arrived, even if the
+station radius itself was never crossed.
+
+The first real ride also showed the rider taking a different line than the
+plan (the G and a change at Hoyt-Schermerhorn instead of the F and Jay St),
+so the boarded train now drives the route rather than the other way round.
+The plan's own line is a coin toss against the other trains at the platform
+(a line that is not one of the leg's counts nearly as much), so the felt
+departure, the feed's positions and the ride's stop timing decide; when the
+belief settles on a line off the plan, the Go tab switches to the route
+option that rides that line from here, the Line tab and the Live Activity
+follow it, and a prompt asks the rider to confirm, offering the trains that
+were at the platform by line and time, "not on a train", or dismissal. The
+rider's answer stands for the leg. And location tracking begins when the app
+opens (and stops in the background unless a route is on): a walk closing on
+the origin station at a walking pace starts the route on the way, so the
+sensors see the street, the platform and the pull-away in order instead of
+starting cold at a tap; a push felt while a fresh fix still puts the rider
+hundreds of metres from the station is not a train.
+
+**A route from anywhere.** Start route works far from the station: the trip is *approaching* (fixes every ten
+metres, the walk line follows), *at the station* within 150 m (or at once if started there), *riding* once the
+sensors feel the train pull away (or two minutes past the boarding time with no departure felt, sensors or not), and ends on its own
+when the sensors see the rider walk off at the end of the last leg near the expected arrival, when the phone
+comes within 250 m of the destination station around that time, or ten minutes past it with no sign. End route
+is always there for when that is wrong.
+
+**Places.** Home, Work and the rider's own, each a station by name, optionally pinned to the spot they set out
+from (`Core/Places.swift`). They head the station pickers, and a route started at a pin learns the place's time
+to its station. **Habits** (`Core/Habits.swift`) record each trip the planner is used for, with the hour, the
+day and where the phone was. With no commute window covering the moment and no station picked by hand in the
+last two hours, the trip the rider usually makes at this hour, from here, goes on screen; and an unset Home or
+Work offers the station the history points to (the morning origin and evening destination, or the reverse), with
+its pin. All of it stays on the phone; "Forget what it learned" clears it.
 

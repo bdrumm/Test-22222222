@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch serve test ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
+.PHONY: help local venv gtfs site-synthetic site data-branch serve model test ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -32,6 +32,15 @@ data-branch: ## The collected history (the repository's data branch) as a worktr
 
 site: gtfs data-branch ## Full site build from the collected history: engine tables, models, geometry (takes minutes)
 	$(PYTHON) -m pipeline.build_site --data-dir data-branch --out $(SITE)
+
+model: gtfs data-branch ## Train the arrival model on the archive + collected history with weather, alerts and day patterns (writes data/arrival.joblib)
+	$(PYTHON) -m pipeline.train_model --data-dir data-branch --db data/mta.sqlite --out data --skip-ablation --max-iter 1500 --max-leaf-nodes 255 --min-samples-leaf 200
+
+trips: ## Pull the phone's trips (when it is connected), merge them with the uploads, review them against the trains → data/trips/trip_review.md (IMPORT=file.json takes an export from the app)
+	$(PYTHON) -m pipeline.trip_review --pull $(if $(IMPORT),--import "$(IMPORT)") --db data/mta.sqlite --out data/trips
+
+trips-nightly: ## Install a launchd agent that runs `make trips` every night at 23:40 (remove with scripts/trips_agent.sh remove)
+	scripts/trips_agent.sh install
 
 serve: gtfs ## Serve $(SITE) on http://localhost:$(PORT); live.json and the timetable extract refresh from the feeds
 	$(VENV)/bin/mta-insights serve --site $(SITE) --port $(PORT) --db data/mta.sqlite
