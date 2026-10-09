@@ -93,12 +93,13 @@ def export_client_schedule(static: StaticGTFS, resolved: list[dict], journeys: l
     return out
 
 
-def station_transfers(static: StaticGTFS, lines: dict, default_sec: int = 120) -> dict[str, list[dict]]:
+def station_transfers(static: StaticGTFS, lines: dict, default_sec: int = 120, same_platform_sec: int = 0) -> dict[str, list[dict]]:
     """For every stop of every exported line: the other lines' stops in the same station complex.
 
     A complex is the set of parent stations joined by GTFS transfers.txt (plus the stop's own parent); the
-    minimum transfer time comes from transfers.txt when the pair is listed. The browser uses this to offer
-    destinations reachable with one change and to plan the connection."""
+    minimum transfer time comes from transfers.txt when the pair is listed, except between lines that share the
+    very same stop (the same platform, or across it), which is `same_platform_sec`. The browser and the app use
+    this to offer destinations reachable with one change and to plan the connection."""
     parent = {}
     for key, ln in lines.items():
         for sid in ln["stops"]:
@@ -140,7 +141,14 @@ def station_transfers(static: StaticGTFS, lines: dict, default_sec: int = 120) -
                 if key2 == key or key2.split("_")[0] == route:
                     continue
                 p1, p2 = parent[sid], parent[sid2]
-                sec = min_sec.get((p1, p2), min_sec.get((p1, p1), default_sec) if p1 == p2 else default_sec)
+                if sid == sid2:
+                    # the same platform, or the one across it (the F and the A at Jay St, the 2 and the 3 at Wall St):
+                    # no walk. transfers.txt gives 180 s for most such pairs, a station-wide allowance rather than a
+                    # walk; the rider's own changes there measured 11 to 17 s (Oct 6 and 8, 2026), and the 3 minutes
+                    # put every route through Jay St behind the one via W 4 St and its forecasts 3 minutes late.
+                    sec = same_platform_sec
+                else:
+                    sec = min_sec.get((p1, p2), min_sec.get((p1, p1), default_sec) if p1 == p2 else default_sec)
                 opts.append({"line": key2, "stop": sid2, "min_sec": int(sec)})
             if opts:
                 out[sid] = sorted(opts, key=lambda o: o["line"])

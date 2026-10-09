@@ -578,24 +578,28 @@ xcrun devicectl device process launch --device <UDID> com.<you>.whichway
 build on a phone loads from the published site (a localhost data address only means something on the
 Simulator); the Release build always does.
 
-**TestFlight.** Needs a paid Apple Developer Program membership and, once, an app record in App Store Connect
-(*My Apps > +*, with the bundle id from `ios/WhichWay/Config/Local.xcconfig`). Then:
+**TestFlight.** Needs a paid Apple Developer Program membership, the Apple ID of that team signed in to Xcode
+(*Xcode > Settings > Accounts*) or an App Store Connect API key, and, once, an app record in App Store Connect
+(*My Apps > + > New App*, with the bundle id from `ios/WhichWay/Config/Local.xcconfig`). Then:
 
 ```bash
-make ios-organizer         # archive (Release) and open it in Xcode's Organizer: Distribute App > TestFlight & App Store
-make ios-testflight        # archive and upload from the command line (needs an App Store Connect API key)
-make ios-ipa               # archive and export ios/WhichWay/build/WhichWay.ipa to upload with Transporter (same key)
+make ios-testflight        # archive (Release) and upload to App Store Connect from the command line
+make ios-organizer         # archive and open it in Xcode's Organizer: Distribute App > TestFlight & App Store
+make ios-ipa               # archive and export ios/WhichWay/build/WhichWay.ipa to upload with Transporter
 ```
 
 All three run `scripts/testflight.sh`. Signing is automatic with the team in `Local.xcconfig`; the Release
 configuration (`Config/Release.xcconfig`) takes the team and bundle id from there and always uses the published
-site as the data source. The Organizer route signs with the Apple ID in Xcode > Settings > Accounts and needs
-nothing else. The command-line routes need an App Store Connect API key, because App Store signing from a script
-cannot use that account: *Users and Access > Integrations > App Store Connect API > Team Keys*, role App Manager,
-download the `.p8` once, and set `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_PATH`. Each run stamps the build number from the clock (`BUILD=...` overrides it), the app
-declares standard HTTPS only so no export-compliance answer is asked, and `WhichWay/PrivacyInfo.xcprivacy`
-declares the required-reason APIs it uses (UserDefaults, file timestamps). In App Store Connect > TestFlight,
-add yourself under *Internal Testing* or testers to a group; they install through the TestFlight app.
+site as the data source, with no trip server. Talking to Apple (the distribution certificate, the App Store
+profiles, the upload) uses the Apple ID signed in to Xcode; without one the script stops before archiving
+(the export would fail with "No Accounts"). An App Store Connect API key works instead, for a machine with no
+Xcode account: *Users and Access > Integrations > App Store Connect API > Team Keys*, role App Manager,
+download the `.p8` once, and set `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_PATH`. Each run stamps the build
+number from the clock (`BUILD=...` overrides it) and writes the full xcodebuild output to
+`ios/WhichWay/build/archive.log` and `build/export.log`; the app declares standard HTTPS only so no
+export-compliance answer is asked, and `WhichWay/PrivacyInfo.xcprivacy` declares the required-reason APIs it
+uses (UserDefaults, file timestamps). Testers: [docs/testflight.md](docs/testflight.md) has the App Store
+Connect steps (test information, internal and external groups, the public link) and paste-ready texts.
 
 ### Opt-in trip motion (telemetry)
 
@@ -711,6 +715,29 @@ believed train standing at a station, ends the ride even when the detector
 never saw the train come to rest (people boarding keep a standing train
 shaking; a hand carrying the phone to the doors keeps it moving); the
 detector's own test for rest before the steps is three seconds now, not five.
+
+**What the real rides said about the forecasts** (Oct 8, thirteen trips).
+On the one clean trip that followed its plan end to end the door-to-door
+forecast ran 3:50 late; the trip review's own table shows why: the planner
+booked 3:00 for the change at Jay St-MetroTech and the rider made it in 0:17
+(and 0:56 at W 4 St against 3:00). The MTA's transfers.txt gives 180 s even
+between lines that share the very same stop (the F and the A at Jay St, the
+2 and the 3 at Wall St, the 4 and the 5 at Fulton St: 128 shared stops in
+all), a station-wide allowance rather than a walk. The schedule export now
+books no walk between lines at the same stop (`station_transfers`, the same
+platform or the one across it) and keeps the timetable's figure where the
+platforms differ (W 4 St upper to lower, 180 s). On the phone, the change
+times the rider's own trips measure now replace the timetable's either way
+once a station has been seen twice (floor 15 s), and changes of eight seconds
+or more are learned, since a feed-vouched walk-off makes a short one
+trustworthy; before, a measured change could only lengthen the allowance,
+and anything under half a minute was discarded as a false alighting. The
+effect for this rider: routes through Jay St stop ranking behind the route
+via W 4 St, and their forecasts lose three minutes of slack. The other
+usage figures: after the platform-timing fix the boarding forecast landed
+within ±45 s of the felt pull-away on both Oct 8 rides (it had been 95 s
+late on the E the day before), and the arrival model itself, scored on the
+rider's own legs, is reported in `docs/model_report.md`.
 
 The line inference is harder to fool from the other platform. A train at its
 first stop (the L laying over at 8 Av beside the A/C/E at 14 St) has no

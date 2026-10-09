@@ -45,6 +45,15 @@ struct PersonalModel: Codable, Equatable {
         return transferDefault.n >= 3 ? transferDefault.mean : nil
     }
 
+    /// The walk the planner should allow for a change at a station: the rider's own, once known there, in place of
+    /// the timetable's minimum, whichever way it differs (the MTA's figure is 3 minutes even across the platform at
+    /// Jay St, where this rider takes a quarter of a minute), never under `floorSec`.
+    static let transferFloorSec = 15.0
+    func plannedTransferSec(station: String, scheduled: Int) -> Int {
+        guard let s = transfer[station], s.n >= 2 else { return scheduled }
+        return Int(max(PersonalModel.transferFloorSec, s.mean).rounded())
+    }
+
     func placeToStationSec(place: String, station: String) -> Double? {
         guard let s = placeToStation["\(place)|\(station)"], s.n > 0 else { return nil }
         return s.mean
@@ -75,7 +84,9 @@ struct PersonalModel: Codable, Equatable {
             accessDefault.add(a)
             any = true
         }
-        if let x = t.transferStation, let s = t.transferWalkSec, s >= 30, s <= 900 {    // under half a minute is a false alighting, not a change
+        // a change across the platform is a quarter of a minute of walking (Jay St, 17 s on Oct 6; 11 to 12 s on Oct
+        // 8); anything shorter is a false alighting, not a change
+        if let x = t.transferStation, let s = t.transferWalkSec, s >= 8, s <= 900 {
             transfer[x, default: PaceStat()].add(s)
             transferDefault.add(s)
             any = true

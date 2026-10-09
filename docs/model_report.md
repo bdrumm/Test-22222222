@@ -1,8 +1,84 @@
 # Arrival model report
 
-_Generated 2026-10-05 02:47 EDT from `pipeline/train_model.py`; tables are produced by `pipeline/model_report.py`._
+_Generated 2026-10-08 22:56 EDT from `pipeline/train_model.py`; tables are produced by `pipeline/model_report.py`._
 
-## Summary
+## October 8 refresh: the same model on three more weeks of the Action's data
+
+_Added 2026-10-08. The tables below this note are from this run; the October 5
+run's discussion follows it, for the record._
+
+**What this run is.** The hourly GitHub Action collects the feeds for 50
+minutes of every hour it runs and backfills the subwaydata.nyc archive into
+the data branch, pruned to a rolling 21 days (`network_retention_days` in
+`pipeline/targets.json`). So the training set is now the archive for
+**Sep 18 – Oct 4** (17 weekdays and weekends, 8.85 M rows built, 6 M used for
+the fit) instead of Sep 13 – 27, and the hold-out is **Oct 5 – 7**, three full
+days that neither this model nor the October 5 one had seen (Oct 6 had 404'd
+for the Action's backfill; it was fetched by hand first). Same features, same
+capacity (255 leaves, 1 500 rounds), no ablation this time.
+
+**Did more data help?** A little, and in the right places. Scored on the
+same 1.83 M held-out rows (`scripts/model_compare.py`, which runs an older
+model over the rows a later run cached):
+
+| model | trained on | MAE s | bias s | schedule | carry table | 80% coverage |
+|---|---|---|---|---|---|---|
+| October 5 | Sep 13 – 27 | 71.1 | −15.5 | 84.3 | 87.2 | 0.81 |
+| **October 8** | Sep 18 – Oct 4 | **70.1** | −13.6 | 84.3 | 87.2 | 0.80 |
+
+By horizon the two are identical to the second at k ≤ 6; the gains are at
+k = 7 (81 → 75 s), k = 11 (108 → 103) and k = 16/20 (134/153 → 132/152),
+which are the horizons of the rider's own legs (Hoyt – 14 St is 7 stops,
+W 4 St – 7 Av is 11), added to the k set by `legs.json`. The one-second
+headline gain is small against a ~14 s negative bias on both models: on
+these three days trains ran a little later than either model expects, which
+the day-pattern features are meant to absorb and only partly do with three
+weeks of history. On the collector's own rows for the same days (4.7 M, the
+data the live server actually has) the model is at 77.1 s against 89.5 s for
+the schedule and 90.1 s for the feed's own ETA, which it improves to 59.9 s
+on the rows where the feed had one.
+
+**The rider's legs.** The commute-leg table now comes from the rider's real
+legs (`data/trips/legs.json` from the trip review) besides the configured
+journeys. On Oct 5 – 7 the model beats the schedule on every leg but the
+4-stop F ride 4 Av-9 St → Jay St, where the schedule is already within
+43 s; the largest gains are on the longer legs (Hoyt – 14 St 102 vs 116 s,
+W 4 St – 7 Av 100 vs 112, 4 Av – W 4 St 95 vs 109). The per-leg biases are the
+thing to watch: −33 s on Hoyt – 14 St and −32 s on Jay St – 4 Av-9 St
+(the model runs early), +36 s on W 4 St – 7 Av and +22 s on 4 Av – W 4 St
+(late). With 115 – 400 rows per leg over three days these are suggestive,
+not settled; a steady sign over a few more refreshes would justify a
+per-leg correction in the app's carry table.
+
+**What the real rides changed, and what they cannot.** Thirteen recorded
+trips cannot retrain a gradient-boosted model of the whole network, and this
+run does not try. What they did show, through the trip review's own
+tables, is where the end-to-end forecast loses time *around* the model: the
+planner booked 3:00 for the change at Jay St-MetroTech and the rider made
+it in 0:17 (0:56 at W 4 St against 3:00), because the MTA's transfers.txt
+gives 180 s even between lines that share the same stop. The schedule
+export now books no walk between lines at the same stop, and the phone's
+learned change times replace the timetable's either way; see the README.
+After the platform-timing fix of Oct 7 the boarding forecast landed within
+±45 s of the felt pull-away on both Oct 8 rides. The model's own error on the
+rider's legs is the table above; the rest of the door-to-door error was
+the change.
+
+**How to repeat it.** `make model` trains straight into `data/`; for a
+comparison, train to a side folder with a row cache and a fixed hold-out,
+then score the previous model on the same rows:
+
+    .venv/bin/python -m pipeline.train_model --data-dir data-branch --db data/mta.sqlite \
+        --out data/models_oct8 --cache data/models_oct8/rows.pkl --end 2026-10-07 --test-from 2026-10-05 \
+        --skip-ablation --max-iter 1500 --max-leaf-nodes 255 --min-samples-leaf 200
+    .venv/bin/python scripts/model_compare.py --rows data/models_oct8/rows.pkl --test-from 2026-10-05 \
+        --model "Oct 5=data/models/arrival_oct5.joblib" --model "Oct 8=data/models_oct8/arrival.joblib"
+
+The rows take about ten minutes to build and the fit about 35 on this Mac.
+Give `--end` explicitly: the default takes today's partial day.
+
+## October 5 run
+
 
 This run rebuilt the arrival model's training set and feature space around the
 question the app asks — *when will this train reach my platform, and when will
@@ -202,260 +278,187 @@ the question can be answered with data later.
 
 ## Data
 
-Days 2026-09-14 to 2026-10-04; held out from **2026-09-28**. 9,369,568 rows (6,409,876 train / 2,959,692 test) with 30% of each day's trips kept (the stream features — leaders, segment and line state — are computed from every arrival first). Horizons k = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20].
+Days 2026-09-18 to 2026-10-07; held out from **2026-10-05**. 10,678,600 rows (8,849,374 train / 1,829,226 test) with 30% of each day's trips kept (the stream features — leaders, segment and line state — are computed from every arrival first). Horizons k = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 16, 20].
 
-Context: 985 hourly weather rows, 1,425 live alerts (observed Sep 24 17:16 – Oct 05 02:16), 5,350 events, 53 NWS alerts, 420,532 feed ETA samples, climatology from 19,657 archived disruptions.
+Context: 1,079 hourly weather rows, 1,980 live alerts (observed Sep 24 17:16 – Oct 08 22:10), 6,350 events, 53 NWS alerts, 1,071,850 feed ETA samples, climatology from 19,657 archived disruptions.
 
 | day | source | arrivals | rows (all k) | rows kept |
 |---|---|---|---|---|
-| 2026-09-14 | subwaydata | 232,904 | 1,753,906 | 528,709 |
-| 2026-09-15 | subwaydata | 232,971 | 1,751,642 | 509,217 |
-| 2026-09-16 | subwaydata | 228,487 | 1,707,144 | 510,523 |
-| 2026-09-17 | subwaydata | 227,343 | 1,716,076 | 499,908 |
-| 2026-09-18 | subwaydata | 234,641 | 1,772,100 | 538,495 |
-| 2026-09-19 | subwaydata | 150,474 | 989,517 | 305,559 |
-| 2026-09-20 | subwaydata | 141,576 | 930,907 | 271,655 |
-| 2026-09-21 | subwaydata | 233,470 | 1,758,530 | 534,810 |
-| 2026-09-22 | subwaydata | 237,864 | 1,783,786 | 539,350 |
-| 2026-09-23 | subwaydata | 234,677 | 1,745,396 | 516,570 |
-| 2026-09-24 | subwaydata | 232,438 | 1,728,221 | 511,675 |
-| 2026-09-25 | subwaydata | 236,184 | 1,772,022 | 531,284 |
-| 2026-09-26 | subwaydata | 158,769 | 1,062,670 | 325,662 |
-| 2026-09-27 | subwaydata | 148,167 | 985,961 | 286,459 |
-| 2026-09-28 | subwaydata | 235,690 | 1,766,853 | 514,267 |
-| 2026-09-29 | subwaydata | 237,187 | 1,771,277 | 539,327 |
-| 2026-09-30 | subwaydata | 236,272 | 1,763,790 | 522,123 |
-| 2026-10-01 | subwaydata | 232,310 | 1,726,709 | 502,526 |
-| 2026-10-02 | subwaydata | 232,938 | 1,739,679 | 516,977 |
-| 2026-10-03 | subwaydata | 156,339 | 1,055,209 | 303,449 |
-| 2026-10-04 | flush | 37,018 | 197,991 | 61,023 |
-
-## Feature-group ablation (p50 only, held-out rows)
-
-Each variant adds a feature group to the previous one; MAE is on the excess run time in seconds, so the schedule baseline is the error of assuming the train keeps its current lateness.
-
-| variant | features | MAE s | bias s | schedule | carry table | vs schedule | vs carry | fit s |
-|---|---|---|---|---|---|---|---|---|
-| legacy | 27 | 71.83 | -19.0 | 85.52 | 86.02 | +16% | +16% | 42 |
-| state | 14 | 71.96 | -17.9 | 85.52 | 86.02 | +16% | +16% | 38 |
-| state+time | 22 | 71.70 | -18.8 | 85.52 | 86.02 | +16% | +17% | 34 |
-| state+time+patterns | 28 | 71.18 | -18.2 | 85.52 | 86.02 | +17% | +17% | 44 |
-| state+time+patterns+weather | 36 | 71.26 | -18.2 | 85.52 | 86.02 | +17% | +17% | 46 |
-| all | 44 | 71.38 | -18.9 | 85.52 | 86.02 | +17% | +17% | 47 |
-
-By horizon (MAE s):
-
-| k | rows | schedule | carry | legacy | state | state+time | state+time+patterns | state+time+patterns+weather | all |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 352,498 | 34.1 | 34.8 | 24.5 | 24.3 | 24.5 | 24.2 | 24.2 | 24.4 |
-| 2 | 340,853 | 47.6 | 48.3 | 36.7 | 36.5 | 36.6 | 36.4 | 36.4 | 36.5 |
-| 3 | 328,512 | 59.2 | 60.0 | 47.2 | 47.0 | 47.0 | 46.7 | 46.8 | 46.9 |
-| 4 | 316,062 | 69.5 | 70.4 | 56.6 | 56.4 | 56.4 | 56.0 | 56.0 | 56.2 |
-| 5 | 303,736 | 79.1 | 79.9 | 65.4 | 65.4 | 65.3 | 64.8 | 64.9 | 65.0 |
-| 6 | 291,520 | 88.0 | 88.9 | 73.9 | 73.8 | 73.7 | 73.3 | 73.4 | 73.4 |
-| 8 | 266,976 | 103.6 | 104.3 | 88.6 | 88.8 | 88.4 | 87.7 | 87.9 | 88.0 |
-| 10 | 242,598 | 117.4 | 117.5 | 101.7 | 102.1 | 101.6 | 100.9 | 101.0 | 101.2 |
-| 12 | 218,413 | 130.7 | 130.8 | 114.3 | 114.7 | 114.1 | 113.3 | 113.3 | 113.5 |
-| 16 | 171,649 | 155.0 | 154.6 | 136.8 | 137.9 | 136.8 | 135.6 | 135.8 | 135.9 |
-| 20 | 126,872 | 177.4 | 175.3 | 156.6 | 158.1 | 156.7 | 155.4 | 155.7 | 155.8 |
-
-By time band (MAE s):
-
-| band | rows | schedule | carry | legacy | state | state+time | state+time+patterns | state+time+patterns+weather | all |
-|---|---|---|---|---|---|---|---|---|---|
-| night | 140,830 | 101.5 | 103.5 | 84.0 | 85.2 | 83.4 | 83.2 | 83.4 | 83.6 |
-| am_peak | 608,990 | 79.0 | 81.0 | 69.4 | 69.3 | 69.3 | 68.7 | 68.7 | 68.8 |
-| midday | 827,242 | 86.6 | 87.4 | 73.1 | 73.0 | 73.0 | 72.5 | 72.6 | 72.7 |
-| pm_peak | 625,570 | 76.8 | 77.4 | 66.7 | 66.8 | 66.7 | 65.9 | 65.9 | 66.0 |
-| evening | 392,588 | 88.7 | 89.6 | 76.3 | 76.4 | 76.2 | 75.8 | 75.8 | 75.9 |
-| weekend_day | 287,097 | 99.9 | 96.6 | 71.6 | 72.2 | 71.4 | 71.3 | 71.5 | 71.6 |
-| weekend_night | 77,372 | 96.6 | 90.8 | 74.8 | 75.5 | 74.2 | 74.2 | 74.7 | 74.9 |
-
-By day type (MAE s):
-
-| daytype | rows | schedule | carry | legacy | state | state+time | state+time+patterns | state+time+patterns+weather | all |
-|---|---|---|---|---|---|---|---|---|---|
-| weekday | 2,595,220 | 83.6 | 84.7 | 71.8 | 71.8 | 71.6 | 71.1 | 71.1 | 71.2 |
-| saturday | 303,449 | 100.7 | 96.7 | 71.6 | 72.2 | 71.4 | 71.4 | 71.7 | 71.9 |
-| sunday_holiday | 61,020 | 92.0 | 88.9 | 75.3 | 76.2 | 75.1 | 74.6 | 74.6 | 74.7 |
-
-Wet vs dry (rain in the last three hours) (MAE s):
-
-| weather | rows | schedule | carry | legacy | state | state+time | state+time+patterns | state+time+patterns+weather | all |
-|---|---|---|---|---|---|---|---|---|---|
-| dry | 2,780,080 | 85.4 | 85.8 | 71.5 | 71.7 | 71.4 | 70.9 | 71.0 | 71.1 |
-| wet_last_3h | 179,609 | 87.8 | 89.1 | 76.3 | 76.5 | 75.9 | 75.4 | 75.5 | 75.5 |
-
-Unplanned alert on the route (MAE s):
-
-| alert | rows | schedule | carry | legacy | state | state+time | state+time+patterns | state+time+patterns+weather | all |
-|---|---|---|---|---|---|---|---|---|---|
-| none | 2,692,886 | 82.6 | 83.1 | 69.2 | 69.4 | 69.0 | 68.5 | 68.6 | 68.7 |
-| active | 266,803 | 114.8 | 115.2 | 98.8 | 98.0 | 98.5 | 97.8 | 98.0 | 98.2 |
+| 2026-09-18 | subwaydata | 234,641 | 2,078,441 | 631,501 |
+| 2026-09-19 | subwaydata | 150,474 | 1,156,854 | 357,260 |
+| 2026-09-20 | subwaydata | 141,576 | 1,088,505 | 317,631 |
+| 2026-09-21 | subwaydata | 233,470 | 2,062,497 | 627,233 |
+| 2026-09-22 | subwaydata | 237,864 | 2,092,017 | 632,595 |
+| 2026-09-23 | subwaydata | 234,677 | 2,046,810 | 605,678 |
+| 2026-09-24 | subwaydata | 232,438 | 2,026,687 | 600,010 |
+| 2026-09-25 | subwaydata | 236,184 | 2,078,319 | 623,184 |
+| 2026-09-26 | subwaydata | 158,769 | 1,244,130 | 381,375 |
+| 2026-09-27 | subwaydata | 148,167 | 1,153,995 | 335,246 |
+| 2026-09-28 | subwaydata | 235,690 | 2,072,212 | 603,040 |
+| 2026-09-29 | subwaydata | 237,187 | 2,077,485 | 632,589 |
+| 2026-09-30 | subwaydata | 236,272 | 2,068,618 | 612,361 |
+| 2026-10-01 | subwaydata | 232,310 | 2,025,311 | 589,409 |
+| 2026-10-02 | subwaydata | 232,938 | 2,040,561 | 606,348 |
+| 2026-10-03 | subwaydata | 156,339 | 1,246,839 | 359,318 |
+| 2026-10-04 | subwaydata | 144,502 | 1,144,320 | 334,596 |
+| 2026-10-05 | subwaydata | 234,608 | 2,061,698 | 621,642 |
+| 2026-10-06 | subwaydata | 229,799 | 2,005,833 | 592,593 |
+| 2026-10-07 | subwaydata | 226,971 | 1,994,945 | 614,991 |
 
 ## Final model (p10 / p50 / p90)
 
-6,000,000 training rows, 2,959,692 held-out rows, 50 features (dropped as constant: track_changed, holiday, heat, snow_cm, venue_event_w); iterations {'0.1': 1500, '0.5': 1500, '0.9': 1500}; fit 1700 s; profiles from 6,000,000 rows over 609,502 segment-hours; range scale 1.262.
+6,000,000 training rows, 1,829,226 held-out rows, 50 features (dropped as constant: track_changed, holiday, heat, snow_cm, venue_event_w); iterations {'0.1': 1500, '0.5': 1500, '0.9': 1500}; fit 2027 s; profiles from 6,000,000 rows over 712,115 segment-hours; range scale 1.202.
 
 |  | MAE s | note |
 |---|---|---|
-| model p50 | 67.56 | bias -16.8 s; 80% window covers 0.800 of targets, median width 167 s |
-| schedule | 85.53 | the train keeps its current lateness |
-| persistence | 85.89 | the segment's last three trains |
-| carry table | 85.97 | the clients' per-route lateness carry |
-| feed | 95.73 | MTA countdown ETA, on the 51,193 rows with a sample (model there: 54.58) |
+| model p50 | 70.09 | bias -13.6 s; 80% window covers 0.800 of targets, median width 179 s |
+| schedule | 84.29 | the train keeps its current lateness |
+| persistence | 91.43 | the segment's last three trains |
+| carry table | 87.15 | the clients' per-route lateness carry |
+| feed | 96.59 | MTA countdown ETA, on the 144,510 rows with a sample (model there: 55.37) |
 
 ### By horizon
 
 |  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage |
 |---|---|---|---|---|---|---|---|---|
-| 1 | 352,495 | 21.9 | 34.1 | 34.7 | 29.6 | +36% | +37% | 0.85 |
-| 2 | 340,854 | 33.3 | 47.6 | 48.3 | 43.3 | +30% | +31% | 0.83 |
-| 3 | 328,512 | 43.1 | 59.2 | 60.0 | 55.7 | +27% | +28% | 0.82 |
-| 4 | 316,062 | 52.0 | 69.5 | 70.4 | 67.2 | +25% | +26% | 0.80 |
-| 5 | 303,736 | 60.6 | 79.1 | 80.0 | 78.1 | +23% | +24% | 0.79 |
-| 6 | 291,521 | 68.7 | 88.0 | 88.8 | 88.3 | +22% | +23% | 0.79 |
-| 8 | 266,976 | 83.5 | 103.6 | 104.1 | 106.0 | +19% | +20% | 0.78 |
-| 10 | 242,598 | 96.8 | 117.4 | 117.5 | 121.9 | +17% | +18% | 0.77 |
-| 12 | 218,413 | 109.8 | 130.7 | 130.6 | 136.8 | +16% | +16% | 0.76 |
-| 16 | 171,649 | 132.9 | 155.0 | 154.5 | 164.3 | +14% | +14% | 0.77 |
-| 20 | 126,876 | 152.0 | 177.4 | 175.3 | 189.6 | +14% | +13% | 0.77 |
+| 1 | 184,479 | 21.3 | 32.2 | 33.2 | 29.1 | +34% | +36% | 0.84 |
+| 2 | 178,650 | 32.4 | 44.6 | 45.9 | 42.9 | +27% | +29% | 0.84 |
+| 3 | 172,295 | 42.0 | 55.4 | 57.1 | 55.5 | +24% | +26% | 0.83 |
+| 4 | 165,899 | 51.0 | 65.1 | 67.3 | 67.2 | +22% | +24% | 0.82 |
+| 5 | 159,652 | 59.4 | 74.3 | 76.9 | 78.4 | +20% | +23% | 0.81 |
+| 6 | 153,389 | 67.5 | 83.1 | 86.0 | 89.0 | +19% | +21% | 0.80 |
+| 7 | 147,133 | 75.1 | 90.9 | 94.1 | 98.8 | +17% | +20% | 0.79 |
+| 8 | 140,879 | 82.7 | 98.2 | 101.7 | 108.0 | +16% | +19% | 0.78 |
+| 10 | 128,453 | 96.7 | 111.5 | 115.4 | 125.1 | +13% | +16% | 0.77 |
+| 11 | 122,278 | 103.2 | 118.2 | 122.3 | 133.5 | +13% | +16% | 0.76 |
+| 12 | 116,093 | 109.5 | 124.3 | 128.8 | 141.0 | +12% | +15% | 0.76 |
+| 16 | 91,804 | 132.0 | 146.8 | 152.2 | 168.9 | +10% | +13% | 0.77 |
+| 20 | 68,222 | 152.0 | 167.7 | 172.5 | 194.8 | +9% | +12% | 0.76 |
 
 ### By time band
 
 |  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage |
 |---|---|---|---|---|---|---|---|---|
-| night | 140,830 | 76.2 | 101.5 | 103.4 | 104.4 | +25% | +26% | 0.78 |
-| am_peak | 608,990 | 65.4 | 79.0 | 80.9 | 83.5 | +17% | +19% | 0.80 |
-| midday | 827,242 | 69.6 | 86.6 | 87.4 | 86.1 | +20% | +20% | 0.80 |
-| pm_peak | 625,570 | 62.7 | 76.8 | 77.4 | 81.5 | +18% | +19% | 0.81 |
-| evening | 392,588 | 72.0 | 88.7 | 89.5 | 91.1 | +19% | +20% | 0.79 |
-| weekend_day | 287,096 | 66.0 | 99.9 | 96.6 | 82.5 | +34% | +32% | 0.81 |
-| weekend_night | 77,376 | 69.2 | 96.7 | 90.8 | 91.3 | +28% | +24% | 0.78 |
+| night | 104,511 | 77.0 | 107.5 | 111.8 | 109.8 | +28% | +31% | 0.79 |
+| am_peak | 407,324 | 69.6 | 81.6 | 83.9 | 88.8 | +15% | +17% | 0.82 |
+| midday | 575,435 | 77.0 | 92.3 | 94.5 | 100.1 | +17% | +19% | 0.78 |
+| pm_peak | 453,657 | 64.7 | 75.3 | 78.7 | 86.0 | +14% | +18% | 0.80 |
+| evening | 288,299 | 63.1 | 77.7 | 81.4 | 79.8 | +19% | +23% | 0.81 |
 
 ### By day type
 
 |  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage |
 |---|---|---|---|---|---|---|---|---|
-| weekday | 2,595,220 | 67.7 | 83.6 | 84.7 | 86.1 | +19% | +20% | 0.80 |
-| saturday | 303,449 | 66.1 | 100.7 | 96.7 | 83.4 | +34% | +32% | 0.81 |
-| sunday_holiday | 61,023 | 69.2 | 92.1 | 88.9 | 88.9 | +25% | +22% | 0.76 |
+| weekday | 1,829,226 | 70.1 | 84.3 | 87.2 | 91.4 | +17% | +20% | 0.80 |
 
 ### By weather
 
 |  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage |
 |---|---|---|---|---|---|---|---|---|
-| dry | 2,780,084 | 67.3 | 85.4 | 85.8 | 85.5 | +21% | +22% | 0.80 |
-| wet_last_3h | 179,608 | 71.5 | 87.8 | 89.0 | 92.7 | +19% | +20% | 0.78 |
+| dry | 1,829,226 | 70.1 | 84.3 | 87.2 | 91.4 | +17% | +20% | 0.80 |
 
 ### By alert state
 
 |  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage |
 |---|---|---|---|---|---|---|---|---|
-| none | 2,692,891 | 65.2 | 82.6 | 83.1 | 82.4 | +21% | +22% | 0.80 |
-| active | 266,801 | 91.9 | 114.8 | 115.0 | 120.7 | +20% | +20% | 0.80 |
-
-### By data source
-
-|  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage |
-|---|---|---|---|---|---|---|---|---|
-| flush | 2,654 | 30.5 | 14.8 | 27.6 | 24.5 | -106% | -10% | 0.89 |
-| rt_dropoff | 58,369 | 70.9 | 95.6 | 91.7 | 91.9 | +26% | +23% | 0.75 |
-| subwaydata | 2,898,669 | 67.5 | 85.4 | 85.9 | 85.8 | +21% | +21% | 0.80 |
+| none | 1,409,672 | 62.9 | 76.6 | 79.3 | 80.2 | +18% | +21% | 0.80 |
+| active | 419,554 | 94.1 | 110.0 | 113.5 | 129.0 | +14% | +17% | 0.79 |
 
 ### By route (held-out rows, largest first)
 
 |  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage |
 |---|---|---|---|---|---|---|---|---|
-| 1 | 242,423 | 35.6 | 46.5 | 45.7 | 42.1 | +23% | +22% | 0.81 |
-| F | 234,079 | 87.6 | 111.2 | 112.9 | 107.3 | +21% | +22% | 0.79 |
-| 2 | 233,443 | 65.7 | 78.6 | 80.0 | 81.7 | +16% | +18% | 0.79 |
-| 6 | 184,558 | 48.4 | 72.5 | 66.1 | 69.8 | +33% | +27% | 0.81 |
-| R | 172,703 | 67.6 | 81.6 | 82.8 | 85.1 | +17% | +18% | 0.81 |
-| D | 163,963 | 73.4 | 87.3 | 89.3 | 105.4 | +16% | +18% | 0.83 |
-| A | 147,440 | 109.2 | 125.6 | 124.8 | 137.8 | +13% | +13% | 0.79 |
-| L | 145,810 | 46.0 | 60.9 | 60.5 | 61.1 | +24% | +24% | 0.83 |
-| 4 | 145,171 | 71.0 | 95.7 | 107.3 | 87.8 | +26% | +34% | 0.81 |
-| 3 | 129,605 | 59.7 | 73.0 | 73.8 | 70.6 | +18% | +19% | 0.79 |
-| Q | 121,960 | 69.4 | 85.0 | 85.5 | 91.1 | +18% | +19% | 0.81 |
-| 7 | 117,026 | 57.5 | 83.8 | 81.6 | 70.5 | +31% | +29% | 0.79 |
-| N | 113,382 | 85.2 | 101.0 | 102.6 | 104.0 | +16% | +17% | 0.79 |
-| 5 | 110,828 | 86.8 | 100.3 | 102.7 | 107.9 | +13% | +15% | 0.80 |
-| C | 110,446 | 69.5 | 85.3 | 85.9 | 87.2 | +18% | +19% | 0.78 |
-| J | 108,539 | 65.3 | 91.2 | 88.4 | 66.2 | +28% | +26% | 0.75 |
+| 1 | 142,862 | 32.8 | 38.3 | 40.9 | 42.5 | +14% | +20% | 0.82 |
+| F | 138,182 | 97.0 | 116.5 | 118.6 | 126.9 | +17% | +18% | 0.80 |
+| 2 | 134,929 | 62.6 | 68.8 | 74.2 | 78.1 | +9% | +16% | 0.79 |
+| 6 | 118,700 | 47.9 | 64.5 | 62.6 | 66.8 | +26% | +23% | 0.80 |
+| R | 110,302 | 72.3 | 82.0 | 84.4 | 88.3 | +12% | +14% | 0.78 |
+| D | 107,612 | 83.6 | 93.7 | 98.4 | 119.5 | +11% | +15% | 0.81 |
+| A | 103,126 | 109.3 | 126.6 | 132.1 | 137.5 | +14% | +17% | 0.79 |
+| L | 90,994 | 39.6 | 55.2 | 54.8 | 52.0 | +28% | +28% | 0.83 |
+| C | 83,848 | 62.6 | 70.5 | 76.7 | 81.9 | +11% | +18% | 0.80 |
+| 4 | 80,281 | 63.1 | 66.4 | 93.5 | 77.2 | +5% | +33% | 0.81 |
+| 5 | 76,862 | 89.0 | 90.3 | 95.1 | 103.6 | +1% | +6% | 0.78 |
+| 3 | 74,642 | 57.6 | 63.5 | 66.2 | 73.0 | +9% | +13% | 0.82 |
+| M | 71,033 | 75.2 | 114.5 | 113.6 | 121.6 | +34% | +34% | 0.82 |
+| 7 | 67,427 | 43.9 | 66.9 | 67.2 | 57.9 | +34% | +35% | 0.83 |
+| Q | 63,720 | 86.3 | 102.0 | 100.0 | 105.8 | +15% | +14% | 0.80 |
+| N | 62,803 | 99.5 | 120.3 | 118.7 | 131.2 | +17% | +16% | 0.78 |
 
 ### Does a wide range mean a genuinely uncertain ride?
 
 | width bucket | rows | median width s | MAE s |
 |---|---|---|---|
-| 0 | 739,923 | 58 | 19.3 |
-| 1 | 739,923 | 125 | 42.5 |
-| 2 | 739,923 | 218 | 75.0 |
-| 3 | 739,923 | 399 | 133.4 |
+| 0 | 457,307 | 60 | 20.3 |
+| 1 | 457,306 | 136 | 45.3 |
+| 2 | 457,306 | 231 | 77.0 |
+| 3 | 457,307 | 405 | 137.7 |
 
 ### Permutation importance by feature group (MAE increase, s)
 
 | group | features | MAE increase s |
 |---|---|---|
-| state | 20 | 29.50 |
-| patterns | 6 | 3.85 |
-| time | 8 | 1.93 |
-| weather | 8 | 0.19 |
-| events | 8 | 0.17 |
+| state | 20 | 29.01 |
+| patterns | 6 | 3.06 |
+| time | 8 | 1.17 |
+| events | 8 | 0.36 |
+| weather | 8 | -0.21 |
 
 ### Permutation importance, top features (MAE increase, s)
 
 | feature | MAE increase s |
 |---|---|
-| sched_run_sec | 151.06 |
-| k | 143.62 |
-| route_code | 12.41 |
-| lateness_u | 4.05 |
-| seg_recent_excess | 3.61 |
-| prof_seg_excess | 3.54 |
-| seg_last_excess | 3.27 |
-| pos_u | 1.82 |
-| d_is_last | 1.58 |
-| stops_to_end | 1.19 |
-| gap_ahead_sec | 0.91 |
-| dow | 0.75 |
-| mom3 | 0.64 |
-| mom1 | 0.62 |
-| sched_headway_sec | 0.47 |
-| direction_code | 0.45 |
-| hour_cos | 0.41 |
-| hour_sin | 0.39 |
-| prof_route_lateness | 0.25 |
-| news_w | 0.25 |
+| sched_run_sec | 136.78 |
+| k | 123.24 |
+| route_code | 12.74 |
+| lateness_u | 4.18 |
+| seg_recent_excess | 3.15 |
+| seg_last_excess | 2.56 |
+| prof_seg_excess | 2.54 |
+| pos_u | 2.34 |
+| mom1 | 1.68 |
+| d_is_last | 1.61 |
+| stops_to_end | 1.39 |
+| gap_ahead_sec | 1.15 |
+| mom3 | 1.05 |
+| route_recent_lateness | 0.76 |
+| direction_code | 0.58 |
+| sched_headway_sec | 0.42 |
+| hour_sin | 0.31 |
+| dest_recent_lateness | 0.30 |
+| prof_route_lateness | 0.26 |
+| leader_same_route | 0.26 |
 
 ## Held-out days on the collector's own rows (what the live server sees)
 
-321,550 rows from 2026-09-28, 2026-09-30, 2026-10-01, 2026-10-02, 2026-10-04.
+4,707,024 rows from 2026-10-05, 2026-10-06, 2026-10-07.
 
 |  | MAE s |
 |---|---|
-| model p50 | 72.04 (bias -7.1) |
-| schedule | 85.43 |
-| persistence | 83.73 |
-| carry table | 84.52 |
-| feed | 90.94 on 32,434 rows (model there 67.04) |
-| 80% coverage | 0.767 |
+| model p50 | 77.14 (bias -18.0) |
+| schedule | 89.53 |
+| persistence | 94.60 |
+| carry table | 91.00 |
+| feed | 90.11 on 422,185 rows (model there 59.91) |
+| 80% coverage | 0.784 |
 
 ### By horizon
 
 |  | rows | model MAE s | schedule | carry table | persistence | vs schedule | vs carry | 80% coverage | feed | model on feed rows |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 53,111 | 37.1 | 40.8 | 41.7 | 40.7 | +9% | +11% | 0.76 | 51.0 | 39.8 |
-| 2 | 48,000 | 48.0 | 55.8 | 56.5 | 54.7 | +14% | +15% | 0.78 | 69.9 | 50.8 |
-| 3 | 43,162 | 58.8 | 68.7 | 69.4 | 66.8 | +14% | +15% | 0.78 | 83.9 | 61.7 |
-| 4 | 38,725 | 68.1 | 80.0 | 80.3 | 77.6 | +15% | +15% | 0.77 | 89.8 | 81.5 |
-| 5 | 34,619 | 76.6 | 90.9 | 90.9 | 88.4 | +16% | +16% | 0.77 | 112.3 | 81.7 |
-| 6 | 30,894 | 85.3 | 101.4 | 100.6 | 99.1 | +16% | +15% | 0.76 | 99.9 | 96.7 |
-| 8 | 24,585 | 98.5 | 118.9 | 116.9 | 116.1 | +17% | +16% | 0.76 | 155.2 | 110.0 |
-| 10 | 19,431 | 110.7 | 134.8 | 130.4 | 132.3 | +18% | +15% | 0.75 | 121.9 | 106.2 |
-| 12 | 15,183 | 121.4 | 149.2 | 142.7 | 148.6 | +19% | +15% | 0.75 | 203.7 | 142.6 |
-| 16 | 8,911 | 140.0 | 171.6 | 161.6 | 169.9 | +18% | +13% | 0.76 | – | – |
-| 20 | 4,929 | 155.0 | 191.0 | 178.3 | 188.6 | +19% | +13% | 0.78 | – | – |
+| 1 | 497,792 | 26.3 | 33.6 | 34.8 | 31.7 | +22% | +24% | 0.80 | 56.5 | 26.7 |
+| 2 | 476,718 | 38.1 | 47.8 | 48.9 | 46.0 | +20% | +22% | 0.81 | 67.8 | 38.4 |
+| 3 | 456,003 | 48.5 | 59.4 | 60.8 | 59.0 | +18% | +20% | 0.81 | 76.1 | 47.4 |
+| 4 | 436,164 | 58.6 | 70.1 | 71.6 | 71.2 | +16% | +18% | 0.80 | 116.3 | 97.3 |
+| 5 | 416,757 | 67.7 | 80.0 | 81.6 | 82.5 | +15% | +17% | 0.80 | 95.3 | 65.6 |
+| 6 | 397,623 | 76.4 | 89.4 | 91.0 | 93.4 | +15% | +16% | 0.79 | 186.8 | 162.0 |
+| 7 | 378,572 | 84.4 | 98.1 | 99.8 | 103.5 | +14% | +15% | 0.78 | 132.0 | 99.1 |
+| 8 | 359,740 | 92.0 | 106.1 | 107.9 | 113.2 | +13% | +15% | 0.77 | 122.2 | 91.3 |
+| 10 | 322,680 | 106.6 | 120.8 | 122.4 | 131.4 | +12% | +13% | 0.76 | 207.6 | 180.5 |
+| 11 | 304,448 | 113.4 | 128.2 | 130.1 | 139.8 | +12% | +13% | 0.75 | 161.9 | 117.6 |
+| 12 | 286,540 | 120.0 | 135.1 | 136.7 | 148.0 | +11% | +12% | 0.75 | 152.4 | 118.2 |
+| 16 | 218,124 | 143.7 | 159.6 | 161.1 | 177.8 | +10% | +11% | 0.75 | 619.2 | 469.9 |
+| 20 | 155,863 | 165.7 | 182.4 | 183.0 | 205.6 | +9% | +9% | 0.75 | – | – |
 
 ## Destination arrival on the configured commutes (held-out archive rows)
 
@@ -463,16 +466,20 @@ Boarding at the leg's first platform, alighting at its last: error of the predic
 
 | leg | stops | rides | model MAE s | schedule | carry | bias s | 80% cov. | actual excess p50 / p90 s |
 |---|---|---|---|---|---|---|---|---|
-| 4 Av-9 St → W 4 St-Wash Sq (F) | 10 | 287 | 128.0 | 149.7 | 146.6 | -38.7 | 0.71 | 40 / 259 |
-| W 4 St-Wash Sq → 14 St (A/C/E) | 1 | 680 | 17.2 | 30.8 | 30.1 | -2.1 | 0.85 | -28 / 5 |
-| 4 Av-9 St → Jay St-MetroTech (F) | 4 | 293 | 66.7 | 74.0 | 72.0 | -5.5 | 0.79 | 28 / 139 |
-| Jay St-MetroTech → 14 St (A/C) | 6 | 231 | 67.3 | 65.4 | 71.1 | -10.8 | 0.84 | 9 / 140 |
-| 4 Av-9 St → Jay St-MetroTech (R) | 4 | 247 | 51.7 | 52.3 | 52.9 | -11.9 | 0.85 | 1 / 95 |
-| 14 St → W 4 St-Wash Sq (A/C/E) | 1 | 627 | 28.2 | 31.7 | 32.5 | -14.1 | 0.85 | 0 / 46 |
-| W 4 St-Wash Sq → 4 Av-9 St (F) | 10 | 279 | 81.3 | 83.6 | 89.3 | -17.1 | 0.81 | 5 / 145 |
-| 14 St → Jay St-MetroTech (A/C) | 6 | 249 | 99.3 | 109.5 | 102.9 | -61.3 | 0.80 | 49 / 219 |
-| Jay St-MetroTech → 4 Av-9 St (F) | 4 | 282 | 55.6 | 90.1 | 87.7 | -0.6 | 0.79 | -72 / 40 |
-| Jay St-MetroTech → 4 Av-9 St (R) | 4 | 252 | 51.9 | 78.7 | 83.5 | -0.2 | 0.79 | -54 / 40 |
+| Jay St-MetroTech → 14 St (A) | 6 | 258 | 87.5 | 99.4 | 103.0 | -24.7 | 0.81 | 5 / 158 |
+| W 4 St-Wash Sq → 4 Av-9 St (F) | 10 | 115 | 93.3 | 97.9 | 111.6 | 13.6 | 0.74 | -25 / 141 |
+| 6 Av → 8 Av (L) | 1 | 240 | 8.8 | 91.5 | 90.7 | 3.1 | 0.87 | 90 / 90 |
+| 4 Av-9 St → Hoyt-Schermerhorn Sts (G) | 4 | 121 | 40.1 | 48.5 | 49.0 | -17.4 | 0.74 | 12 / 105 |
+| Hoyt-Schermerhorn Sts → 14 St (A) | 7 | 258 | 102.2 | 116.0 | 120.3 | -33.3 | 0.79 | 5 / 185 |
+| 14 St → W 4 St-Wash Sq (C) | 1 | 388 | 19.4 | 22.3 | 23.5 | -7.5 | 0.85 | 0 / 30 |
+| W 4 St-Wash Sq → 7 Av (F) | 11 | 143 | 99.5 | 111.8 | 134.6 | 35.7 | 0.78 | -35 / 131 |
+| W 4 St-Wash Sq → 14 St (A) | 1 | 412 | 18.2 | 30.2 | 30.6 | -6.3 | 0.85 | -25 / 4 |
+| 4 Av-9 St → Jay St-MetroTech (F) | 4 | 153 | 54.6 | 66.7 | 61.7 | 11.5 | 0.84 | 25 / 135 |
+| 4 Av-9 St → W 4 St-Wash Sq (F) | 10 | 153 | 95.2 | 109.0 | 110.5 | 22.1 | 0.82 | 10 / 195 |
+| 4 Av-9 St → Jay St-MetroTech (R) | 4 | 116 | 45.5 | 43.1 | 45.4 | -5.1 | 0.89 | -5 / 75 |
+| 14 St → Jay St-MetroTech (A/C) | 6 | 242 | 81.9 | 89.1 | 88.2 | -10.4 | 0.75 | 10 / 186 |
+| Jay St-MetroTech → 4 Av-9 St (F) | 4 | 117 | 59.0 | 107.1 | 114.3 | 13.2 | 0.80 | -81 / 17 |
+| Jay St-MetroTech → 4 Av-9 St (R) | 4 | 133 | 61.8 | 70.6 | 68.0 | -32.4 | 0.75 | -30 / 132 |
 
 ## Destination arrival on the configured commutes (collector rows)
 
@@ -480,54 +487,19 @@ Boarding at the leg's first platform, alighting at its last: error of the predic
 
 | leg | stops | rides | model MAE s | schedule | carry | bias s | 80% cov. | actual excess p50 / p90 s |
 |---|---|---|---|---|---|---|---|---|
-| 4 Av-9 St → W 4 St-Wash Sq (F) | 10 | 20 | 142.3 | 234.1 | 218.7 | -94.4 | 0.60 | 234 / 362 |
-| W 4 St-Wash Sq → 14 St (A/C/E) | 1 | 91 | 46.0 | 47.9 | 48.6 | 3.0 | 0.74 | -10 / 60 |
-| 4 Av-9 St → Jay St-MetroTech (F) | 4 | 38 | 57.3 | 88.9 | 91.5 | -3.9 | 0.79 | 62 / 145 |
-| Jay St-MetroTech → 14 St (A/C) | 6 | 20 | 128.2 | 92.3 | 112.2 | 50.9 | 0.60 | -55 / 66 |
-| 4 Av-9 St → Jay St-MetroTech (R) | 4 | 51 | 50.5 | 48.3 | 49.5 | 4.9 | 0.82 | 5 / 76 |
-| 14 St → W 4 St-Wash Sq (A/C/E) | 1 | 75 | 32.4 | 31.0 | 31.7 | 4.8 | 0.65 | 0 / 48 |
-| W 4 St-Wash Sq → 4 Av-9 St (F) | 10 | 18 | – | – | – | – | – | – / – |
-| 14 St → Jay St-MetroTech (A/C) | 6 | 46 | 83.9 | 58.8 | 57.9 | 8.9 | 0.93 | 19 / 117 |
-| Jay St-MetroTech → 4 Av-9 St (F) | 4 | 31 | 75.8 | 93.1 | 84.7 | 58.2 | 0.55 | -45 / 50 |
-| Jay St-MetroTech → 4 Av-9 St (R) | 4 | 41 | 98.7 | 138.2 | 137.8 | 56.0 | 0.59 | -151 / 0 |
-
-## Which pattern features help (first-round rows, p50, 2M-row cap)
-
-| variant | MAE s | bias s | iterations | fit s | k=1 | k=2 | k=3 | k=4 | k=5 | k=6 | k=8 | k=10 | k=12 | k=16 | k=20 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| base | 71.70 | -18.8 | 400 | 28 | 24.5 | 36.6 | 47.0 | 56.4 | 65.3 | 73.7 | 88.4 | 101.6 | 114.1 | 136.8 | 156.7 |
-| +dynamic | 71.69 | -18.5 | 400 | 28 | 24.5 | 36.7 | 47.1 | 56.5 | 65.4 | 73.8 | 88.5 | 101.5 | 113.9 | 136.4 | 156.2 |
-| +dynamic-no-count | 71.66 | -18.5 | 400 | 27 | 24.4 | 36.6 | 47.1 | 56.5 | 65.3 | 73.7 | 88.3 | 101.5 | 113.9 | 136.6 | 156.4 |
-| +profiles | 71.20 | -18.5 | 400 | 50 | 24.1 | 36.3 | 46.7 | 56.0 | 64.9 | 73.2 | 87.8 | 101.0 | 113.3 | 135.8 | 155.7 |
-| +seg-profile-only | 71.16 | -18.7 | 400 | 55 | 24.1 | 36.3 | 46.6 | 56.0 | 64.8 | 73.2 | 87.8 | 100.9 | 113.3 | 135.8 | 155.7 |
-| +clim | 71.72 | -18.8 | 400 | 47 | 24.4 | 36.6 | 47.0 | 56.4 | 65.3 | 73.8 | 88.5 | 101.6 | 114.2 | 136.7 | 156.6 |
-| +patterns | 71.18 | -18.2 | 400 | 70 | 24.2 | 36.4 | 46.7 | 56.0 | 64.8 | 73.3 | 87.7 | 100.9 | 113.3 | 135.6 | 155.4 |
-| +patterns+weather+events | 71.38 | -18.9 | 400 | 75 | 24.4 | 36.5 | 46.9 | 56.2 | 65.0 | 73.5 | 88.0 | 101.2 | 113.5 | 135.9 | 155.8 |
-| +weather | 71.88 | -18.6 | 400 | 50 | 24.6 | 36.7 | 47.2 | 56.6 | 65.5 | 74.0 | 88.6 | 101.8 | 114.3 | 136.8 | 156.8 |
-| +events | 71.82 | -19.5 | 400 | 41 | 24.5 | 36.6 | 47.1 | 56.5 | 65.5 | 73.8 | 88.6 | 101.7 | 114.4 | 136.8 | 156.7 |
-
-## Second-round features and capacity (p50, 2M-row cap)
-
-| experiment | MAE s | bias s | iterations | fit s | k=1 | k=2 | k=3 | k=4 | k=5 | k=6 | k=8 | k=10 | k=12 | k=16 | k=20 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| v1-all | 71.35 | -18.5 | 400 | 65 | 24.3 | 36.5 | 46.8 | 56.2 | 65.0 | 73.4 | 88.0 | 101.1 | 113.5 | 136.0 | 155.8 |
-| v2-all | 70.43 | -18.5 | 400 | 55 | 23.6 | 35.6 | 45.8 | 55.0 | 63.8 | 72.2 | 87.0 | 100.2 | 112.7 | 135.5 | 155.6 |
-| v2-all-residual | 70.47 | -18.4 | 400 | 47 | 23.6 | 35.7 | 45.9 | 55.0 | 63.8 | 72.3 | 87.1 | 100.2 | 112.9 | 135.5 | 155.3 |
-| v2-lr0.1-leaves63-600 | 68.87 | -19.2 | 600 | 72 | 22.7 | 34.5 | 44.6 | 53.6 | 62.2 | 70.4 | 85.1 | 98.4 | 110.8 | 133.2 | 152.8 |
-| v2-leaves127-800 | 68.30 | -19.3 | 800 | 111 | 22.3 | 34.1 | 44.1 | 53.1 | 61.8 | 69.9 | 84.5 | 97.5 | 110.1 | 132.4 | 151.9 |
-| v2-lr0.03-leaves63-1200 | 68.99 | -19.0 | 1200 | 143 | 22.7 | 34.6 | 44.7 | 53.8 | 62.4 | 70.7 | 85.3 | 98.5 | 110.8 | 133.3 | 152.9 |
-| v2-lr0.1-leaves127-1500 | 68.17 | -18.2 | 1500 | 172 | 22.3 | 33.9 | 43.9 | 52.8 | 61.4 | 69.6 | 84.3 | 97.4 | 110.1 | 132.7 | 152.1 |
-| v2-lr0.1-leaves255-1500 | 67.76 | -18.2 | 1500 | 228 | 22.1 | 33.6 | 43.5 | 52.4 | 61.0 | 69.1 | 83.6 | 96.9 | 109.7 | 132.4 | 151.8 |
-| v2-lr0.15-leaves127-1000 | 68.53 | -17.4 | 1000 | 118 | 22.7 | 34.2 | 44.2 | 53.2 | 61.7 | 70.0 | 84.6 | 97.8 | 110.5 | 133.2 | 152.8 |
-
-## Station-hour ridership as a feature (p50, 2M-row cap)
-
-| experiment | MAE s | bias s | iterations | fit s | k=1 | k=2 | k=3 | k=4 | k=5 | k=6 | k=8 | k=10 | k=12 | k=16 | k=20 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| v2-all (reference) | 70.43 | -18.5 | 400 | 54 | 23.6 | 35.6 | 45.8 | 55.0 | 63.8 | 72.2 | 87.0 | 100.2 | 112.7 | 135.5 | 155.6 |
-| v2-all + ridership | 70.39 | -18.9 | 400 | 52 | 23.5 | 35.5 | 45.7 | 55.0 | 63.7 | 72.2 | 87.0 | 100.3 | 112.8 | 135.5 | 155.5 |
-| 255 leaves (reference) | 67.76 | -18.2 | 1500 | 271 | 22.1 | 33.6 | 43.5 | 52.4 | 61.0 | 69.1 | 83.6 | 96.9 | 109.7 | 132.4 | 151.8 |
-| 255 leaves + ridership | 67.76 | -18.2 | 1500 | 264 | 22.1 | 33.6 | 43.4 | 52.3 | 60.9 | 69.0 | 83.7 | 97.0 | 109.8 | 132.5 | 152.0 |
+| Jay St-MetroTech → 14 St (A) | 6 | 656 | 82.6 | 93.2 | 98.1 | -21.3 | 0.80 | 5 / 150 |
+| W 4 St-Wash Sq → 4 Av-9 St (F) | 10 | 366 | 108.2 | 112.0 | 120.7 | 28.0 | 0.75 | -10 / 174 |
+| 4 Av-9 St → Hoyt-Schermerhorn Sts (G) | 4 | 344 | 48.9 | 53.2 | 53.7 | -13.0 | 0.69 | 15 / 90 |
+| Hoyt-Schermerhorn Sts → 14 St (A) | 7 | 664 | 88.4 | 106.0 | 110.8 | -21.7 | 0.81 | 10 / 174 |
+| 14 St → W 4 St-Wash Sq (C) | 1 | 1113 | 23.3 | 24.9 | 26.6 | -6.8 | 0.77 | 0 / 34 |
+| W 4 St-Wash Sq → 7 Av (F) | 11 | 376 | 105.0 | 108.0 | 123.8 | 22.2 | 0.76 | -25 / 144 |
+| W 4 St-Wash Sq → 14 St (A) | 1 | 1103 | 23.7 | 32.9 | 33.3 | -3.4 | 0.79 | -25 / 10 |
+| 4 Av-9 St → Jay St-MetroTech (F) | 4 | 415 | 70.0 | 80.5 | 75.6 | 1.2 | 0.79 | 28 / 177 |
+| 4 Av-9 St → W 4 St-Wash Sq (F) | 10 | 390 | 124.1 | 133.8 | 133.7 | 18.0 | 0.74 | 15 / 215 |
+| 4 Av-9 St → Jay St-MetroTech (R) | 4 | 363 | 46.7 | 48.1 | 49.9 | -7.3 | 0.83 | -2 / 80 |
+| 14 St → Jay St-MetroTech (A/C) | 6 | 673 | 84.5 | 87.4 | 86.7 | -16.0 | 0.74 | 12 / 185 |
+| Jay St-MetroTech → 4 Av-9 St (F) | 4 | 382 | 76.5 | 118.0 | 123.0 | 20.9 | 0.70 | -80 / 61 |
+| Jay St-MetroTech → 4 Av-9 St (R) | 4 | 384 | 78.0 | 91.4 | 89.9 | -14.0 | 0.70 | -40 / 110 |
 
 ## Reading the tables
 

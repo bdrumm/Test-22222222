@@ -1,4 +1,80 @@
-## Summary
+## October 8 refresh: the same model on three more weeks of the Action's data
+
+_Added 2026-10-08. The tables below this note are from this run; the October 5
+run's discussion follows it, for the record._
+
+**What this run is.** The hourly GitHub Action collects the feeds for 50
+minutes of every hour it runs and backfills the subwaydata.nyc archive into
+the data branch, pruned to a rolling 21 days (`network_retention_days` in
+`pipeline/targets.json`). So the training set is now the archive for
+**Sep 18 – Oct 4** (17 weekdays and weekends, 8.85 M rows built, 6 M used for
+the fit) instead of Sep 13 – 27, and the hold-out is **Oct 5 – 7**, three full
+days that neither this model nor the October 5 one had seen (Oct 6 had 404'd
+for the Action's backfill; it was fetched by hand first). Same features, same
+capacity (255 leaves, 1 500 rounds), no ablation this time.
+
+**Did more data help?** A little, and in the right places. Scored on the
+same 1.83 M held-out rows (`scripts/model_compare.py`, which runs an older
+model over the rows a later run cached):
+
+| model | trained on | MAE s | bias s | schedule | carry table | 80% coverage |
+|---|---|---|---|---|---|---|
+| October 5 | Sep 13 – 27 | 71.1 | −15.5 | 84.3 | 87.2 | 0.81 |
+| **October 8** | Sep 18 – Oct 4 | **70.1** | −13.6 | 84.3 | 87.2 | 0.80 |
+
+By horizon the two are identical to the second at k ≤ 6; the gains are at
+k = 7 (81 → 75 s), k = 11 (108 → 103) and k = 16/20 (134/153 → 132/152),
+which are the horizons of the rider's own legs (Hoyt – 14 St is 7 stops,
+W 4 St – 7 Av is 11), added to the k set by `legs.json`. The one-second
+headline gain is small against a ~14 s negative bias on both models: on
+these three days trains ran a little later than either model expects, which
+the day-pattern features are meant to absorb and only partly do with three
+weeks of history. On the collector's own rows for the same days (4.7 M, the
+data the live server actually has) the model is at 77.1 s against 89.5 s for
+the schedule and 90.1 s for the feed's own ETA, which it improves to 59.9 s
+on the rows where the feed had one.
+
+**The rider's legs.** The commute-leg table now comes from the rider's real
+legs (`data/trips/legs.json` from the trip review) besides the configured
+journeys. On Oct 5 – 7 the model beats the schedule on every leg but the
+4-stop F ride 4 Av-9 St → Jay St, where the schedule is already within
+43 s; the largest gains are on the longer legs (Hoyt – 14 St 102 vs 116 s,
+W 4 St – 7 Av 100 vs 112, 4 Av – W 4 St 95 vs 109). The per-leg biases are the
+thing to watch: −33 s on Hoyt – 14 St and −32 s on Jay St – 4 Av-9 St
+(the model runs early), +36 s on W 4 St – 7 Av and +22 s on 4 Av – W 4 St
+(late). With 115 – 400 rows per leg over three days these are suggestive,
+not settled; a steady sign over a few more refreshes would justify a
+per-leg correction in the app's carry table.
+
+**What the real rides changed, and what they cannot.** Thirteen recorded
+trips cannot retrain a gradient-boosted model of the whole network, and this
+run does not try. What they did show, through the trip review's own
+tables, is where the end-to-end forecast loses time *around* the model: the
+planner booked 3:00 for the change at Jay St-MetroTech and the rider made
+it in 0:17 (0:56 at W 4 St against 3:00), because the MTA's transfers.txt
+gives 180 s even between lines that share the same stop. The schedule
+export now books no walk between lines at the same stop, and the phone's
+learned change times replace the timetable's either way; see the README.
+After the platform-timing fix of Oct 7 the boarding forecast landed within
+±45 s of the felt pull-away on both Oct 8 rides. The model's own error on the
+rider's legs is the table above; the rest of the door-to-door error was
+the change.
+
+**How to repeat it.** `make model` trains straight into `data/`; for a
+comparison, train to a side folder with a row cache and a fixed hold-out,
+then score the previous model on the same rows:
+
+    .venv/bin/python -m pipeline.train_model --data-dir data-branch --db data/mta.sqlite \
+        --out data/models_oct8 --cache data/models_oct8/rows.pkl --end 2026-10-07 --test-from 2026-10-05 \
+        --skip-ablation --max-iter 1500 --max-leaf-nodes 255 --min-samples-leaf 200
+    .venv/bin/python scripts/model_compare.py --rows data/models_oct8/rows.pkl --test-from 2026-10-05 \
+        --model "Oct 5=data/models/arrival_oct5.joblib" --model "Oct 8=data/models_oct8/arrival.joblib"
+
+The rows take about ten minutes to build and the fit about 35 on this Mac.
+Give `--end` explicitly: the default takes today's partial day.
+
+## October 5 run
+
 
 This run rebuilt the arrival model's training set and feature space around the
 question the app asks — *when will this train reach my platform, and when will

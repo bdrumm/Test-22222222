@@ -391,12 +391,14 @@ struct PlannerView: View {
         refreshLive()
     }
 
-    /// The rider's own changes, where learned, replace the MTA's minimum when they take longer.
+    /// The rider's own changes, where learned at the station, replace the MTA's minimum either way: longer when
+    /// they take longer, shorter where the timetable's figure is a station-wide allowance (Oct 8: 3:00 booked at
+    /// Jay St against 0:17 measured, so every route through it ran three minutes late and ranked behind W 4 St).
     private func applyPersonalTransfers(_ ps: inout [PathOption]) {
         let pm = PersonalModelStore.shared.model
         for i in ps.indices {
-            guard var tr = ps[i].transfer, let mine = pm.transferSec(station: tr.station) else { continue }
-            let sec = max(tr.walkSec, Int(mine.rounded()))
+            guard var tr = ps[i].transfer else { continue }
+            let sec = pm.plannedTransferSec(station: tr.station, scheduled: tr.walkSec)
             if sec != tr.walkSec { ps[i].schedSec += sec - tr.walkSec; tr.walkSec = sec; ps[i].transfer = tr }
         }
     }

@@ -248,6 +248,21 @@ final class TripTrackerTests: XCTestCase {
         m.learn(x); XCTAssertEqual(m.transferSec(station: "X")!, 50)
         // the data is small: a trip that measured nothing teaches nothing
         XCTAssertFalse(m.learn(TripTimeline(startTs: 1, startedBy: "gps", originStation: "S", destStation: "D", legs: 1)))
+        // a change across the platform (Jay St, 17 s then 12 s) is learned, and the planner's allowance follows it down
+        // from the timetable's 3 minutes; a 5 s "change" is a false alighting and is not
+        var jay = start(legs: 2, transfer: "Jay St-MetroTech")
+        jay.events = x.events
+        XCTAssertEqual(m.plannedTransferSec(station: "Jay St-MetroTech", scheduled: 180), 180, "nothing learned there yet")
+        jay.walkingSecondsBetweenTrains = 17; m.learn(jay)
+        jay.walkingSecondsBetweenTrains = 12; m.learn(jay)
+        XCTAssertEqual(m.transferSec(station: "Jay St-MetroTech")!, 14.5, accuracy: 0.01)
+        XCTAssertEqual(m.plannedTransferSec(station: "Jay St-MetroTech", scheduled: 180), 15, "not under the floor")
+        XCTAssertEqual(m.plannedTransferSec(station: "X", scheduled: 30), 50, "and up where the rider is slower")
+        var fake = start(legs: 2, transfer: "Y")
+        fake.events = x.events; fake.walkingSecondsBetweenTrains = 5
+        let before = m.transferDefault.n
+        m.learn(fake)
+        XCTAssertEqual(m.transferDefault.n, before)
     }
 
 
