@@ -97,6 +97,7 @@ struct TripTracker {
     /// The stop times of the ride that just ended, kept until the next departure.
     private(set) var lastRideStopTimes: [Double] = []
     private var quietStartTs: Double?
+    private var walkStartTs: Double?
 
     /// The ride in hand began from the phone's movement (moving away from the station at a train's pace), not
     /// from a felt pull-away at the platform.
@@ -104,6 +105,21 @@ struct TripTracker {
 
     /// Riding and standing at a station since this moment (nil while moving).
     var standingSince: Double? { phase == .riding && quietRun >= stopQuietSec ? quietStartTs : nil }
+
+    /// On a train right now: the ride's pull-away was felt (or named, or assumed from the timetable) and no walk-off
+    /// since. False between trains at the change, where the phase is still `.riding`.
+    var onTrain: Bool { phase == .riding && (timeline.rideAssumed || timeline.events.last?.kind == .departed) }
+
+    /// Riding and walking right now: when the steps began and for how many seconds they have gone on. The
+    /// recorder reads it against the feed: steps that begin while the believed train stands at a station are
+    /// the rider getting off, even when the detector could not see the train come to rest first.
+    var walking: (startTs: Double, seconds: Int)? {
+        guard phase == .riding, walkRun > 0, let s = walkStartTs else { return nil }
+        return (s, walkRun)
+    }
+
+    /// The last second the phone felt the train moving (a push or vibration) on the ride in hand.
+    private(set) var lastMovingTs: Double?
 
     init(_ start: TripTimeline, distanceToOriginM: Double?) {
         timeline = start
@@ -182,8 +198,14 @@ struct TripTracker {
         if firstMotionTs == nil { firstMotionTs = m.ts }
         timeline.motionSeconds += 1
         let walking = m.stepEnergy > detector.stepThreshold
-        if walking { walkRun += 1; stillRun = 0 } else { stillRun += 1; walkRun = 0 }
+        if walking {
+            if walkRun == 0 { walkStartTs = m.ts }
+            walkRun += 1; stillRun = 0
+        } else {
+            stillRun += 1; walkRun = 0; walkStartTs = nil
+        }
         if afterAlight, walking { timeline.walkingSecondsBetweenTrains += 1 }
+        if phase == .riding, !walking, m.pushG >= detector.pushThreshold || m.shakeG >= detector.shakeThreshold { lastMovingTs = m.ts }
         if phase == .atStation, timeline.platformTs == nil, stillRun >= platformStillSec {
             timeline.platformTs = m.ts - Double(platformStillSec - 1)
             timeline.platformObserved = true
@@ -289,6 +311,24 @@ struct TripTracker {
         timeline.events.append(MotionEvent(kind: .alighted, ts: ts))
         detector.standDown()
         motionState = detector.state
+        if timeline.events.filter({ $0.kind == .alighted }).count >= timeline.legs { alightedAll = true }
+    }
+
+    /// The rider walked off at a station the feed vouches for: the steps that began at `ts` started while the train
+    /// the phone believes they were on stood at a stop, so they are the rider getting off even though the detector
+    /// never saw the train come to rest (a quick change across the platform, Oct 8 at Jay St twice). Closes the ride
+    /// as an alighting at `ts`; the walk goes on as the change, and the next pull-away is the next train.
+    mutating func alightWalking(at ts: Double) {
+        guard phase == .riding else { return }
+        if quietRun >= stopQuietSec { stopsFelt += 1 }
+        timeline.rideStops.append(stopsFelt)
+        lastRideStopTimes = stopTimes
+        stopsFelt = 0; quietRun = 0; stopTimes = []; quietStartTs = nil
+        afterAlight = true
+        timeline.events.append(MotionEvent(kind: .alighted, ts: ts))
+        timeline.walkingSecondsBetweenTrains += Double(walkRun)
+        detector.standDown()
+        motionState = .walking
         if timeline.events.filter({ $0.kind == .alighted }).count >= timeline.legs { alightedAll = true }
     }
 

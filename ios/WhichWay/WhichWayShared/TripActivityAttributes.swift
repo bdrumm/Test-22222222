@@ -20,6 +20,13 @@ struct TripActivityAttributes: ActivityAttributes {
         /// The route as it stands now ("G → C at Hoyt-Schermerhorn"): it can change under the rider, while the
         /// attributes cannot, and an activity cannot be started afresh from the background.
         var routeLabel: String? = nil
+        /// On the train: `route` is the line being ridden, `offAt`/`offTs` where and when the rider leaves it (the
+        /// change, or the destination), `boardTs` the connection's departure when there is one (the countdown
+        /// runs to it), and `presumed` that the ride is assumed from the timetable rather than felt or confirmed.
+        var riding: Bool = false
+        var offAt: String? = nil
+        var offTs: Double? = nil
+        var presumed: Bool = false
     }
     var originName: String
     var destName: String

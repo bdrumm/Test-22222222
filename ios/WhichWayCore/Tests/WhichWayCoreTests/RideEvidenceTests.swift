@@ -74,7 +74,7 @@ final class RideEvidenceTests: XCTestCase {
         let e = BoardingCandidate(trainId: "E_S|e1", key: "E_S", route: "E", boardTs: 62, alightTs: 220, stopsToAlight: 1, chosen: false, onLeg: true,
                                   boardIdx: 5, alightIdx: 6, stopTs: [6: 220])
         let l = BoardingCandidate(trainId: "L_S|l1", key: "L_S", route: "L", boardTs: 0, alightTs: nil, stopsToAlight: nil, chosen: false, onLeg: false,
-                                  boardIdx: 0, samePlatform: false)
+                                  boardIdx: 0, samePlatform: false, atOrigin: true)
         let a = BoardingCandidate(trainId: "A_S|a1", key: "A_S", route: "A", boardTs: 207, alightTs: 330, stopsToAlight: 1, chosen: true, onLeg: true,
                                   boardIdx: 5, alightIdx: 6, stopTs: [6: 330])
         let b0 = real.fromDeparture([l, e, a], departedTs: 29, leg: 0, chosenKey: "A_S")
@@ -83,9 +83,13 @@ final class RideEvidenceTests: XCTestCase {
         let b1 = real.withAlighting(b0, candidates: [l, e, a], alightedTs: 164)
         XCTAssertEqual(b1.bestKey, "E_S")
         XCTAssertGreaterThan(b1.confidence, 0.9)
-        // the old timing, for the record: the L
-        let old = inf.fromDeparture([l, e, a], departedTs: 29, leg: 0, chosenKey: "A_S")
-        XCTAssertNotEqual(old.bestKey, "E_S")
+        // the old timing, for the record (before the first-stop rule as well): the L fitted the pull-away best and the
+        // E lost most of its standing; the L from the other platform no longer outweighs it only because its prior is lower
+        var lOld = l; lOld.atOrigin = false
+        let old = inf.fromDeparture([lOld, e, a], departedTs: 29, leg: 0, chosenKey: "A_S")
+        XCTAssertLessThan(old.byLine["E_S"]!, b0.byLine["E_S"]!, "\(old.byLine) vs \(b0.byLine)")
+        XCTAssertGreaterThan(old.byLine["L_S"]!, 5 * b0.byLine["L_S"]!, "\(old.byLine) vs \(b0.byLine)")
+        XCTAssertFalse(old.settled, "\(old.byLine)")
         // the timing table itself: the lettered lines run later than the numbered ones
         XCTAssertGreaterThan(PlatformTiming.recordedLag(route: "E"), PlatformTiming.recordedLag(route: "1"))
         XCTAssertEqual(PlatformTiming.atPlatform(1000, route: "1"), 1000 - PlatformTiming.recordedLag(route: "1"))
@@ -188,5 +192,60 @@ final class RideEvidenceTests: XCTestCase {
         stand(60); depart()
         XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted, .departed])
         XCTAssertEqual(t.timeline.legsRidden, 1)
+    }
+
+
+    func testATrainAtItsFirstStopIsAWeakerMatchThanOneTheFeedTrackedIn() {
+        // Oct 8, 14 St: an L laying over at 8 Av, its first stop, where the feed's time is the timetable's departure
+        // and not an arrival it saw, fits the felt pull-away within 10 s; the E, tracked in to the platform, is 35 s
+        // off. The E's time is a measurement and the L's a guess with a minute or two of play: the E is the train.
+        let e = cand("e1", key: "E_S", board: 1000, boardIdx: 5, chosen: true)
+        let l = BoardingCandidate(trainId: "L_S|l1", key: "L_S", route: "L", boardTs: 1010, alightTs: nil, stopsToAlight: nil, chosen: false, onLeg: false,
+                                  boardIdx: 0, samePlatform: false, atOrigin: true)
+        let b = inf.fromDeparture([e, l], departedTs: 1060, leg: 0, chosenKey: "E_S")
+        XCTAssertEqual(b.bestKey, "E_S", "\(b.byLine)")
+        XCTAssertTrue(b.settled, "\(b.byLine)")
+        // the same L taken for a train the feed tracked in: its closer fit would count in full
+        var tracked = l; tracked.atOrigin = false
+        let asTracked = inf.fromDeparture([e, tracked], departedTs: 1060, leg: 0, chosenKey: "E_S")
+        XCTAssertGreaterThan(asTracked.byLine["L_S"]!, 2 * b.byLine["L_S"]!, "\(asTracked.byLine) vs \(b.byLine)")
+        // the log marks a train at its first stop by itself
+        var log = DepartureLog()
+        log.observe(trains: [train("l2", key: "L_S", points: [(0, 1010), (1, 1100)])], key: "L_S", boardIdx: 0, span: nil, onLeg: false, now: 1000, samePlatform: false)
+        log.observe(trains: [train("e2", key: "E_S", points: [(5, 1000), (6, 1150)])], key: "E_S", boardIdx: 5, span: (from: 5, to: 6), onLeg: true, now: 1000)
+        let c = log.candidates(departedTs: 1060, windowSec: 300, chosenTrainId: nil)
+        XCTAssertEqual(c.first { $0.key == "L_S" }?.atOrigin, true)
+        XCTAssertEqual(c.first { $0.key == "E_S" }?.atOrigin, false)
+    }
+
+    func testATrainOffThePlanIsJudgedOnItsOwnStopsAfterTheWalkOff() {
+        // the E (the plan) and an L from the other platform both fit the pull-away. The rider walked off 130 s later at
+        // W 4 St, the E's one stop, with the fix afterwards 40 m from it. The L had called at 6 Av by then and was a
+        // minute short of Union Sq, 900 m away: it is judged there, not spared for serving no stop of the plan.
+        let e = cand("e1", key: "E_S", board: 1000, boardIdx: 5, alightIdx: 6, stopTs: [6: 1150], chosen: true)
+        let l = BoardingCandidate(trainId: "L_S|l1", key: "L_S", route: "L", boardTs: 1005, alightTs: nil, stopsToAlight: nil, chosen: false, onLeg: false,
+                                  boardIdx: 0, stopTs: [1: 1080, 2: 1210, 3: 1330], samePlatform: false)
+        let start = inf.fromDeparture([e, l], departedTs: 1030, leg: 0, chosenKey: "E_S")
+        XCTAssertEqual(inf.alightingStop(e, at: 1160), 6)
+        XCTAssertEqual(inf.alightingStop(l, at: 1160), 2, "the L's stop nearest the walk-off")
+        XCTAssertEqual(inf.stopsMade(e, departedTs: 1030, alightedTs: 1160), 1)
+        XCTAssertEqual(inf.stopsMade(l, departedTs: 1030, alightedTs: 1160), 1, "6 Av fell inside the ride")
+        var b = inf.withStops(start, candidates: [e, l], stopsFelt: 1, departedTs: 1030, alightedTs: 1160)
+        b = inf.withAlighting(b, candidates: [e, l], alightedTs: 1160)
+        b = inf.withLocation(b, candidates: [e, l], distanceM: ["E_S|e1": 40, "L_S|l1": 900])
+        XCTAssertEqual(b.bestKey, "E_S")
+        XCTAssertTrue(b.settled, "\(b.byLine)")
+        XCTAssertLessThan(b.byLine["L_S"]!, 0.1, "\(b.byLine)")
+        XCTAssertEqual(b.evidence, ["departure", "stops", "alighting", "location"])
+        // the same ride read the old way, the L never judged on its stops: it would have stayed in the running
+        var old = inf.withStops(start, candidates: [e, l], stopsFelt: 1)
+        old = inf.withAlighting(old, candidates: [e, l], alightedTs: 1160)
+        old = inf.withLocation(old, candidates: [e, l], distanceM: ["E_S|e1": 40])
+        XCTAssertGreaterThan(old.byLine["L_S"]!, b.byLine["L_S"]!)
+        // a long ride the L did not make either: the rider stayed on the E past W 4 St to Jay St (five stops, 600 s) while
+        // the L made six stops; two stops felt fits neither, and the E's own walk-off time and place are far off too
+        let far = inf.withStops(start, candidates: [e, l], stopsFelt: 2, departedTs: 1030, alightedTs: 1630)
+        XCTAssertEqual(inf.stopsMade(l, departedTs: 1030, alightedTs: 1630), 3)
+        XCTAssertFalse(inf.withLocation(inf.withAlighting(far, candidates: [e, l], alightedTs: 1630), candidates: [e, l], distanceM: ["E_S|e1": 3500, "L_S|l1": 4000]).settled)
     }
 }

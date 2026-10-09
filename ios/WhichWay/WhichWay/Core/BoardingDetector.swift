@@ -33,7 +33,9 @@ struct BoardingDetector {
     var shakeSeconds = 8
     var alightWalkSeconds = 8
     var minRideSeconds = 20
-    var stoppedBeforeWalkSeconds = 5       // the train must have stood this long before the steps: nobody steps off a moving train
+    var stoppedBeforeWalkSeconds = 3       // the train must have stood this long before the steps: nobody steps off a moving train
+                                           // (3, not 5: a train standing with its doors open still shakes a little as people board;
+                                           // Oct 8 at Jay St the A read as stopped for 4 s before the rider crossed to the F)
     var longWalkSeconds = 30               // unless the walking goes on this long (the stop went unfelt)
 
     private(set) var state: MotionState = .unknown

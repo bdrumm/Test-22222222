@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch serve model test ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
+.PHONY: help local venv gtfs site-synthetic site data-branch serve serve-agent model test ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -44,6 +44,9 @@ trips-nightly: ## Install a launchd agent that runs `make trips` every night at 
 
 serve: gtfs ## Serve $(SITE) on http://localhost:$(PORT); live.json and the timetable extract refresh from the feeds
 	$(VENV)/bin/mta-insights serve --site $(SITE) --port $(PORT) --db data/mta.sqlite
+
+serve-agent: gtfs ## Keep the local server running as a launchd agent: starts at login, restarts if it stops (scripts/serve_agent.sh remove|status)
+	PORT=$(PORT) scripts/serve_agent.sh install
 
 test: ## Python tests (the JS harness and the engine cross-checks included)
 	$(PYTHON) -m pytest -q

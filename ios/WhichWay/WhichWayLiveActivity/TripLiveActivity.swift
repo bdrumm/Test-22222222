@@ -16,13 +16,19 @@ struct TripLiveActivity: Widget {
                     HStack(spacing: 6) {
                         RouteBullet(route: context.state.route, size: 26)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("at \(Fmt.hhmm(context.state.boardTs))").font(.headline)
-                            Text(context.attributes.originName).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            if context.state.riding, let off = context.state.offAt {
+                                Text("off \(Fmt.hhmm(context.state.offTs))").font(.headline)
+                                Text(off).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            } else {
+                                Text("at \(Fmt.hhmm(context.state.boardTs))").font(.headline)
+                                Text(context.attributes.originName).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
                         }
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Countdown(boardTs: context.state.boardTs).font(.system(size: 26, weight: .bold, design: .rounded))
+                    Countdown(boardTs: context.state.riding ? (context.state.offTs ?? context.state.boardTs) : context.state.boardTs)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -38,7 +44,8 @@ struct TripLiveActivity: Widget {
             } compactLeading: {
                 RouteBullet(route: context.state.route, size: 20)
             } compactTrailing: {
-                Countdown(boardTs: context.state.boardTs).font(.system(size: 14, weight: .semibold, design: .rounded)).frame(maxWidth: 52)
+                Countdown(boardTs: context.state.riding ? (context.state.offTs ?? context.state.boardTs) : context.state.boardTs)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded)).frame(maxWidth: 52)
             } minimal: {
                 RouteBullet(route: context.state.route, size: 20)
             }
@@ -47,6 +54,7 @@ struct TripLiveActivity: Widget {
 
     private func subline(_ s: TripActivityAttributes.ContentState) -> String {
         var bits: [String] = []
+        if s.riding, let c = s.changeAt, let r = s.changeRoutes { bits.append("then the \(r) at \(Fmt.hhmm(s.boardTs)) from \(c)") }
         if !s.status.isEmpty { bits.append(s.status) }
         if let n = s.nextBoardTs { bits.append("next at \(Fmt.hhmm(n))") }
         if s.offline { bits.append("offline") }
@@ -86,12 +94,32 @@ struct LockScreenView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 8) {
-                Text("Take the").font(.subheadline).foregroundStyle(.secondary)
-                RouteBullet(route: state.route, size: 26)
-                Text("at \(Fmt.hhmm(state.boardTs))").font(.title3.bold())
-                Spacer()
-                Countdown(boardTs: state.boardTs).font(.system(size: 30, weight: .bold, design: .rounded))
+            if state.riding {
+                // on the train: the line, where the rider gets off it and the countdown to that
+                HStack(alignment: .center, spacing: 8) {
+                    Text(state.presumed ? "Presumably on the" : "On the").font(.subheadline).foregroundStyle(.secondary)
+                    RouteBullet(route: state.route, size: 26)
+                    Text("off \(Fmt.hhmm(state.offTs))").font(.title3.bold()).lineLimit(1).minimumScaleFactor(0.8)
+                    Spacer()
+                    Countdown(boardTs: state.offTs ?? state.boardTs).font(.system(size: 30, weight: .bold, design: .rounded))
+                }
+                if let off = state.offAt {
+                    HStack(spacing: 6) {
+                        if let c = state.changeAt, let r = state.changeRoutes, off == c {
+                            Text("Change at \(c) to the \(r) at \(Fmt.hhmm(state.boardTs))").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        } else {
+                            Text("Get off at \(off)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                }
+            } else {
+                HStack(alignment: .center, spacing: 8) {
+                    Text("Take the").font(.subheadline).foregroundStyle(.secondary)
+                    RouteBullet(route: state.route, size: 26)
+                    Text("at \(Fmt.hhmm(state.boardTs))").font(.title3.bold())
+                    Spacer()
+                    Countdown(boardTs: state.boardTs).font(.system(size: 30, weight: .bold, design: .rounded))
+                }
             }
             if let n = state.nextBoardTs {
                 HStack(spacing: 6) {
@@ -113,7 +141,7 @@ struct LockScreenView: View {
         var bits: [String] = []
         if !state.trainLabel.isEmpty { bits.append(state.trainLabel) }
         if !state.status.isEmpty { bits.append(state.status) }
-        if let c = state.changeAt, let r = state.changeRoutes { bits.append("change to the \(r) at \(c)") }
+        if !state.riding, let c = state.changeAt, let r = state.changeRoutes { bits.append("change to the \(r) at \(c)") }
         if state.offline { bits.append("offline, times from saved data") }
         return bits.isEmpty ? (state.routeLabel ?? attributes.routeLabel) : bits.joined(separator: " · ")
     }

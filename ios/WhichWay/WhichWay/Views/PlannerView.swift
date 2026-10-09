@@ -49,8 +49,13 @@ struct PlannerView: View {
     @State private var extraPaths: [PathOption] = []
     /// When the route last switched to the line the phone believes the rider boarded: one automatic switch a minute.
     @State private var lastSwitchTs = 0.0
-    /// While riding: the itinerary of the train the rider is actually on (and the connection it makes).
+    /// While the route is on: on the train, the itinerary of the train the rider is on (the one the phone settled
+    /// on, else the plan's) and the connection it makes; between trains at the change, the connection from there.
+    /// Nil on the way to the origin and at its platform, where the planner's next itinerary stands.
     @State private var rideItinerary: Itinerary? = nil
+    /// Per leg, the train the plan has the rider on: the planner's itinerary's train for the leg, kept up until the
+    /// rider is at that leg's platform and its boarding time has passed (they presumably took it), then frozen.
+    @State private var plannedTrains: [Int: BoardingCandidate] = [:]
     /// The phone's belief in a line off the plan must be at least this sure before the route switches on its own.
     private let autoSwitchConfidence = 0.75
     /// The rider's own word on the train they are on (and the line to take at the change).
@@ -120,6 +125,7 @@ struct PlannerView: View {
         }
         .onChange(of: trip.beliefs) { _, _ in followBoarded() }
         .onChange(of: trip.offPlanAlighting) { _, a in if let a { followAlighting(a) } }
+        .onChange(of: trip.stayedOn) { _, s in if let s { followStayingOn(s) } }
         .sheet(isPresented: $onTrainSheet) { onTrainSheetView }
         .onChange(of: trip.phase) { _, ph in
             if ph == .arrived { endTrip(by: trip.endReason ?? "arrived") }
@@ -154,6 +160,7 @@ struct PlannerView: View {
                     let here = nearbyPlace()
                     NowCard(option: headline, originId: originId, phase: trip.phase,
                             placeName: here?.name, placeUsualSec: here.flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) },
+                            ride: routeStarted ? rideItinerary : nil, rideLeg: trip.currentLeg, onTrain: trip.onTrain, ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                             originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "",
                             onInsights: { showInsights = true })
                     tripBar(originName: index.stations[originId]?.name ?? "the station")
@@ -410,12 +417,45 @@ struct PlannerView: View {
         updateFocus()
         armBoardingTimer()
         if routeStarted {
+            followPlan(now: now)
             trip.observeBoards(data.boards, now: now)
             refreshRideArrival()
             updateActivity(); updateTelemetry()
             trip.updateForecast(boardTs: headline?.live?.boardTs, arriveTs: headline?.live?.arriveTs, now: now)
             trip.tick(now: now)
         }
+    }
+
+    /// The train the plan has the rider on, per leg, as the planner's itinerary stands: it keeps up while the rider
+    /// is on the way to a leg's platform, and freezes once they are at it and the train's boarding time has passed
+    /// (the planner moves on to the next train; the rider presumably took this one). The recorder's plan follows,
+    /// so a ride it assumes from the timetable is this train, not the one that was next when the route began.
+    private func followPlan(now: Double) {
+        guard let p = headline, let it = p.live else { return }
+        let leg = trip.currentLeg
+        for i in p.legs.indices where i >= leg {
+            if i == leg, trip.onTrain { continue }
+            let atPlatform = i == leg && (trip.phase == .atStation || (i > 0 && trip.phase == .riding))
+            if atPlatform, let kept = plannedTrains[i], now >= PlatformTiming.atPlatform(kept.boardTs, route: kept.route) { continue }
+            if let c = plannedCandidate(it, option: p, leg: i) { plannedTrains[i] = c }
+        }
+        var named: [Int: (key: String, trainId: String)] = [:]
+        for (i, c) in plannedTrains { named[i] = (c.key, c.trainId) }
+        trip.updatePlannedTrains(named, now: now)
+    }
+
+    /// The line the rider is on, as the phone knows it: the belief's, else the plan's train's.
+    private var ridingRoute: String? {
+        guard trip.onTrain else { return nil }
+        if let b = trip.currentBelief, b.settled || b.byHand, let r = b.route { return r }
+        return plannedTrains[trip.currentLeg]?.route ?? rideItinerary?.legs.first?.train.route
+    }
+
+    /// The ride stands on the timetable alone: no train felt, named or settled on.
+    private var ridePresumed: Bool {
+        guard trip.onTrain else { return false }
+        if let b = trip.currentBelief, b.settled || b.byHand { return b.assumed }
+        return true
     }
 
     // MARK: - opt-in trip motion
@@ -447,9 +487,12 @@ struct PlannerView: View {
 
     private func activityState(_ p: PathOption) -> TripActivityAttributes.ContentState {
         let h = routeHealth(p, data: data)
-        // on the train, the ride in progress (its own arrival and connection); before it, the next itinerary
-        let it = (trip.phase == .riding ? rideItinerary : nil) ?? p.live
+        // on the train, the ride in progress (its own arrival and connection); between trains, the connection;
+        // before the route is under way, the planner's next itinerary
+        let it = rideItinerary ?? p.live
         let l0 = it?.legs.first
+        let leg = trip.currentLeg
+        let onTrain = trip.onTrain
         var status: String
         if let l0 = l0 {
             var bits: [String] = []
@@ -460,22 +503,31 @@ struct PlannerView: View {
             status = data.predictedBoards.isEmpty ? "waiting for the live feeds" : "no train for this path in the feeds yet"
         }
         var next: Itinerary? = nil
-        if let it = it, let sched = data.schedule {
-            next = pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
+        if !onTrain, let it = it, let sched = data.schedule {
+            next = leg == 0 ? pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
+                            : it.nextIfMissedSec.map { s in var n = it; n.boardTs = it.boardTs + s; return n }
         }
-        // on the train: the line the phone put the rider on leads the status, and the route shown is that one
-        var route = l0?.train.route ?? p.legs[0].primaryRoute
-        if trip.phase == .riding, let b = trip.currentBelief, b.settled || b.byHand, let r = b.route {
-            route = r
-            let word = b.byHand ? "On the \(r)" : (b.assumed ? "On the \(r), presumably" : "On the \(r)")
+        // on the train: the line the rider is on leads, and the countdown runs to the connection (or the arrival)
+        var route = l0?.train.route ?? p.legs[leg].primaryRoute
+        var boardTs = it?.boardTs ?? (data.now + p.wait1Sec)
+        var offAt: String? = nil, offTs: Double? = nil
+        if onTrain, let l0 = l0 {
+            route = ridingRoute ?? l0.train.route
+            let changeAhead = p.legs.count > 1 && leg == 0
+            offAt = changeAhead ? p.transfer?.station : (data.index?.stations[destId]?.name ?? "your stop")
+            offTs = l0.arriveTs
+            if let it = it, it.legs.count > 1 { boardTs = it.legs[1].boardTs } else { boardTs = l0.arriveTs }
+            let word = ridePresumed ? "On the \(route), presumably" : "On the \(route)"
             status = status.isEmpty ? word : "\(word) · \(status)"
         }
+        let changeAhead = p.legs.count > 1 && leg == 0
         return TripActivityAttributes.ContentState(
             route: route, trainLabel: l0.map { shortLabel($0.train) } ?? "",
-            boardTs: it?.boardTs ?? (data.now + p.wait1Sec), arriveTs: it?.arriveTs ?? (data.now + p.expectedSec),
+            boardTs: boardTs, arriveTs: it?.arriveTs ?? (data.now + p.expectedSec),
             nextBoardTs: next?.boardTs, nextRoute: next?.legs.first?.train.route,
-            changeAt: p.transfer?.station, changeRoutes: p.legs.count > 1 ? p.legs[1].routesLabel : nil,
-            extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline, routeLabel: p.label)
+            changeAt: changeAhead ? p.transfer?.station : nil, changeRoutes: changeAhead ? p.legs[1].routesLabel : nil,
+            extraMin: h.extraSec >= 90 ? h.minutes : 0, level: h.level.rawValue, status: status, offline: data.offline, routeLabel: p.label,
+            riding: onTrain, offAt: offAt, offTs: offTs, presumed: ridePresumed)
     }
 
     private func startActivity() {
@@ -834,15 +886,66 @@ struct PlannerView: View {
         return p
     }
 
-    /// While riding: the arrival as the train the rider is actually on makes it, with the connection it makes, for
-    /// the Live Activity and for the clock the trip ends by. The planner's own itinerary moved on to the next
-    /// train when this one left, so it no longer says when this ride ends; without a settled belief about the
-    /// train (a ride assumed from the schedule), the forecast frozen at the departure stands.
+    /// While the route is under way: on the train, the arrival as the train the rider is actually on makes it (the
+    /// one the phone settled on or the rider named, else the plan's train for the leg), with the connection it
+    /// makes; between trains at the change, the connection from there. For the card, the Live Activity and the
+    /// clock the trip ends by. The planner's own itinerary moved on to the next train when this one left, so it
+    /// no longer says when this ride ends; this does. A train the feed has lost keeps the last itinerary.
     private func refreshRideArrival() {
-        guard trip.phase == .riding, let sel = headline, let sched = data.schedule, let c = trip.boardedCandidate else { rideItinerary = nil; return }
-        guard let it = ridingItinerary(boards: data.predictedBoards, schedule: sched, option: sel, leg: trip.currentLeg, boarded: c, now: data.now) else { return }
-        rideItinerary = it
-        trip.setLiveArrival(it.arriveTs)
+        guard trip.phase == .riding, let sel = headline, let sched = data.schedule else { rideItinerary = nil; return }
+        let leg = trip.currentLeg
+        if trip.onTrain {
+            guard let c = trip.boardedCandidate ?? plannedTrains[leg],
+                  let it = ridingItinerary(boards: data.predictedBoards, schedule: sched, option: sel, leg: leg, boarded: c, now: data.now) else { return }
+            rideItinerary = it
+            trip.setLiveArrival(it.arriveTs)
+        } else if leg > 0 {
+            guard let it = connectionItinerary(boards: data.predictedBoards, schedule: sched, option: sel, leg: leg, now: data.now) else { return }
+            rideItinerary = it
+            trip.setLiveArrival(it.arriveTs)
+        } else {
+            rideItinerary = nil
+        }
+    }
+
+    /// The rider stayed on past the stop where the route had them leave the train: the route becomes the one that
+    /// rides the same line on to a later change (the A on to Jay St for the F, rather than the F from W 4 St), or
+    /// straight to the destination, whichever the train they are on makes arrive first. The legs ridden before
+    /// and the leg in hand keep their lines; the belief about the train in hand is kept.
+    private func followStayingOn(_ s: StayedOn) {
+        guard let sched = data.schedule, let index = data.index, let sel = headline, sel.legs.indices.contains(s.leg),
+              let line = sched.lines[s.key], let c = trip.boardedCandidate, c.trainId == s.trainId else { return }
+        let progress = c.progressIdx ?? s.pastIdx + 1
+        func fits(_ p: PathOption) -> Bool {
+            guard p.legs.indices.contains(s.leg), let ix = p.legs[s.leg].idx[s.key], ix.to > s.pastIdx, ix.to >= progress, ix.to < line.stops.count else { return false }
+            if index.stationOf(p.legs[s.leg].from) != index.stationOf(sel.legs[s.leg].from) { return false }
+            for i in 0..<s.leg {
+                guard index.stationOf(p.legs[i].from) == index.stationOf(sel.legs[i].from), index.stationOf(p.legs[i].to) == index.stationOf(sel.legs[i].to),
+                      !Set(p.legs[i].keys).isDisjoint(with: sel.legs[i].keys) else { return false }
+            }
+            return true
+        }
+        var options = paths.filter(fits)
+        let listed = Set(paths.map { $0.id })
+        var more = enumeratePaths(schedule: sched, index: index, from: originId, to: destId, maxOptions: 24).filter { fits($0) && !listed.contains($0.id) }
+        applyPersonalTransfers(&more)
+        let now = data.now, hour = nyHour(now)
+        for i in more.indices {
+            evaluate(&more[i], schedule: sched, lineSched: data.lineSched, now: now, holds: data.holds, deviations: data.deviations, hour: hour)
+            more[i].live = pathTrips(boards: data.predictedBoards, schedule: sched, option: more[i], now: now, maxN: 1).first
+        }
+        options += more
+        // the option the train in hand gets the rider to the destination soonest on
+        func arrival(_ p: PathOption) -> Double {
+            ridingItinerary(boards: data.predictedBoards, schedule: sched, option: p, leg: s.leg, boarded: c, now: now)?.arriveTs ?? (now + p.expectedSec)
+        }
+        guard let alt = options.min(by: { arrival($0) < arrival($1) }) else { return }
+        if !listed.contains(alt.id) {
+            extraPaths.append(alt); paths.append(alt)
+            data.setWanted(Set(paths.flatMap { $0.legs.flatMap { $0.keys } }), for: "planner")
+        }
+        lastSwitchTs = data.now
+        switchRoute(to: alt)
     }
 
     /// Before a route starts: a walk closing on the origin station at a walking pace, over the last minute or so,
@@ -949,7 +1052,7 @@ struct PlannerView: View {
         let obs = (Telemetry.shared.optIn && p != nil) ? observationBase(p!, startedBy: by) : nil
         let plans = legPlans(p)
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
-        extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; preferredKeys = [:]
+        extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]
         trip.stopCoordinate = { [weak data] key, idx in data?.geometry?.lines[key]?.coord(idx) }
         withAnimation { trip.begin(tl, distanceToOriginM: d, observation: obs, legs: plans, now: data.now) }
         data.requestGeometry()
@@ -992,7 +1095,7 @@ struct PlannerView: View {
         data.setWanted([], for: "trip")
         data.setWanted([], for: "onTrain")
         loc.stopTracking()
-        rideItinerary = nil
+        rideItinerary = nil; plannedTrains = [:]
         TripActivityService.shared.end()
         let tl = trip.end(by: by, api: Telemetry.shared.uploadURL(fallback: data.apiBase), now: data.now)
         let destName = data.index?.stations[destId]?.name ?? "your stop"

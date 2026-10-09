@@ -27,6 +27,16 @@ struct OffPlanAlighting: Equatable {
     var ts: Double
 }
 
+/// The rider stayed on past the stop where the route had them change (or get off): the train the phone believes
+/// they are on has gone on beyond it, by the feed, and no walk-off was felt. The planner re-routes along that line.
+struct StayedOn: Equatable {
+    var leg: Int
+    var key: String
+    var trainId: String
+    var pastIdx: Int          // the stop they were to leave the train at, on `key`
+    var ts: Double
+}
+
 struct BoardingPrompt: Equatable {
     enum Reason: String { case unsure, switched, assumed }
     var leg: Int
@@ -56,6 +66,9 @@ final class TripRecorder {
     private(set) var beliefs: [LineBelief] = []
     /// Set when the rider walked off at a stop the route did not plan to leave the train at.
     private(set) var offPlanAlighting: OffPlanAlighting?
+    /// Set when the rider rode on past the stop the route had them leave the train at.
+    private(set) var stayedOn: StayedOn?
+    @ObservationIgnored private var stayedOnChecked: Set<Int> = []
     @ObservationIgnored private var tracker: TripTracker?
     @ObservationIgnored private let sampler = MotionSampler()
     @ObservationIgnored private var legs: [LegPlan] = []
@@ -76,6 +89,15 @@ final class TripRecorder {
     var departureCheckSec = 100.0
     /// Standing this long at a station, with the believed train gone past it, on a same-platform change: off the train.
     var samePlatformStandSec = 90.0
+    /// Walking this long, with the steps begun while the believed train stood at a station by the feed: off the train.
+    var quickChangeWalkSec = 8
+    /// How far from the train's moment at the platform the steps may begin and still be the rider stepping off: a
+    /// little before (the feed's time is an estimate), and up to the doors closing after.
+    var quickChangeBeforeSec = 45.0
+    var quickChangeAfterSec = 75.0
+    /// The believed train must have gone this far past the alighting stop (the feed's time at the stop after it,
+    /// at the platform) before the rider is taken to have stayed on.
+    var stayedOnPastSec = 60.0
     /// Position of a stop on a line (line key, stop index), from the published geometry; set by the planner.
     @ObservationIgnored var stopCoordinate: ((String, Int) -> (lat: Double, lon: Double)?)?
 
@@ -107,6 +129,9 @@ final class TripRecorder {
         return belief(leg: leg) == nil && (candidates[leg] ?? []).isEmpty && !dismissed.contains(leg) && !handSet.contains(leg)
     }
 
+    /// On a train right now (not on the way, at the platform, or between trains at the change).
+    var onTrain: Bool { tracker?.onTrain ?? false }
+
     /// The leg in hand (legs ridden so far) and the lines the route allows on it, for the rider's own say.
     var currentLeg: Int { tracker?.timeline.legsRidden ?? 0 }
     var currentLegKeys: [String] { currentLeg < legs.count ? legs[currentLeg].keys : [] }
@@ -119,6 +144,7 @@ final class TripRecorder {
         self.legs = legs
         log.reset(); transferLog.reset(); logLeg = -1; candidates = [:]; beliefs = []; seenEvents = 0; handSet = []; dismissed = []
         departureBeliefs = [:]; departedTs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
+        stayedOn = nil; stayedOnChecked = []
         publish()
         if let o = observation { Telemetry.shared.beginTrip(o) }
         MotionTrace.shared.begin(ts: start.startTs)
@@ -132,8 +158,41 @@ final class TripRecorder {
     private func motion(_ m: MotionSecond) {
         MotionTrace.shared.add(m)
         tracker?.motion(m)
+        checkQuickChange()
         handleEvents()
         publish()
+    }
+
+    /// A walk that began while the train the phone believes the rider is on stood at a station, by the feed's
+    /// times for its stops: the rider stepping off, even though the detector did not see the train come to rest
+    /// first (people boarding keep a standing train shaking; a rider heading for the doors keeps the phone moving).
+    /// Oct 8: both changes across the platform at Jay St were 11 to 12 s walks the detector let pass.
+    private func checkQuickChange() {
+        guard let t = tracker, t.phase == .riding, let walk = t.walking, walk.seconds >= quickChangeWalkSec,
+              t.timeline.events.last?.kind == .departed, let c = trainInHand else { return }
+        let lag = PlatformTiming.recordedLag(route: c.route)
+        let atStop = c.stopTs.contains { idx, feedTs in
+            idx > c.boardIdx && walk.startTs >= feedTs - lag - quickChangeBeforeSec && walk.startTs <= feedTs - lag + quickChangeAfterSec
+        }
+        guard atStop else { return }
+        tracker?.alightWalking(at: walk.startTs)
+    }
+
+    /// The believed train has gone on past the stop the route had the rider leave it at (the feed has it at the
+    /// stop after, a minute ago or more) and no walk-off was felt: the rider stayed on. Told once per leg; the
+    /// planner re-routes along the line (the A on to Jay St for the F rather than the F from W 4 St).
+    private func checkStayedOn(now: Double) {
+        guard let t = tracker, t.phase == .riding else { return }
+        let leg = t.timeline.legsRidden
+        guard !stayedOnChecked.contains(leg), t.timeline.events.last?.kind == .departed, let c = trainInHand, let past = c.alightIdx,
+              let progress = c.progressIdx, progress > past else { return }
+        let lag = PlatformTiming.recordedLag(route: c.route)
+        // the stop after the alighting stop, reached by the feed's reckoning a while ago
+        guard let nextTs = c.stopTs.filter({ $0.key > past }).min(by: { $0.key < $1.key })?.value, now - (nextTs - lag) >= stayedOnPastSec else { return }
+        // and the phone has felt the train move since the alighting stop went by (not standing on its platform)
+        guard let moving = t.lastMovingTs, moving > (c.stopTs[past].map { $0 - lag } ?? 0) else { return }
+        stayedOnChecked.insert(leg)
+        stayedOn = StayedOn(leg: leg, key: c.key, trainId: c.trainId, pastIdx: past, ts: now)
     }
 
     /// A location fix. Soon after a walk-off, the fix says which station the rider is at: its distance to each
@@ -145,7 +204,8 @@ final class TripRecorder {
            let b = belief(leg: la.leg), !b.assumed, let cands = candidates[la.leg], let sc = stopCoordinate {
             var dist: [String: Double] = [:]
             for cd in cands {
-                if let ai = cd.alightIdx, let p = sc(cd.key, ai) { dist[cd.trainId] = haversineM((c.lat, c.lon), p) }
+                // each train against the stop a rider on it would have walked off at (its own nearest stop, off the plan)
+                if let ai = inference.alightingStop(cd, at: la.ts), let p = sc(cd.key, ai) { dist[cd.trainId] = haversineM((c.lat, c.lon), p) }
             }
             if !dist.isEmpty {
                 locationApplied.insert(la.leg)
@@ -177,6 +237,21 @@ final class TripRecorder {
         rideEvidence(now: now)
         checkDepartureMade(now: now)
         checkSamePlatformChange(now: now)
+        checkStayedOn(now: now)
+    }
+
+    /// The train the plan has the rider on for each leg still to board, as the planner's itinerary stands now:
+    /// kept up until the leg's boarding time passes (the planner then moves on to the next train, but the rider
+    /// presumably took this one), so a ride assumed from the schedule, the candidates' `chosen` mark and the
+    /// plan's fallback all name the train actually in question.
+    func updatePlannedTrains(_ trains: [Int: (key: String, trainId: String)], now: Double) {
+        guard let t = tracker, t.phase != .arrived else { return }
+        let riding = t.phase == .riding ? t.timeline.legsRidden : -1
+        for (leg, tr) in trains where leg < legs.count && leg >= t.timeline.legsRidden && leg != riding && departedTs[leg] == nil {
+            guard legs[leg].keys.contains(tr.key) else { continue }
+            legs[leg].chosenKey = tr.key
+            legs[leg].chosenTrainId = tr.trainId
+        }
     }
 
     /// A felt pull-away that no train made. About a minute and a half on, the feed has had time to show a train that
@@ -276,7 +351,7 @@ final class TripRecorder {
                 candidates[leg] = cands
                 // the ride's evidence first (from the departure belief), then the stop count and the arrival time
                 var b = departureBeliefs[leg].map { inference.withRide($0, candidates: cands, stopTimes: t.lastRideStopTimes, now: e.ts) } ?? current
-                if let stops = t.timeline.rideStops.last { b = inference.withStops(b, candidates: cands, stopsFelt: stops) }
+                if let stops = t.timeline.rideStops.last { b = inference.withStops(b, candidates: cands, stopsFelt: stops, departedTs: departedTs[leg], alightedTs: e.ts) }
                 store(inference.withAlighting(b, candidates: cands, alightedTs: e.ts))
                 checkAlightingStop(leg: leg, ts: e.ts)
             }
@@ -385,6 +460,7 @@ final class TripRecorder {
             if let d = departureBeliefs[leg] { var nd = d; nd.chosenKey = legs[leg].chosenKey; departureBeliefs[leg] = nd }
         }
         dismissed.remove(leg)
+        stayedOn = nil
         tracker?.replan(legs: max(1, newLegs.count), transferStation: transferStation)
         publish()
     }
@@ -421,7 +497,17 @@ final class TripRecorder {
         guard let t = tracker, t.phase == .riding else { return nil }
         let leg = t.timeline.legsRidden
         guard let b = belief(leg: leg), b.settled || b.byHand, let id = b.bestTrain else { return nil }
-        return (candidates[leg] ?? []).first { $0.trainId == id }
+        return (candidates[leg] ?? []).first { $0.trainId == id } ?? log.entry(id, chosenTrainId: legs[leg].chosenTrainId)
+    }
+
+    /// The train the rider is on as far as the phone can say: the one it settled on or the rider named, else the
+    /// plan's train for the leg as the log has followed it (the ride felt but no train matched, or none settled).
+    private var trainInHand: BoardingCandidate? {
+        if let c = boardedCandidate { return c }
+        guard let t = tracker, t.phase == .riding else { return nil }
+        let leg = t.timeline.legsRidden
+        guard leg < legs.count, let id = legs[leg].chosenTrainId else { return nil }
+        return log.entry(id, chosenTrainId: id)
     }
 
     func tick(now: Double) {
@@ -451,6 +537,7 @@ final class TripRecorder {
         legs = []
         log.reset(); transferLog.reset(); candidates = [:]; departedTs = [:]; handSet = []
         departureBeliefs = [:]; lastAlight = nil; locationApplied = []; departureChecked = []; offPlanAlighting = nil
+        stayedOn = nil; stayedOnChecked = []
         phase = nil
         motionState = .unknown
         endReason = tl.endedBy

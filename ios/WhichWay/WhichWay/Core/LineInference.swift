@@ -25,6 +25,7 @@ struct BoardingCandidate: Equatable {
     var stopTs: [Int: Double] = [:]       // the feed's latest time at each stop past the boarding stop (kept once the train has passed)
     var progressIdx: Int? = nil           // the train's next stop index at the last poll
     var samePlatform: Bool = true         // boards at the leg's own platform (else another platform of the station: the 8 Av L beside the A/C/E)
+    var atOrigin: Bool = false            // the boarding stop is the train's first: its time there is the timetable's departure, not an arrival the feed saw
 }
 
 /// The train and line a leg was ridden on, as kept in the trip's record and shared if the rider shares trips.
@@ -119,6 +120,7 @@ struct DepartureLog: Equatable {
         var stopTs: [Int: Double] = [:]
         var progressIdx: Int? = nil
         var samePlatform: Bool = true
+        var atOrigin: Bool = false
     }
 
     private(set) var entries: [String: Entry] = [:]
@@ -142,7 +144,8 @@ struct DepartureLog: Equatable {
                 e = known
             } else {
                 guard let b = atBoard else { continue }
-                e = Entry(trainId: t.id, key: key, route: route, boardTs: b, alightTs: nil, stops: nil, onLeg: onLeg, lastSeenTs: now, boardIdx: boardIdx, samePlatform: samePlatform)
+                e = Entry(trainId: t.id, key: key, route: route, boardTs: b, alightTs: nil, stops: nil, onLeg: onLeg, lastSeenTs: now, boardIdx: boardIdx, samePlatform: samePlatform,
+                          atOrigin: boardIdx == 0)
             }
             if let b = atBoard { e.boardTs = b }
             e.lastSeenTs = now
@@ -164,7 +167,7 @@ struct DepartureLog: Equatable {
     private func candidate(_ e: Entry, chosenTrainId: String?) -> BoardingCandidate {
         BoardingCandidate(trainId: e.trainId, key: e.key, route: e.route, boardTs: e.boardTs, alightTs: e.alightTs,
                           stopsToAlight: e.stops, chosen: e.trainId == chosenTrainId, onLeg: e.onLeg, boardIdx: e.boardIdx, alightIdx: e.alightIdx,
-                          stoppedAtBoardTs: e.stoppedAtBoardTs, stopTs: e.stopTs, progressIdx: e.progressIdx, samePlatform: e.samePlatform)
+                          stoppedAtBoardTs: e.stoppedAtBoardTs, stopTs: e.stopTs, progressIdx: e.progressIdx, samePlatform: e.samePlatform, atOrigin: e.atOrigin)
     }
 
     /// The trains whose time at the boarding stop fell within `windowSec` of a departure felt at `ts`.
@@ -187,6 +190,12 @@ struct DepartureLog: Equatable {
 
     func progressIdx(of trainId: String) -> Int? { entries[trainId]?.progressIdx }
 
+    /// One train the log follows, as a candidate, whatever its time at the platform was: the plan's own train
+    /// when the sensors never named one.
+    func entry(_ trainId: String, chosenTrainId: String? = nil) -> BoardingCandidate? {
+        entries[trainId].map { candidate($0, chosenTrainId: chosenTrainId) }
+    }
+
     /// A train the rider says they are on, taken up after it has left the platform (the log never saw it there):
     /// from here on the feed's polls keep its stop times and progress like any other entry.
     mutating func seed(_ c: BoardingCandidate, now: Double) {
@@ -197,7 +206,7 @@ struct DepartureLog: Equatable {
         }
         entries[c.trainId] = Entry(trainId: c.trainId, key: c.key, route: c.route, boardTs: c.boardTs, alightTs: c.alightTs, stops: c.stopsToAlight, onLeg: c.onLeg,
                                    lastSeenTs: now, boardIdx: c.boardIdx, alightIdx: c.alightIdx, stoppedAtBoardTs: c.stoppedAtBoardTs, stopTs: c.stopTs, progressIdx: c.progressIdx,
-                                   samePlatform: c.samePlatform)
+                                   samePlatform: c.samePlatform, atOrigin: c.atOrigin)
     }
 
     mutating func reset() { entries = [:]; lastPollTs = 0 }
@@ -221,7 +230,7 @@ struct LineInference {
     var priorChosenFirstLeg = 0.5          // the plan is a coin toss against the other trains at the platform: the sensors decide
     var priorChosenLaterLeg = 0.7          // once the trip is under way the plan's transfer line is the stronger bet
     var otherLineAtPlatformWeight = 0.8    // a line that is not one of the leg's (a G beside the F) is a real choice, nearly on a par
-    var otherPlatformWeight = 0.4          // a line at another platform of the station (the 8 Av L from the A/C/E) needs a walk the plan did not have
+    var otherPlatformWeight = 0.2          // a line at another platform of the station (the 8 Av L from the A/C/E, the R under the F) needs a detour the plan did not have
     var priorNone = 0.1                    // "none of these trains": one the feed did not show, or a departure that was not a train
     var noneLike = 0.2                     // how well "none of these" fits each piece of evidence: a candidate about 1.8 sigma off
     var dwellSec = PlatformTiming.dwellSec // the train pulls away about this long after it really reached the platform
@@ -229,6 +238,11 @@ struct LineInference {
     /// time runs 30 to 90 s late depending on the line. Tests that reason in feed time set this to zero.
     var recordedLag: (String) -> Double = { PlatformTiming.recordedLag(route: $0) }
     var departureSigmaSec = 40.0
+    /// A train at its first stop (the L laying over at 8 Av) has no arrival the feed could have seen: its time
+    /// there is the timetable's departure, which the real pull-away misses by a minute or two either way. The
+    /// looser fit is also a weaker one: its likelihood is scaled by the ratio of the sigmas, so a train the feed
+    /// actually tracked to the platform outweighs one whose time is a guess, even when the guess lands closer.
+    var terminalDepartureSigmaSec = 120.0
     var departureWindowSec = 300.0
     var alightLagSec = 20.0                // the rider walks off about this long after the train really reached the platform
     var alightSigmaSec = 75.0
@@ -260,7 +274,9 @@ struct LineInference {
         var lineMass: [String: Double] = [:]
         if hasChosen, let ck = chosenKey {
             lineMass[ck] = otherTotal > 0 ? pc : 1.0
-            for (k, w) in lineWeight { lineMass[k] = (1 - pc) * w / otherTotal }
+            // the other lines share the rest in proportion to their weights; a lone weak alternative (the L from the
+            // other platform, and nothing else) keeps its weight rather than inheriting the whole remainder
+            for (k, w) in lineWeight { lineMass[k] = (1 - pc) * w / max(otherTotal, 1.0) }
         } else {
             for (k, w) in lineWeight { lineMass[k] = otherTotal > 0 ? w / otherTotal : 0 }
         }
@@ -304,7 +320,8 @@ struct LineInference {
         var w: [String: Double] = [:]
         for c in cands {
             let delta = departedTs - (c.boardTs - recordedLag(c.route) + dwellSec)
-            var like = gaussian(delta, sigma: departureSigmaSec)
+            let sigma = c.atOrigin ? terminalDepartureSigmaSec : departureSigmaSec
+            var like = gaussian(delta, sigma: sigma) * (departureSigmaSec / sigma)
             if positions {
                 like *= c.stoppedAtBoardTs.map { stoppedAtFloor + (1 - stoppedAtFloor) * exp(-0.5 * pow(max(0, departedTs - $0 - 15) / stoppedAtSigmaSec, 2)) } ?? stoppedAtFloor
             }
@@ -351,24 +368,56 @@ struct LineInference {
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["location"])
     }
 
-    /// The belief after the ride: `stopsFelt` station stops were felt between the departure and walking off.
-    func withStops(_ b: LineBelief, candidates cands: [BoardingCandidate], stopsFelt: Int) -> LineBelief {
-        guard !b.byTrain.isEmpty, cands.contains(where: { $0.stopsToAlight != nil }) else { return b }
+    /// The moment a candidate really reached stop `idx`, from the feed's time the log kept for it.
+    private func atPlatform(_ c: BoardingCandidate, _ idx: Int) -> Double? {
+        c.stopTs[idx].map { $0 - recordedLag(c.route) }
+    }
+
+    /// The stop a rider on this train walked off at, at `ts`: the leg's own alighting stop when the line serves it,
+    /// else the train's own stop nearest that moment (an L the rider was never on would have been at 6 Av or Union
+    /// Sq then). So a train off the plan is judged on where it actually was, not spared for serving no stop of the plan.
+    func alightingStop(_ c: BoardingCandidate, at ts: Double) -> Int? {
+        if let a = c.alightIdx { return a }
+        return c.stopTs.keys.filter { $0 > c.boardIdx }.min { a, b in
+            abs((atPlatform(c, a) ?? .infinity) - ts) < abs((atPlatform(c, b) ?? .infinity) - ts)
+        }
+    }
+
+    /// The station stops this train made between the departure and the walk-off, by the feed's times, when the
+    /// leg's own count does not apply (a line off the plan): how many of its stops fell inside the ride.
+    func stopsMade(_ c: BoardingCandidate, departedTs: Double, alightedTs: Double) -> Int? {
+        if let s = c.stopsToAlight { return s }
+        let made = c.stopTs.keys.filter { $0 > c.boardIdx }.compactMap { atPlatform(c, $0) }.filter { $0 > departedTs && $0 <= alightedTs + alightLagSec }
+        return c.stopTs.isEmpty ? nil : made.count
+    }
+
+    /// The belief after the ride: `stopsFelt` station stops were felt between the departure and walking off. A
+    /// train that does not serve the leg's alighting stop is judged on the stops it made over the ride, by the
+    /// feed's own times, when `departedTs` and `alightedTs` are given.
+    func withStops(_ b: LineBelief, candidates cands: [BoardingCandidate], stopsFelt: Int, departedTs: Double? = nil, alightedTs: Double? = nil) -> LineBelief {
+        guard !b.byTrain.isEmpty else { return b }
+        func expected(_ c: BoardingCandidate) -> Int? {
+            if let d = departedTs, let a = alightedTs { return stopsMade(c, departedTs: d, alightedTs: a) }
+            return c.stopsToAlight
+        }
+        guard cands.contains(where: { expected($0) != nil }) else { return b }
         var w: [String: Double] = none(b, informative: true)
         for c in cands {
-            let like = c.stopsToAlight.map { floor + (1 - floor) * pow(stopMiscountFactor, Double(abs(stopsFelt - $0))) } ?? 1.0
+            let like = expected(c).map { floor + (1 - floor) * pow(stopMiscountFactor, Double(abs(stopsFelt - $0))) } ?? 1.0
             w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["stops"])
     }
 
     /// The belief after the rider walked off at `alightedTs`, against each train's arrival at the alighting stop.
-    /// A train that does not serve that stop keeps only the floor.
+    /// A train that does not serve that stop is judged against its own stop nearest the walk-off (`alightingStop`);
+    /// one with no stop times known keeps only the floor.
     func withAlighting(_ b: LineBelief, candidates cands: [BoardingCandidate], alightedTs: Double) -> LineBelief {
-        guard !b.byTrain.isEmpty, cands.contains(where: { $0.alightTs != nil }) else { return b }
+        guard !b.byTrain.isEmpty, cands.contains(where: { $0.alightTs != nil || !$0.stopTs.isEmpty }) else { return b }
         var w: [String: Double] = none(b, informative: true)
         for c in cands {
-            let like = c.alightTs.map { gaussian(alightedTs - ($0 - recordedLag(c.route) + alightLagSec), sigma: alightSigmaSec) } ?? floor
+            let arrival = c.alightTs ?? alightingStop(c, at: alightedTs).flatMap { c.stopTs[$0] }
+            let like = arrival.map { gaussian(alightedTs - ($0 - recordedLag(c.route) + alightLagSec), sigma: alightSigmaSec) } ?? floor
             w[c.trainId] = (b.byTrain[c.trainId] ?? 0) * like
         }
         return belief(leg: b.leg, chosenKey: b.chosenKey, weights: w, cands: cands, evidence: b.evidence + ["alighting"])

@@ -84,4 +84,41 @@ final class RidingItineraryTests: XCTestCase {
         XCTAssertEqual(it.totalSec, 210 - lagC)
         XCTAssertEqual(it.rideVsSchedSec, 310 - 660)
     }
+
+
+    func testThePlansTrainBecomesTheRideWhenNoneWasFeltAndTheConnectionStandsBetweenTrains() throws {
+        // no pull-away felt or named: the train the planner's itinerary boards is the ride, as the log would have kept it
+        let sched = try schedule()
+        let g = train("g1", key: "G_N", points: [(0, 1000 + lagG), (1, 1400 + lagG), (2, 1690 + lagG)])
+        let c = train("c1", key: "C_N", points: [(1, 1900 + lagC), (3, 2500 + lagC)])
+        let c2 = train("c2", key: "C_N", points: [(1, 2200 + lagC), (3, 2800 + lagC)])
+        let boards = ["G_N": board("G_N", [g]), "C_N": board("C_N", [c, c2])]
+        let it = try XCTUnwrap(pathTrips(boards: boards, schedule: sched, option: option, now: 900).first)
+        let pc = try XCTUnwrap(plannedCandidate(it, option: option, leg: 0))
+        XCTAssertEqual(pc.trainId, "G_N|g1")
+        XCTAssertEqual(pc.key, "G_N")
+        XCTAssertEqual(pc.boardTs, 1000 + lagG, accuracy: 1e-6, "the feed's time at the boarding stop, as the log keeps it")
+        XCTAssertEqual(pc.boardIdx, 0)
+        XCTAssertEqual(pc.alightIdx, 2)
+        XCTAssertEqual(pc.stopsToAlight, 2)
+        XCTAssertEqual(pc.stopTs[2]!, 1690 + lagG, accuracy: 1e-6)
+        XCTAssertTrue(pc.chosen)
+        // the ride it describes: the G's own arrival at Hoyt and the C it makes there
+        let ride = try XCTUnwrap(ridingItinerary(boards: boards, schedule: sched, option: option, leg: 0, boarded: pc, now: 1100))
+        XCTAssertEqual(ride.legs.count, 2)
+        XCTAssertEqual(ride.legs[0].arriveTs, 1690, accuracy: 1e-6)
+        XCTAssertEqual(ride.legs[1].train.id, "C_N|c1")
+        XCTAssertEqual(ride.nextIfMissedSec!, 300, accuracy: 1e-6)
+        // an itinerary carrying only the leg in hand names its train at index 0
+        XCTAssertEqual(plannedCandidate(ride, option: option, leg: 0)?.trainId, "G_N|g1")
+        // walked off at Hoyt: the connection from there, with the one after it
+        let conn = try XCTUnwrap(connectionItinerary(boards: boards, schedule: sched, option: option, leg: 1, now: 1750))
+        XCTAssertEqual(conn.legs.count, 1)
+        XCTAssertEqual(conn.legs[0].train.id, "C_N|c1")
+        XCTAssertEqual(conn.boardTs, 1900, accuracy: 1e-6)
+        XCTAssertEqual(conn.arriveTs, 2500, accuracy: 1e-6)
+        XCTAssertEqual(conn.nextIfMissedSec!, 300, accuracy: 1e-6)
+        // once the first C has pulled away the next one is the connection
+        XCTAssertEqual(connectionItinerary(boards: boards, schedule: sched, option: option, leg: 1, now: 1900 + PlatformTiming.dwellSec + 1)?.legs[0].train.id, "C_N|c2")
+    }
 }

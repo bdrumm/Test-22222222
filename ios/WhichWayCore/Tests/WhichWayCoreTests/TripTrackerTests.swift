@@ -249,4 +249,40 @@ final class TripTrackerTests: XCTestCase {
         // the data is small: a trip that measured nothing teaches nothing
         XCTAssertFalse(m.learn(TripTimeline(startTs: 1, startedBy: "gps", originStation: "S", destStation: "D", legs: 1)))
     }
+
+
+    func testAWalkTheFeedVouchesForClosesTheRideWithoutTheTrainSeenAtRest() {
+        // Oct 8 at Jay St, twice: the rider crossed the platform in 11 to 12 s of walking that began while the train still
+        // read as moving (people boarding, the phone in a hand heading for the doors), so the detector let it pass
+        var t = TripTracker(start(legs: 2, transfer: "S4"), distanceToOriginM: 20)
+        var ts = 1000.0
+        func feed(_ n: Int, walking: Bool, push: Double = 0.005, shake: Double = 0.005) { for _ in 0..<n { t.motion(sec(ts, walking: walking, push: push, shake: shake)); ts += 1 } }
+        feed(30, walking: false)
+        feed(6, walking: false, push: 0.08, shake: 0.03)          // pulls away at 1030
+        XCTAssertEqual(t.phase, .riding)
+        XCTAssertTrue(t.onTrain)
+        feed(200, walking: false, shake: 0.04)                     // rolling
+        XCTAssertEqual(t.lastMovingTs!, ts - 1, accuracy: 0.5)
+        XCTAssertNil(t.walking)
+        feed(10, walking: true, shake: 0.03)                       // steps with the car still shaking
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed], "no rest seen before the steps: the detector does not call it")
+        XCTAssertEqual(t.walking?.seconds, 10)
+        XCTAssertEqual(t.walking!.startTs, ts - 10, accuracy: 0.5)
+        // the recorder: the believed train stood at a station then, by the feed
+        let off = t.walking!.startTs
+        t.alightWalking(at: off)
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted])
+        XCTAssertEqual(t.timeline.events.last!.ts, off)
+        XCTAssertEqual(t.timeline.rideStops, [0])
+        XCTAssertEqual(t.phase, .riding, "the trip goes on to the next train")
+        XCTAssertFalse(t.onTrain, "but between trains now")
+        XCTAssertEqual(t.timeline.legsRidden, 1)
+        feed(20, walking: true)                                    // the rest of the walk across
+        XCTAssertGreaterThanOrEqual(t.timeline.walkingSecondsBetweenTrains, 30)
+        feed(40, walking: false)
+        feed(6, walking: false, push: 0.08, shake: 0.03)          // the next train pulls away
+        XCTAssertEqual(t.timeline.events.map(\.kind), [.departed, .alighted, .departed])
+        XCTAssertTrue(t.onTrain)
+        XCTAssertEqual(t.timeline.transferWalkSec!, 30, accuracy: 1)
+    }
 }

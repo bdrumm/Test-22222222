@@ -107,7 +107,8 @@ for each new service date, and `/api/live`, `/api/plan?journey=`,
 
 For local development without Docker, the `Makefile` wraps the same pieces:
 `make venv`, `make site-synthetic` (offline preview) or `make site` (full build
-from the collected history), `make serve` (http://localhost:8000), `make test`,
+from the collected history), `make serve` (http://localhost:8000; `make serve-agent` keeps it running as a
+launchd agent that starts at login and restarts if it stops, so a reboot leaves no gap in the store), `make test`,
 and for the iOS app `make ios`, `make ios-build`, `make ios-test`
 (see [ios/README.md](ios/README.md)).
 
@@ -685,6 +686,48 @@ the origin station at a walking pace starts the route on the way, so the
 sensors see the street, the platform and the pull-away in order instead of
 starting cold at a tap; a push felt while a fresh fix still puts the rider
 hundreds of metres from the station is not a train.
+
+**The route follows the ride** (Oct 8). Once the rider is on a train, the
+Now card and the Live Activity describe that ride, not the planner's next
+train from the origin: "On the A · off 17:51" with the countdown to getting
+off, the connection the train in hand makes ("F at 17:56 · 2:10 margin"),
+the arrival as that train makes it, and the stops still to go. Between
+trains at the change they show the connection from that platform. The train
+followed is the one the phone settled on or the rider named; failing that,
+the plan's own train, which the planner keeps up for each leg until the rider
+is at its platform and its boarding time has passed (the planner then moves
+on to the next train; the rider presumably took this one). The same train
+names a ride assumed from the timetable, so "On the C, presumably" means the
+C that left, not the one that was next when the route began.
+
+Two more things the Oct 8 rides taught. A rider who stays on past the
+stop where the route had them change (the A on past W 4 St to Jay St, where
+the F is across the platform) is noticed once the feed has their train a stop
+beyond and a minute on with no walk-off felt: the route becomes the one that
+rides the same line on to a later change, or straight to the destination,
+whichever gets there first on that train. And a quick change across the
+platform, eight seconds or more of walking that began while the feed had the
+believed train standing at a station, ends the ride even when the detector
+never saw the train come to rest (people boarding keep a standing train
+shaking; a hand carrying the phone to the doors keeps it moving); the
+detector's own test for rest before the steps is three seconds now, not five.
+
+The line inference is harder to fool from the other platform. A train at its
+first stop (the L laying over at 8 Av beside the A/C/E at 14 St) has no
+arrival the feed could have seen; its time there is the timetable's
+departure, so its fit to the felt pull-away is scored with a sigma of two
+minutes and scaled down by the ratio of the sigmas: a train the feed tracked
+in to the platform outweighs one whose time is a guess, even when the guess
+lands closer. A line from another platform starts with a fifth of the weight
+of one of the leg's own, in absolute terms, not inflated to fill the
+remainder when it is the only alternative. And after the walk-off, a train
+that does not serve the leg's alighting stop is judged on where it actually
+was: its own stop nearest the walk-off (time and distance from the fix) and
+the stops it made over the ride, rather than keeping full weight for serving
+no stop of the plan. On Oct 7 and 8 the phone had called the L at 14 St and
+the R at 4 Av-9 St, both from the other platform, at 80 to 97%: the rides had
+been read as one long leg because the change at Jay St went unfelt, and only
+the lines of the plan were being punished for it.
 
 **A route from anywhere.** Start route works far from the station: the trip is *approaching* (fixes every ten
 metres, the walk line follows), *at the station* within 150 m (or at once if started there), *riding* once the

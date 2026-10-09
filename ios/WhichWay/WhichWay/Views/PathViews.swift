@@ -59,6 +59,14 @@ struct NowCard: View {
     /// A pinned place the phone is at, and how long the rider usually takes from there to the station.
     var placeName: String? = nil
     var placeUsualSec: Double? = nil
+    /// While the route is under way: on the train, the ride in progress (the train the rider is on and the
+    /// connection it makes); between trains at the change, the connection. Shown in place of the planner's next
+    /// itinerary, which moved on to the next train when the rider's left.
+    var ride: Itinerary? = nil
+    var rideLeg = 0
+    var onTrain = false
+    var ridingRoute: String? = nil
+    var ridePresumed = false
     let originName: String
     let destName: String
     /// Opens the route's insights.
@@ -72,8 +80,16 @@ struct NowCard: View {
         return NearbyStation(station: st, meters: haversineM((l.coordinate.latitude, l.coordinate.longitude), c))
     }
 
-    /// The itinerary after the one on the card, on the same route: the train to take if this one is missed.
+    /// The itinerary after the one on the card, on the same route: the train to take if this one is missed. On the
+    /// train, the connection after the one the ride makes.
     private var nextItinerary: Itinerary? {
+        if let r = ride {
+            guard !onTrain || r.legs.count > 1, let s = r.nextIfMissedSec else { return nil }
+            var n = r
+            n.boardTs = (onTrain ? r.legs[1].boardTs : r.boardTs) + s
+            n.legs = onTrain ? Array(r.legs.dropFirst()) : r.legs
+            return n
+        }
         guard let p = option, let it = p.live, let sched = data.schedule else { return nil }
         return pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
     }
@@ -89,7 +105,7 @@ struct NowCard: View {
             let now = data.now
             VStack(alignment: .leading, spacing: 10) {
                 if let p = option {
-                    let it = p.live
+                    let it = ride ?? p.live
                     headerRow(p, it, now: now)
                     changeRow(p, it)
                     arriveRow(p, it)
@@ -125,10 +141,28 @@ struct NowCard: View {
     private let stepFont = Font.subheadline.weight(.semibold)
     private let detailFont = Font.caption
 
-    /// Step 1, the most prominent: the train to take and the countdown to it.
+    /// Where the rider leaves the train they are on: the change ahead, or the destination.
+    private func offAt(_ p: PathOption) -> String {
+        p.legs.count > 1 && rideLeg == 0 ? (p.transfer?.station ?? "the change") : destName
+    }
+
+    /// Step 1, the most prominent: the train to take and the countdown to it. On the train: the line the rider is
+    /// on, where they get off it and the countdown to that.
     @ViewBuilder private func headerRow(_ p: PathOption, _ it: Itinerary?, now: Double) -> some View {
         HStack(alignment: .center, spacing: 8) {
-            if let it = it, let l0 = it.legs.first {
+            if onTrain, let l0 = it?.legs.first {
+                Text(ridePresumed ? "Presumably on the" : "On the").font(.subheadline).foregroundStyle(.secondary)
+                RouteBullet(route: ridingRoute ?? l0.train.route, size: 26)
+                Text("off \(Fmt.hhmm(l0.arriveTs))").font(.title2.bold()).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer()
+                Text(Fmt.mmss(max(0, l0.arriveTs - now))).font(countdownFont).monospacedDigit()
+            } else if onTrain {
+                Text(ridePresumed ? "Presumably on the" : "On the").font(.subheadline).foregroundStyle(.secondary)
+                RouteBullets(routes: Array((ridingRoute.map { [$0] } ?? p.legs[min(rideLeg, p.legs.count - 1)].routes).prefix(1)), size: 26)
+                Text("to \(offAt(p))").font(.title2.bold()).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer()
+                ghost("0:00", countdownFont)
+            } else if let it = it, let l0 = it.legs.first {
                 Text("Take the").font(.subheadline).foregroundStyle(.secondary)
                 RouteBullet(route: l0.train.route, size: 26)
                 Text("at \(Fmt.hhmm(it.boardTs))").font(.title2.bold()).lineLimit(1)
@@ -136,8 +170,8 @@ struct NowCard: View {
                 Text(Fmt.mmss(max(0, it.boardTs - now))).font(countdownFont).monospacedDigit()
             } else {
                 Text("Take the").font(.subheadline).foregroundStyle(.secondary)
-                RouteBullets(routes: Array(p.legs[0].routes.prefix(1)), size: 26)
-                Text("from \(originName)").font(.title2.bold()).lineLimit(1)
+                RouteBullets(routes: Array(p.legs[min(rideLeg, p.legs.count - 1)].routes.prefix(1)), size: 26)
+                Text("from \(rideLeg > 0 ? (p.transfer?.station ?? originName) : originName)").font(.title2.bold()).lineLimit(1)
                 Spacer()
                 ghost("0:00", countdownFont)
             }
@@ -146,12 +180,22 @@ struct NowCard: View {
         .padding(.bottom, -5)
     }
 
+    /// On the train: how many stops are left before the rider gets off, from the feed's progress.
+    private func stopsToGo(_ c: TripCandidate, option p: PathOption) -> (text: String, fraction: Double) {
+        guard p.legs.indices.contains(rideLeg), let ix = p.legs[rideLeg].idx[c.key] else { return ("", 0) }
+        let total = max(1, ix.to - ix.from)
+        if let pos = c.train.position, pos.status == "STOPPED_AT", pos.stopIdx == ix.to { return ("At \(offAt(p))", 1) }
+        let n = ix.to - c.train.nextIdx + 1
+        if n <= 0 { return ("Arriving at \(offAt(p))", 0.95) }
+        return ("\(min(n, total)) stop\(n == 1 ? "" : "s") to go", max(0, 1 - Double(min(n, total)) / Double(total)))
+    }
+
     /// Where that train is: stops from your platform on one line, the stop it is at on the next, a small track to
-    /// the right.
+    /// the right. On the train, the stops left before getting off.
     @ViewBuilder private func stopsRow(_ p: PathOption, _ it: Itinerary?) -> some View {
         HStack(alignment: .center, spacing: 6) {
             if let it = it, let l0 = it.legs.first {
-                let away = stopsAway(l0, option: p)
+                let away = onTrain ? stopsToGo(l0, option: p) : stopsAway(l0, option: p, leg: rideLeg)
                 Image(systemName: "tram.fill").font(.caption).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(away.text).font(stepFont).lineLimit(1)
@@ -202,13 +246,15 @@ struct NowCard: View {
     }
 
     /// Step 2: the change to make, or that the route is direct, with its details on their own line so nothing is cut off.
+    /// On the train with a change ahead, the connection it makes; past the change, that it is made.
     @ViewBuilder private func changeRow(_ p: PathOption, _ it: Itinerary?) -> some View {
+        let pastChange = p.legs.count > 1 && rideLeg > 0
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 if p.legs.count > 1, let tr = p.transfer {
-                    Image(systemName: "arrow.triangle.swap").font(.caption).foregroundStyle(.secondary)
-                    Text("Change at \(tr.station)").font(stepFont).lineLimit(1)
-                    Text("to the \(p.legs[1].routesLabel)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Image(systemName: pastChange ? "checkmark" : "arrow.triangle.swap").font(.caption).foregroundStyle(.secondary)
+                    Text(pastChange ? "Changed at \(tr.station)" : "Change at \(tr.station)").font(stepFont).lineLimit(1)
+                    Text(pastChange ? "" : "to the \(p.legs[1].routesLabel)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 } else {
                     Image(systemName: "arrow.right").font(.caption).foregroundStyle(.secondary)
                     Text("Direct").font(stepFont)
@@ -218,7 +264,18 @@ struct NowCard: View {
             }
             Group {
                 if p.legs.count > 1, let tr = p.transfer {
-                    if let it = it, let m = it.connectionMarginSec {
+                    if pastChange {
+                        Text(it.map { "on the \($0.legs[0].train.route) · \(Fmt.minTxt($0.legs[0].rideSec)) ride" } ?? "the last leg").foregroundStyle(.secondary)
+                    } else if onTrain, let it = it, it.legs.count > 1 {
+                        // the connection the train in hand makes
+                        let b = it.legs[1]
+                        let m = it.connectionMarginSec ?? 0
+                        Text("\(b.train.route) at \(Fmt.hhmm(b.boardTs)) · \(Fmt.mmss(m)) margin" + (tr.walkSec > 0 ? " · \(Fmt.mmss(Double(tr.walkSec))) walk" : " · same platform")
+                             + (it.nextIfMissedSec.map { " · +\(Fmt.mmss($0)) if missed" } ?? ""))
+                            .foregroundStyle(m < 60 ? Color.red : Color.secondary)
+                    } else if onTrain {
+                        Text("connection not in the feeds yet · " + (tr.walkSec > 0 ? "\(Fmt.mmss(Double(tr.walkSec))) walk between platforms" : "same platform")).foregroundStyle(.secondary)
+                    } else if let it = it, let m = it.connectionMarginSec {
                         Text("\(Fmt.mmss(m)) margin" + (tr.walkSec > 0 ? " · \(Fmt.mmss(Double(tr.walkSec))) walk" : " · same platform")
                              + (it.nextIfMissedSec.map { " · +\(Fmt.mmss($0)) if missed" } ?? ""))
                             .foregroundStyle(m < 60 ? Color.red : Color.secondary)
@@ -534,8 +591,8 @@ struct HourStrip: View {
 
 /// How far a train is from the rider's platform: the words, and a fraction along a ten-stop approach for a
 /// small track (0 = ten or more stops out, 1 = at the platform).
-func stopsAway(_ c: TripCandidate, option: PathOption) -> (text: String, fraction: Double) {
-    guard let from = option.legs[0].idx[c.key]?.from else { return ("", 0) }
+func stopsAway(_ c: TripCandidate, option: PathOption, leg: Int = 0) -> (text: String, fraction: Double) {
+    guard option.legs.indices.contains(leg), let from = option.legs[leg].idx[c.key]?.from else { return ("", 0) }
     if let p = c.train.position, p.status == "STOPPED_AT", p.stopIdx == from { return ("At the platform", 1) }
     let n = from - c.train.nextIdx
     if n <= 0 { return ("Arriving", 0.95) }

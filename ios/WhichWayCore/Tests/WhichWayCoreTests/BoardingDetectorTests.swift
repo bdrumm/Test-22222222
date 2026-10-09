@@ -71,4 +71,18 @@ final class BoardingDetectorTests: XCTestCase {
         run(12, step: 0.002, push: 0.01, shake: 0.03)       // a gentle departure: no clear push, but rolling from t = 1010
         XCTAssertEqual(events, [MotionEvent(kind: .departed, ts: 1010)])
     }
+
+
+    func testThreeQuietSecondsBeforeTheStepsAreEnoughToStepOff() {
+        // a standing train shakes a little as people board: Oct 8 at Jay St the A read as at rest for 4 s before the rider
+        // stepped off; the old 5 s let the change go unseen
+        run(30, step: 0.002, push: 0.005, shake: 0.005)
+        run(6, step: 0.002, push: 0.08, shake: 0.03)         // departs at 1030
+        run(120, step: 0.002, push: 0.01, shake: 0.04)       // rolling
+        run(3, step: 0.002, push: 0.01, shake: 0.01)         // at rest, 3 s
+        let off = t
+        run(10, step: 0.05, push: 0.03, shake: 0.03)         // off and across the platform
+        XCTAssertEqual(events, [MotionEvent(kind: .departed, ts: 1030), MotionEvent(kind: .alighted, ts: off)])
+        XCTAssertEqual(d.state, .walking)
+    }
 }

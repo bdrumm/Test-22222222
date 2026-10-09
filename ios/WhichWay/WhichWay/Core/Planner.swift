@@ -142,6 +142,36 @@ func ridingItinerary(boards: [String: LineBoard], schedule: ClientSchedule, opti
                      nextIfMissedSec: nil, schedRideSec: sched, rideVsSchedSec: (arrive2 - board) - sched)
 }
 
+/// The train the planner's itinerary boards on leg `leg` of `option`, as a boarding candidate the departure log
+/// could have made for it: the feed's time at the boarding stop (the itinerary's platform moment plus the line's
+/// lag), the leg's stops and the train's times at them. The ride the plan has the rider on, when the sensors have
+/// not named a train (or the rider has not), so the card and the Live Activity follow it from the boarding time
+/// on instead of the planner's next train. `it` is the planner's full itinerary, or one carrying only this leg.
+func plannedCandidate(_ it: Itinerary, option: PathOption, leg: Int) -> BoardingCandidate? {
+    let i = it.legs.count == option.legs.count ? leg : 0
+    guard it.legs.indices.contains(i), option.legs.indices.contains(leg) else { return nil }
+    let tc = it.legs[i]
+    guard let ix = option.legs[leg].idx[tc.key] else { return nil }
+    let lag = PlatformTiming.recordedLag(route: tc.train.route)
+    var stopTs: [Int: Double] = [:]
+    for p in tc.train.feedPoints ?? tc.train.points where p.idx > ix.from { stopTs[p.idx] = p.ts }
+    return BoardingCandidate(trainId: tc.train.id, key: tc.key, route: tc.train.route, boardTs: tc.boardTs + lag, alightTs: tc.arriveTs + lag,
+                             stopsToAlight: ix.to - ix.from, chosen: true, onLeg: true, boardIdx: ix.from, alightIdx: ix.to, stopTs: stopTs,
+                             progressIdx: tc.train.nextIdx)
+}
+
+/// Between trains at the change: the next train of leg `leg` from its platform, the one the rider can still make
+/// (a train standing there counts until it pulls away), with the one after it in case it is missed.
+func connectionItinerary(boards: [String: LineBoard], schedule: ClientSchedule, option: PathOption, leg: Int, now: Double) -> Itinerary? {
+    guard option.legs.indices.contains(leg) else { return nil }
+    let trains = legTrips(boards: boards, schedule: schedule, leg: option.legs[leg], now: now, maxN: 6)
+    guard let b = trains.first else { return nil }
+    let next = trains.first { $0.boardTs > b.boardTs }
+    let sched = Double(option.legs[leg].schedRideSec ?? 0)
+    return Itinerary(legs: [b], boardTs: b.boardTs, arriveTs: b.arriveTs, totalSec: b.arriveTs - now, walkSec: 0, waitAtTransferSec: nil, connectionMarginSec: nil,
+                     nextIfMissedSec: next.map { $0.boardTs - b.boardTs }, schedRideSec: sched, rideVsSchedSec: b.rideSec - sched)
+}
+
 /// Scheduled headway (s) of a leg's routes at a stop around `now`, from the per-line schedules.
 func schedHeadwayAt(schedule: ClientSchedule, lineSched: [String: [LineSchedEntry]], keys: [String], stop: String, now: Double, windowSec: Double = 1800) -> Double? {
     var rate = 0.0
