@@ -127,9 +127,17 @@ private fun DeveloperScreen(data: AppData, modifier: Modifier, onBack: () -> Uni
         if (s.isDemo) Caption("Demo clock: the schedule pins the current time (demo_now).")
         s.lastError?.let { Caption(it, Color(0xFFD32F2F)) }
 
+        Text("Route in progress", style = MaterialTheme.typography.titleMedium)
+        val trip by com.whichway.app.trip.TripSession.get(LocalContext.current.applicationContext).ui.collectAsStateWithLifecycle()
+        Status("Phase", trip.phase?.name ?: "not on a route")
+        Status("Motion now", if (trip.phase == null) "–" else "${trip.motionState} · ${trip.motionSeconds} s")
+        trip.lastMotion?.let { m -> Status("Last second", String.format(java.util.Locale.US, "step %.4f · push %.3f g · shake %.3f g", m.stepEnergy, m.pushG, m.shakeG)) }
+        Status("Platform", trip.platformTs?.let { Fmt.hhmmss(it) } ?: "–")
+        Status("Forecast boarding", trip.forecastBoardTs?.let { Fmt.hhmmss(it) } ?: "–")
+        Status("Events", "${trip.events}")
         Text("Build", style = MaterialTheme.typography.titleMedium)
         Status("Version", versionText())
-        Status("Trips", "not recorded in the Android build")
+        Status("Trips", "recorded for the pace model; not shared yet")
     }
 }
 

@@ -104,6 +104,8 @@ class AppData(app: Application) : AndroidViewModel(app) {
         /** `make serve` on the Mac, reached through `adb reverse tcp:8000 tcp:8000` (scripts/emulator.sh). */
         const val EMULATOR_LOCAL_BASE = "http://localhost:8000/data/"
         const val FEED_PERIOD_SEC = 30.0
+        /** The live view model, for the trip session (one per process). */
+        @Volatile var current: AppData? = null
         /**
          * Where the published data has been reachable. Pages may publish the source branch instead of gh-pages
          * (then bdrumm.github.io/whichway/data/ is a 404 while the data sits on gh-pages); a 404 from one of these
@@ -139,7 +141,7 @@ class AppData(app: Application) : AndroidViewModel(app) {
     var scenario: String = "baseline"
         private set
 
-    init { start() }
+    init { start(); current = this }
 
     // network
 

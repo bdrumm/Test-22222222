@@ -1,6 +1,5 @@
-// Port of the itinerary half of ios/WhichWay/WhichWay/Core/Planner.swift (segmentTrips / legTrips / pathTrips /
-// schedHeadwayAt / evaluate). The ride-in-progress functions (ridingItinerary, plannedCandidate,
-// connectionItinerary) depend on the trip recorder and are not ported yet; see android/PORTING.md.
+// Port of ios/WhichWay/WhichWay/Core/Planner.swift: trip candidates on a leg, itineraries on a path, scheduled
+// headways and expected times, and the itineraries of a ride in progress.
 package com.whichway.core
 
 import kotlin.math.abs
@@ -154,4 +153,62 @@ fun evaluate(option: PathOption, schedule: ClientSchedule, lineSched: Map<String
         leg.holdRiskSec = risk
     }
     option.expectedSec = option.wait1Sec + option.schedSec + option.typicalSec + option.holdRiskSec + option.wait2Sec
+}
+
+// the ride in progress (the second half of Planner.swift)
+
+/**
+ * The itinerary of a ride in progress: leg `leg` is the train the rider is on, and the leg after it, if any, the
+ * first train that makes the connection. Null when the train is gone from the feed with no time kept for the
+ * alighting stop. Without a connecting train in the feeds, the arrival is the schedule's.
+ */
+fun ridingItinerary(boards: Map<String, LineBoard>, schedule: ClientSchedule, option: PathOption, leg: Int, boarded: BoardingCandidate, now: Double): Itinerary? {
+    val ix = option.legs.getOrNull(leg)?.idx?.get(boarded.key) ?: return null
+    val lb = boards[boarded.key] ?: return null
+    val t = lb.trains.firstOrNull { it.id == boarded.trainId } ?: return null
+    val arriveF = t.points.firstOrNull { it.idx == ix.to }?.ts ?: boarded.stopTs[ix.to] ?: return null
+    fun at(ts: Double) = PlatformTiming.atPlatform(ts, t.route)
+    val board = at(boarded.boardTs)
+    val arriveTs = max(at(arriveF), board + 1)
+    val pt = t.pred?.point(ix.to)
+    val a = TripCandidate(t, boarded.key, board, arriveTs, arriveTs - board, schedule.lines[boarded.key]?.runBetween(ix.from, ix.to)?.toDouble(), 0,
+        arriveLoTs = pt?.let { at(it.loTs) }, arriveHiTs = pt?.let { at(it.hiTs) },
+        feedArriveTs = t.feedPoints?.firstOrNull { it.idx == ix.to }?.let { at(it.ts) }, arriveSource = pt?.source)
+    val sched = option.schedSec.toDouble()
+    if (leg == option.legs.size - 1) return Itinerary(listOf(a), board, a.arriveTs, a.arriveTs - now, 0.0, null, null, null, sched, a.rideSec - sched)
+    val transfer = option.transfer
+    if (leg != 0 || option.legs.size != 2 || transfer == null) return null
+    val walk = transfer.walkSec.toDouble()
+    val earliest = max(a.arriveTs + walk, now)
+    val seconds = legTrips(boards, schedule, option.legs[1], earliest, 40).filter { it.boardTs >= earliest }
+    val b = seconds.firstOrNull()
+    if (b != null) {
+        val next = seconds.firstOrNull { it.boardTs > b.boardTs }
+        return Itinerary(listOf(a, b), board, b.arriveTs, b.arriveTs - now, walk, b.boardTs - a.arriveTs, b.boardTs - a.arriveTs - walk,
+            next?.let { it.boardTs - b.boardTs }, sched, (b.arriveTs - board) - sched)
+    }
+    val ride2 = (option.legs[1].schedRideSec ?: 0).toDouble()
+    val arrive2 = earliest + option.wait2Sec + ride2
+    return Itinerary(listOf(a), board, arrive2, arrive2 - now, walk, earliest + option.wait2Sec - a.arriveTs, null, null, sched, (arrive2 - board) - sched)
+}
+
+/** The train the planner's itinerary boards on leg `leg`, as a boarding candidate the departure log could have made for it. */
+fun plannedCandidate(it: Itinerary, option: PathOption, leg: Int): BoardingCandidate? {
+    val i = if (it.legs.size == option.legs.size) leg else 0
+    val tc = it.legs.getOrNull(i) ?: return null
+    val ix = option.legs.getOrNull(leg)?.idx?.get(tc.key) ?: return null
+    val lag = PlatformTiming.recordedLag(tc.train.route)
+    val stopTs = HashMap<Int, Double>()
+    for (p in tc.train.feedPoints ?: tc.train.points) if (p.idx > ix.from) stopTs[p.idx] = p.ts
+    return BoardingCandidate(tc.train.id, tc.key, tc.train.route, tc.boardTs + lag, tc.arriveTs + lag, ix.to - ix.from, true, true, ix.from, ix.to, null, stopTs, tc.train.nextIdx)
+}
+
+/** Between trains at the change: the next train of leg `leg` from its platform, with the one after it. */
+fun connectionItinerary(boards: Map<String, LineBoard>, schedule: ClientSchedule, option: PathOption, leg: Int, now: Double): Itinerary? {
+    val l = option.legs.getOrNull(leg) ?: return null
+    val trains = legTrips(boards, schedule, l, now, 6)
+    val b = trains.firstOrNull() ?: return null
+    val next = trains.firstOrNull { it.boardTs > b.boardTs }
+    val sched = (l.schedRideSec ?: 0).toDouble()
+    return Itinerary(listOf(b), b.boardTs, b.arriveTs, b.arriveTs - now, 0.0, null, null, next?.let { it.boardTs - b.boardTs }, sched, b.rideSec - sched)
 }

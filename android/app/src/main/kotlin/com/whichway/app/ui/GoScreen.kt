@@ -44,6 +44,10 @@ import com.whichway.app.store.AppData
 import com.whichway.app.store.AppState
 import com.whichway.app.store.LocationService
 import com.whichway.app.store.Stores
+import com.whichway.app.trip.PlannerAccess
+import com.whichway.app.trip.TripSession
+import com.whichway.app.trip.TripUi
+import com.whichway.core.TripPhase
 import com.whichway.core.CommutePreset
 import com.whichway.core.NearbyStation
 import com.whichway.core.Place
@@ -112,10 +116,15 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     val pace by stores.pace.collectAsStateWithLifecycle()
     val fix by loc.fix.collectAsStateWithLifecycle()
     val locError by loc.error.collectAsStateWithLifecycle()
-    var originId by remember { mutableStateOf(stores.originId) }
-    var destId by remember { mutableStateOf(stores.destId) }
+    val session = remember(ctx) { TripSession.get(ctx) }
+    val trip by session.ui.collectAsStateWithLifecycle()
+    val holder = remember { PlannerHolder(stores) }
+    var originId by holder.originIdState
+    var destId by holder.destIdState
     var picking by remember { mutableStateOf<String?>(null) }
-    var selected by remember { mutableStateOf<String?>(null) }
+    var selected by holder.selectedState
+    var onTrainSheet by remember { mutableStateOf(false) }
+    val routeStarted = trip.phase != null
     var editing by remember { mutableStateOf<CommutePreset?>(null) }
     var nearbySheet by remember { mutableStateOf(false) }
     /** The commute the planner is on (picking a station by hand leaves it). */
@@ -126,6 +135,7 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     var habitNote by remember { mutableStateOf<String?>(null) }
 
     fun setTrip(o: String, d: String) {
+        if (o != originId || d != destId) session.resetTrip()
         originId = o; destId = d
         stores.originId = o; stores.destId = d
     }
@@ -151,6 +161,7 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     }
     /** The first commute whose window covers now, once per window per day; stations picked by hand keep. */
     fun autoApply() {
+        if (routeStarted) return
         val p = stores.activePreset(s.now) ?: return
         val stamp = "${Fmt.dayStamp(s.now)}|${p.id}"
         if (stores.appliedPreset == stamp) {
@@ -162,7 +173,7 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     }
     /** With no commute window covering now and no station picked by hand in the last two hours, the usual trip at this hour. */
     fun applyHabit() {
-        if (stores.activePreset(s.now) != null || s.now - stores.pickedByHandTs <= 7200) return
+        if (routeStarted || stores.activePreset(s.now) != null || s.now - stores.pickedByHandTs <= 7200) return
         val l = fix?.takeIf { it.ageSec < 900 }
         val g = stores.likelyTrip(s.now, l?.lat, l?.lon) ?: return
         val o = index.station(g.origin) ?: return
@@ -182,6 +193,7 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
         val dest = pendingDest
         val pick = near.firstOrNull { dest.isEmpty() || reachableStations(sched, index, it.station.id).containsKey(dest) } ?: near.firstOrNull()
         pendingNearest = false
+        if (routeStarted) return@LaunchedEffect
         if (pick != null) setTrip(pick.station.id, if (dest.isEmpty()) destId else dest)
     }
     LaunchedEffect(s.staticVersion) { if (loc.authorized) loc.startTracking(); autoApply(); applyHabit() }
@@ -193,7 +205,8 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     val reachableDest = dest?.takeIf { reach.containsKey(it.id) }
 
     // the routes: enumerated when the stations or the static data change, evaluated against this hour
-    val paths: List<PathOption> = remember(origin?.id, reachableDest?.id, s.staticVersion) {
+    val extras = holder.extras
+    val paths: List<PathOption> = remember(origin?.id, reachableDest?.id, s.staticVersion, extras) {
         if (origin == null || reachableDest == null) emptyList() else {
             val now = s.now
             enumeratePaths(sched, index, origin.id, reachableDest.id).onEach {
@@ -201,9 +214,10 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
                 // the rider's own changes, where learned at the station, replace the MTA's minimum
                 val tr = it.transfer
                 if (tr != null) { val sec = pace.plannedTransferSec(tr.station, tr.walkSec); if (sec != tr.walkSec) { it.schedSec += sec - tr.walkSec; tr.walkSec = sec } }
-            }
+            } + extras.filter { e -> e.legs.isNotEmpty() }
         }
     }
+    if (!routeStarted && extras.isNotEmpty()) holder.extras = emptyList()
     LaunchedEffect(paths) {
         data.setWanted(paths.flatMap { p -> p.legs.flatMap { it.keys } }.toSet(), "planner")
         if (selected == null || paths.none { it.id == selected }) selected = paths.firstOrNull()?.id
@@ -216,6 +230,18 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     paths.forEach { it.live = live[it.id]?.firstOrNull() }
     val list = ranked(paths)
     val headline = list.firstOrNull { it.id == selected } ?: list.firstOrNull()
+    holder.paths = paths; holder.headline = headline
+    session.planner = holder
+    // every poll (and scenario change): the plan's trains, the departure log, the ride's arrival, the clock
+    LaunchedEffect(s.tick, s.predictedBoards) { session.onPoll() }
+    LaunchedEffect(selected) { session.selectionChanged() }
+    // a departed train hands over to the best route (the countdown reached zero since the last poll)
+    LaunchedEffect(headline?.live?.boardTs) {
+        val b = headline?.live?.boardTs ?: return@LaunchedEffect
+        val wait = ((b - s.now) * 1000).toLong() + 500
+        if (wait > 0) kotlinx.coroutines.delay(wait)
+        if (!routeStarted) { val best = ranked(paths).firstOrNull()?.id; if (best != null && best != selected) selected = best }
+    }
     val now = rememberNow(s.demoOffset ?: 0.0)
     // the walk from the phone to the origin station, when both positions are known
     val walk: NearbyStation? = remember(fix, origin?.id, s.geometry) {
@@ -252,8 +278,11 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
             paths.isEmpty() -> Caption("No path with at most one change between these stations.")
         }
         if (headline != null && reachableDest != null) {
-            NowCard(headline, headline.live, now, origin?.name ?: "", reachableDest.name, walk, here, pace)
-            Text(if (list.size == 1) "1 way to get there" else "${list.size} ways to get there", style = MaterialTheme.typography.titleMedium)
+            NowCard(headline, if (routeStarted) trip.rideItinerary ?: headline.live else headline.live, now, origin?.name ?: "", reachableDest.name,
+                if (trip.phase == null || trip.phase == TripPhase.approaching) walk else null, here, pace, trip)
+            TripBar(session, trip, origin?.name ?: "the station", walk?.meters) { onTrainSheet = true }
+            if (routeStarted) DepartureBoard(data, headline, sched, origin?.name ?: "", reachableDest.name, now)
+            Text(if (routeStarted) "Other ways" else if (list.size == 1) "1 way to get there" else "${list.size} ways to get there", style = MaterialTheme.typography.titleMedium)
             val maxSec = max(60.0, list.maxOf { max(it.expectedSec, it.live?.totalSec ?: 0.0) })
             // the live itinerary is passed on its own: the row must recompose when the poll changes it
             list.forEach { p -> PathRow(p, p.live, p.id == headline.id, maxSec) { selected = p.id } }
@@ -272,33 +301,57 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
         "to" -> StationPicker("To", index.sorted, reach, { picking = null }, nearTo = currentPreset?.let { index.station(it.destId) }, coords = commuteCoords, places = placePicks(places, index)) { setTrip(originId, it.id); pickedByHand() }
     }
     if (nearbySheet) NearbyStationsSheet(data, loc, { nearbySheet = false }) { setTrip(it.id, destId); pickedByHand() }
+    if (onTrainSheet) OnTrainSheet(session, data, headline?.legs?.getOrNull(session.onTrainLeg)?.let { index.stations[index.stationOf(it.from)]?.name } ?: "the station") { onTrainSheet = false }
+    // riding by the phone's own reading, with no departure to name the train: ask which
+    LaunchedEffect(trip.needsTrainPick) { if (trip.needsTrainPick && !onTrainSheet) onTrainSheet = true }
     editing?.let { p -> PresetEditor(data, p, { editing = null }) { saved -> stores.updatePreset(saved); applyPreset(saved, byHand = true) } }
 }
 
 /** The train to take, the countdown to it, the change, and the arrival with the engine's 80% window. */
 @Composable
-private fun NowCard(p: PathOption, itin: Itinerary?, now: Double, originName: String, destName: String, walk: NearbyStation?, here: Place?, pace: com.whichway.core.PersonalModel) {
+private fun NowCard(p: PathOption, itin: Itinerary?, now: Double, originName: String, destName: String, walk: NearbyStation?, here: Place?, pace: com.whichway.core.PersonalModel, trip: TripUi) {
+    val onTrain = trip.onTrain
+    val rideLeg = trip.currentLeg
+    val pastChange = p.legs.size > 1 && rideLeg > 0
+    fun offAt() = if (p.legs.size > 1 && rideLeg == 0) (p.transfer?.station ?: "the change") else destName
     Card(tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Caption("Take the ")
-                if (itin != null) {
+                val l0 = itin?.legs?.firstOrNull()
+                if (onTrain && l0 != null) {
+                    Caption(if (trip.ridePresumed) "Presumably on the " else "On the ")
+                    RouteBullet(trip.ridingRoute ?: l0.train.route, 26.dp)
+                    Text(" off ${Fmt.hhmm(l0.arriveTs)}", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text(Fmt.mmss(max(0.0, l0.arriveTs - now)), fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                } else if (onTrain) {
+                    Caption(if (trip.ridePresumed) "Presumably on the " else "On the ")
+                    RouteBullets(trip.ridingRoute?.let { listOf(it) } ?: p.legs[minOf(rideLeg, p.legs.size - 1)].routes.take(1), 26.dp)
+                    Text(" to ${offAt()}", fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else if (itin != null) {
+                    Caption("Take the ")
                     RouteBullet(itin.legs[0].train.route, 26.dp)
                     Text(" at ${Fmt.hhmm(itin.boardTs)}", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Text(Fmt.mmss(max(0.0, itin.boardTs - now)), fontSize = 32.sp, fontWeight = FontWeight.Bold)
                 } else {
-                    RouteBullets(p.legs[0].routes.take(1), 26.dp)
-                    Text(" from $originName", fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Caption("Take the ")
+                    RouteBullets(p.legs[minOf(rideLeg, p.legs.size - 1)].routes.take(1), 26.dp)
+                    Text(" from ${if (rideLeg > 0) (p.transfer?.station ?: originName) else originName}", fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             val tr = p.transfer
             if (p.legs.size > 1 && tr != null) {
-                Text("Change at ${tr.station} to the ${p.legs[1].routesLabel}", fontWeight = FontWeight.SemiBold)
-                val walk = if (tr.walkSec > 0) "${Fmt.mmss(tr.walkSec.toDouble())} walk" else "same platform"
+                Text(if (pastChange) "Changed at ${tr.station}" else "Change at ${tr.station} to the ${p.legs[1].routesLabel}", fontWeight = FontWeight.SemiBold)
+                val walkText = if (tr.walkSec > 0) "${Fmt.mmss(tr.walkSec.toDouble())} walk" else "same platform"
                 val m = itin?.connectionMarginSec
                 val missed = itin?.nextIfMissedSec?.let { n -> " · +${Fmt.mmss(n)} if missed" } ?: ""
-                Caption(if (m != null) "${Fmt.mmss(m)} margin · $walk$missed" else walk,
-                    if (m != null && m < 60) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant)
+                val red = if (m != null && m < 60) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant
+                when {
+                    pastChange -> Caption(itin?.let { "on the ${it.legs[0].train.route} · ${Fmt.minTxt(it.legs[0].rideSec)} ride" } ?: "the last leg")
+                    onTrain && itin != null && itin.legs.size > 1 -> Caption("${itin.legs[1].train.route} at ${Fmt.hhmm(itin.legs[1].boardTs)} · ${Fmt.mmss(m ?: 0.0)} margin · $walkText$missed", red)
+                    onTrain -> Caption("connection not in the feeds yet · $walkText")
+                    m != null -> Caption("${Fmt.mmss(m)} margin · $walkText$missed", red)
+                    else -> Caption(walkText)
+                }
             } else {
                 Text("Direct · ${p.legs[0].nStops} stops", fontWeight = FontWeight.SemiBold)
             }
@@ -309,7 +362,16 @@ private fun NowCard(p: PathOption, itin: Itinerary?, now: Double, originName: St
                 }
                 itin.legs.last().rangeText?.let { r -> Caption("80% window $r") }
                 val l0 = itin.legs[0]
-                Caption("${l0.train.position?.text ?: "position unknown"} · ${Fmt.late(l0.train.effectiveLatenessSec)}")
+                if (onTrain) {
+                    val ix = p.legs.getOrNull(rideLeg)?.idx?.get(l0.key)
+                    val togo = ix?.let { ix.to - l0.train.nextIdx + 1 }
+                    Caption(when {
+                        ix != null && l0.train.position?.status == "STOPPED_AT" && l0.train.position?.stopIdx == ix.to -> "At ${offAt()}"
+                        togo != null && togo <= 0 -> "Arriving at ${offAt()}"
+                        togo != null -> "$togo stop${if (togo == 1) "" else "s"} to go · ${l0.train.position?.text ?: "position unknown"}"
+                        else -> l0.train.position?.text ?: "position unknown"
+                    })
+                } else Caption("${l0.train.position?.text ?: "position unknown"} · ${Fmt.late(l0.train.effectiveLatenessSec)}")
             } else {
                 Text("Expected ${Fmt.minTxt(p.expectedSec)} to $destName", style = MaterialTheme.typography.titleMedium)
                 Caption("No train for this path in the feeds yet; the expected time stands in.")
@@ -324,7 +386,7 @@ private fun NowCard(p: PathOption, itin: Itinerary?, now: Double, originName: St
                 val tight = left != null && walkSec > left
                 var text = (here?.let { "${it.name}: " } ?: "") + if (usual != null) "usually $mins min" else "${Fmt.miles(walk.meters)} - $mins min"
                 if (usual == null && access >= 30) text += " · ${(access / 60).toInt()} min to platform"
-                if (tight && left != null) text += " · ${Fmt.miles(pace.walkSpeedMPerMin * max(0.0, left - access) / 60)}"
+                if (tight) text += " · ${Fmt.miles(pace.walkSpeedMPerMin * max(0.0, (left ?: 0.0) - access) / 60)}"
                 Caption((if (tight) "⚠ Walk " else "Walk ") + text, if (tight) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurface)
             }
         }
@@ -398,4 +460,19 @@ private fun ItineraryRow(itin: Itinerary) {
                 if (m < 60) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+
+/** The Go tab's planner state, kept outside the composition so the trip session can read it on demand. */
+class PlannerHolder(stores: Stores) : PlannerAccess {
+    val originIdState = androidx.compose.runtime.mutableStateOf(stores.originId)
+    val destIdState = androidx.compose.runtime.mutableStateOf(stores.destId)
+    val selectedState = androidx.compose.runtime.mutableStateOf<String?>(null)
+    var extras by androidx.compose.runtime.mutableStateOf<List<PathOption>>(emptyList())
+    override var paths: List<PathOption> = emptyList()
+    override var headline: PathOption? = null
+    override val originId: String get() = originIdState.value
+    override val destId: String get() = destIdState.value
+    override fun select(id: String) { selectedState.value = id }
+    override fun addExtra(p: PathOption) { if (extras.none { it.id == p.id }) extras = extras + p }
 }

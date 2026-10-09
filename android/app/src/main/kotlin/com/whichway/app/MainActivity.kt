@@ -32,6 +32,9 @@ import com.whichway.app.ui.Welcome
 import com.whichway.app.ui.WelcomeSheet
 import com.whichway.app.store.AppData
 import com.whichway.app.store.LocationService
+import com.whichway.app.trip.TripSession
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -48,12 +51,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent { WhichWayTheme { Tabs(data) } }
+        lifecycleScope.launch { loc.fix.collect { f -> if (f != null) session.onFix(f) } }
     }
 
     private val loc by lazy { LocationService.get(this) }
 
+    private val session by lazy { TripSession.get(this) }
+
     override fun onStart() { super.onStart(); data.start(); data.refreshIfStale(); if (loc.authorized) loc.startTracking() }
-    override fun onStop() { super.onStop(); data.stop(); loc.stopTracking() }
+    // a route in progress keeps polling and the fixes coming (the foreground service holds them)
+    override fun onStop() { super.onStop(); if (!session.started) { data.stop(); loc.stopTracking() } }
 }
 
 /** The iOS accent colour (AccentColor.colorset): MTA blue, lighter in dark mode. */
@@ -75,6 +82,11 @@ private fun Tabs(data: AppData) {
     val needs by loc.needsPermission.collectAsStateWithLifecycle()
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r -> loc.permissionResult(r.values.any { it }) }
     LaunchedEffect(needs) { if (needs) ask.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }
+    // the notification permission, asked when the first route starts
+    val session = TripSession.get(ctx)
+    val needsNotif by session.needsNotificationPermission.collectAsStateWithLifecycle()
+    val askNotif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { session.needsNotificationPermission.value = false }
+    LaunchedEffect(needsNotif) { if (needsNotif && android.os.Build.VERSION.SDK_INT >= 33) askNotif.launch(Manifest.permission.POST_NOTIFICATIONS) }
     Scaffold(bottomBar = {
         NavigationBar {
             NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Icon(Icons.Filled.Place, null) }, label = { Text("Go") })

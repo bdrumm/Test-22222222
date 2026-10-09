@@ -24,7 +24,7 @@ data class PersonalModel(
     val transfer: MutableMap<String, PaceStat> = HashMap(),            // transfer station name -> seconds walking between trains
     val transferDefault: PaceStat = PaceStat(),
     val placeToStation: MutableMap<String, PaceStat> = HashMap(),      // "placeId|stationId" -> seconds from leaving the place to the station
-    val lineChoices: MutableMap<String, MutableMap<String, Int>>? = null,
+    var lineChoices: MutableMap<String, MutableMap<String, Int>>? = null,
     var trips: Int = 0,
     var lastLearnedTs: Double? = null,
 ) {
@@ -62,6 +62,42 @@ data class PersonalModel(
     fun walkMinutes(meters: Double, station: String?): Int {
         val sec = meters / walkSpeedMPerMin * 60 + (station?.let { accessSec(it) } ?: 0.0)
         return max(1, (sec / 60).roundToInt())
+    }
+
+    /** Learns what a finished trip measured. Returns whether anything was learned. */
+    fun learn(t: TripTimeline): Boolean {
+        var any = false
+        t.walkSpeedMPerMin?.let { walkSpeed.add(min(150.0, max(30.0, it))); any = true }
+        val a = t.accessSec
+        if (a != null && a >= 15 && a <= 900) {
+            access.getOrPut(t.originStation) { PaceStat() }.add(a)
+            accessDefault.add(a)
+            any = true
+        }
+        // a change across the platform is a quarter of a minute of walking; anything shorter is a false alighting
+        val x = t.transferStation
+        val s = t.transferWalkSec
+        if (x != null && s != null && s >= 8 && s <= 900) {
+            transfer.getOrPut(x) { PaceStat() }.add(s)
+            transferDefault.add(s)
+            any = true
+        }
+        val pid = t.placeId
+        val arr = t.arrivedStationTs
+        if (pid != null && arr != null && arr - t.startTs >= 30 && arr - t.startTs <= 3600) {
+            placeToStation.getOrPut("$pid|${t.originStation}") { PaceStat() }.add(arr - t.startTs)
+            any = true
+        }
+        for (b in t.boarded) {
+            if (b.verdict == LineBelief.Verdict.unsure) continue
+            val m = lineChoices ?: HashMap<String, MutableMap<String, Int>>().also { lineChoices = it }
+            val k = "${t.originStation}|${t.destStation}|${b.leg}"
+            val line = m.getOrPut(k) { HashMap() }
+            line[b.key] = (line[b.key] ?: 0) + 1
+            any = true
+        }
+        if (any) { trips += 1; lastLearnedTs = t.endedTs }
+        return any
     }
 
     /** "3.1 mph · 4 stations · 2 changes · 12 trips" */

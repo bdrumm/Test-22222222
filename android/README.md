@@ -11,7 +11,8 @@ unchanged by it.
 android/
   core/      plain Kotlin (JVM): the published data, the GTFS-Realtime decoder, the prediction engine, the line
              board, the station graph and the planner. Tested with a JDK alone.
-  app/       the Compose app: Go, Line and Settings tabs over the core (needs the Android SDK).
+  app/       the Compose app: Go, Line and Settings tabs over the core, and the route in progress as a foreground
+             service with an ongoing notification (needs the Android SDK).
   PORTING.md which Kotlin file mirrors which Swift file, what is not ported yet, and the iOS commit of the last pass.
   scripts/ios-drift.sh   what changed on iOS since that pass.
 ```

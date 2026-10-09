@@ -103,6 +103,15 @@ class Stores private constructor(context: Context) {
     var learnPace: Boolean
         get() = p.getBoolean("learnPace", true)
         set(v) = p.edit().putBoolean("learnPace", v).apply()
+    /** Learns what a finished trip measured, when learning is on. */
+    fun learnPace(t: com.whichway.core.TripTimeline): Boolean {
+        if (!learnPace) return false
+        val m = _pace.value
+        val any = m.learn(t)
+        if (any) { _pace.value = m.copy(); NearbyStation.speedMPerMin = m.walkSpeedMPerMin; runCatching { paceFile.writeText(WWJson.encodeToString(PersonalModel.serializer(), m)) } }
+        return any
+    }
+
     fun resetPace() { _pace.value = PersonalModel(); paceFile.delete(); NearbyStation.speedMPerMin = PersonalModel.DEFAULT_WALK_SPEED }
 
     init { NearbyStation.speedMPerMin = _pace.value.walkSpeedMPerMin }

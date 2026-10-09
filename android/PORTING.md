@@ -23,8 +23,16 @@ so the next pass knows exactly what moved.
 | `Core/Presets.swift` | `core/…/Presets.kt`, `app/…/store/Stores.kt` | model and store |
 | `Core/Places.swift` | `core/…/Places.kt`, `app/…/store/Stores.kt` | |
 | `Core/Habits.swift`, `Services/HabitStore.swift` | `core/…/Habits.kt`, `app/…/store/Stores.kt` | with the Swift tests |
-| `Core/PersonalModel.swift`, `Services/PersonalModelStore.swift` | `core/…/PersonalModel.kt`, `app/…/store/Stores.kt` | read side only; `learn()` comes with the trip tracker |
-| `Services/LocationService.swift` | `app/…/store/LocationService.kt` | platform LocationManager, fixes while the app is in front; background fixes come with the trip tracker |
+| `Core/PersonalModel.swift`, `Services/PersonalModelStore.swift` | `core/…/PersonalModel.kt`, `app/…/store/Stores.kt` | |
+| `Core/BoardingDetector.swift`, `Core/TripTracker.swift` | `core/…/TripTracker.kt` | with the Swift tests; plus `forecastTrainDeparted`: the feed drops a train a few seconds before its predicted platform moment, which left the Swift freeze rule waiting for ever (Oct 9, 3:00:49 against 3:01:05), so the forecast and the plan's train freeze when the planner moves on at the platform |
+| `Core/LineInference.swift`, `Core/OnTrain.swift` | `core/…/LineInference.kt` | with the Swift tests |
+| `Core/Planner.swift` (ride half) | `core/…/Planner.kt` | `ridingItinerary`, `plannedCandidate`, `connectionItinerary`, with the Swift tests |
+| `Services/TripRecorder.swift` | `core/…/TripRecorder.kt` | pure; the app feeds it sensors, fixes, feeds and the clock |
+| `Services/MotionSampler.swift` | `app/…/trip/MotionSampler.kt` | gravity + linear acceleration at 25 Hz, in g |
+| `Services/TripActivityService.swift`, `WhichWayShared/TripActivityAttributes.swift` | `app/…/trip/TripService.kt` | a foreground service (type location) with an ongoing notification in place of the Live Activity |
+| `Views/PlannerView.swift` (route in progress) | `app/…/trip/TripSession.kt` | start/end, the plan's trains, the ride's itinerary, following the train boarded / the stop got off at / staying on, the rider's word, auto-start by GPS |
+| `Views/OnTrainSheet.swift`, `PathViews.swift` (departure board) | `app/…/ui/TripViews.kt` | trip bar, boarding prompt, line chooser, on-train sheet, departure board |
+| `Services/LocationService.swift` | `app/…/store/LocationService.kt` | platform LocationManager; the foreground service keeps the fixes coming during a route |
 | `Views/CommuteViews.swift` | `app/…/ui/CommuteViews.kt` | chip, setup prompt, editor, nearby sheet, Settings section |
 | `Views/PlacesViews.swift` | `app/…/ui/PlacesViews.kt` | places, editor with the pin, pace section |
 | `WhichWayShared/Format.swift`, `RouteStyle.swift` | `core/…/Format.kt` | colours as ints; Compose bullet in `app/…/ui/Common.kt` |
@@ -36,10 +44,10 @@ so the next pass knows exactly what moved.
 
 ## Not ported yet (in rough order of value)
 
-- **Route in progress**: `TripTracker`, `TripRecorder`, `BoardingDetector`, `LineInference`, `OnTrain`, the ride half of `Planner.swift` (`ridingItinerary`, `plannedCandidate`, `connectionItinerary`), `MotionSampler`/`MotionTrace`. Android needs a foreground service for this, where iOS uses the location background mode.
+- **Motion traces** (`MotionTrace`, Debug-only on iOS) and the route-health badge on the Now card (`RouteHealth`).
+- **Polling with the app gone**: the feeds are polled by the activity's view model, so a route survives the screen going off (the service holds the sensors and fixes) but not the activity being destroyed. Moving the poller into the service is the fix.
 - **Views**: track diagram, Marey chart, route map, hours profile, route chart, insights, route and line health, hold outlook and the scenario switch.
-- **Telemetry and trip upload**: `Telemetry`, `GitHubUploader`, `TripRelay` (sharing on by default since `21bc708`; port it with ride tracking).
-- **Live Activity**: the Android counterpart would be an ongoing notification.
+- **Telemetry and trip upload**: `Telemetry`, `GitHubUploader`, `TripRelay` (sharing on by default since `21bc708`). The timeline each trip produces is already kept by the pace model; the observation record and the upload are what remain.
 
 ## How a port pass goes
 
