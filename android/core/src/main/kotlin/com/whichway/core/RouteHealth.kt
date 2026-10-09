@@ -106,3 +106,42 @@ fun shortLabel(t: LiveTrain): String {
     if (id != null) { val parts = id.split(" ").filter { it.isNotEmpty() }; return if (parts.size >= 2) parts[0] + " " + parts[1] else id }
     return tripSuffix(t.tripId).take(10)
 }
+
+/** Overall health of one line direction right now (ios/WhichWay/WhichWay/Views/LineHealth.swift). */
+data class LineHealth(val level: Level, val reason: String) {
+    enum class Level { good, minor, delays, severe }
+    val label: String get() = when (level) { Level.good -> "Good service"; Level.minor -> "Minor delays"; Level.delays -> "Delays"; Level.severe -> "Severe delays" }
+}
+
+fun lineHealth(key: String, ctx: HealthContext, schedule: ClientSchedule?, lineSched: Map<String, List<LineSchedEntry>>): LineHealth? {
+    val b = ctx.boards[key] ?: return null
+    val route = key.substringBefore("_")
+    val trains = b.trains
+    if (trains.isEmpty()) return LineHealth(LineHealth.Level.minor, "no started train in the feed")
+    val lates = trains.mapNotNull { it.effectiveLatenessSec }.map { max(0.0, it) }.sorted()
+    val median = if (lates.isEmpty()) 0.0 else lates[lates.size / 2]
+    val nLate = trains.count { (it.effectiveLatenessSec ?: 0.0) >= 180 }
+    val lateShare = nLate.toDouble() / trains.size
+    val held = b.nHolding + b.nStalled
+    val delayAlerts = ctx.alertsFor(listOf(route)).filter { it.kind == "delay" }
+    var gapRatio = 0.0; var gapText = ""
+    val w = ctx.prediction(key)?.worstGap
+    val line = schedule?.lines?.get(key)
+    if (w != null && schedule != null && line != null && w.idx < line.stops.size) {
+        val usual = schedHeadwayAt(schedule, lineSched, listOf(key), line.stops[w.idx], ctx.now) ?: 0.0
+        if (usual > 0) { gapRatio = w.gapSec / usual; gapText = "largest gap ${Fmt.minTxt(w.gapSec)} (usually ${Fmt.minTxt(usual)})" }
+    }
+    val level = when {
+        median >= 600 || held >= 2 || gapRatio >= 3 -> LineHealth.Level.severe
+        median >= 300 || lateShare >= 0.5 || gapRatio >= 2 || delayAlerts.isNotEmpty() -> LineHealth.Level.delays
+        median >= 120 || lateShare >= 0.25 || gapRatio >= 1.5 || held >= 1 -> LineHealth.Level.minor
+        else -> LineHealth.Level.good
+    }
+    val parts = ArrayList<String>()
+    parts.add(if (nLate == 0) "no train 3+ min late" else "$nLate of ${trains.size} trains 3+ min late")
+    if (median >= 60) parts.add("typically ${Fmt.minTxt(median)} behind")
+    if (held > 0) parts.add("$held held or overdue")
+    if (gapRatio >= 1.5 && gapText.isNotEmpty()) parts.add(gapText)
+    if (delayAlerts.isNotEmpty()) parts.add("delay alert active")
+    return LineHealth(level, parts.joinToString(" · "))
+}

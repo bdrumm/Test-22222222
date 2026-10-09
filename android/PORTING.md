@@ -33,7 +33,9 @@ so the next pass knows exactly what moved.
 | `Views/PlannerView.swift` (route in progress) | `app/…/trip/TripSession.kt` | start/end, the plan's trains, the ride's itinerary, following the train boarded / the stop got off at / staying on, the rider's word, auto-start by GPS |
 | `Views/OnTrainSheet.swift`, `PathViews.swift` (departure board) | `app/…/ui/TripViews.kt` | trip bar, boarding prompt, line chooser, on-train sheet, departure board |
 | `Services/Telemetry.swift`, `Services/TripRelay.swift` | `core/…/TripObservation.kt`, `app/…/store/Telemetry.kt` | the record, the switch (on by default), the local server and the relay; no rider's-own-GitHub-token path |
-| `Views/RouteHealth.swift` (logic) | `core/…/RouteHealth.kt` | for the record's `extraMin`; the badge is not drawn yet |
+| `Views/RouteHealth.swift`, `Views/LineHealth.swift` | `core/…/RouteHealth.kt` (logic), `app/…/ui/PathViews.kt` (badge, row) | |
+| `Views/TrackDiagramView.swift`, `MareyChartView.swift`, `RouteMapView.swift`, `PathViews.swift` (hours, mini track), `PredictionChart.swift` | `app/…/ui/Charts.kt` | Compose Canvas; the map draws the published track geometry with no street tiles (a tile layer needs a provider decision) |
+| `Views/PathViews.swift` (view switcher, hold outlook, scenario picker), `PlannerView.swift` (leg diagram, path detail, insights), `RouteInsightsView.swift` | `app/…/ui/PathViews.kt` | the insights sheet is a condensed version |
 | `Views/WelcomeView.swift` | `app/…/ui/WelcomeView.kt` | with the sharing switch |
 | `Views/SettingsView.swift` (sharing, Developer's trips section) | `app/…/ui/SettingsScreen.kt` | |
 | `Services/LocationService.swift` | `app/…/store/LocationService.kt` | platform LocationManager; the foreground service keeps the fixes coming during a route |
@@ -42,7 +44,7 @@ so the next pass knows exactly what moved.
 | `WhichWayShared/Format.swift`, `RouteStyle.swift` | `core/…/Format.kt` | colours as ints; Compose bullet in `app/…/ui/Common.kt` |
 | `Services/DataService.swift`, `DiskCache.swift` | `app/…/store/AppData.kt` | a 404 from the published site retries the other known bases, including the raw `gh-pages` branch (Pages was publishing the source branch on 2026-10-09, so `/data/` was a 404) |
 | `Views/PlannerView.swift`, `PathViews.swift` (Now card) | `app/…/ui/GoScreen.kt` | pickers, commutes (auto-apply, nearest origin), habits, walk line, ranked routes, Now card, itineraries; not the route in progress |
-| `Views/LineBoardView.swift` | `app/…/ui/LineScreen.kt` | board, engine summary, alerts, train rows |
+| `Views/LineBoardView.swift` | `app/…/ui/LineScreen.kt` | board, health row, engine chart, scenario picker, alerts, train rows; not the leg tabs that follow the Go tab's route (`TrainFocus`), the route chart or the alerts-affecting-route list |
 | `Views/SettingsView.swift` | `app/…/ui/SettingsScreen.kt` | the rider page and the Developer page (data source, status, build); commutes, places, pace and sharing sections not yet |
 | `Views/WelcomeView.swift`, `ContentView.swift` (first-launch sheet) | `app/…/ui/WelcomeView.kt`, `MainActivity.kt` | no sharing switch: Android records no trips yet, so the sheet says that instead |
 
@@ -50,7 +52,8 @@ so the next pass knows exactly what moved.
 
 - **Motion traces** (`MotionTrace`, Debug-only on iOS) and the route-health badge on the Now card (`RouteHealth`).
 - **Polling with the app gone**: the feeds are polled by the activity's view model, so a route survives the screen going off (the service holds the sensors and fixes) but not the activity being destroyed. Moving the poller into the service is the fix.
-- **Views**: track diagram, Marey chart, route map, hours profile, route chart, insights, the route and line health badges (the health logic is ported), hold outlook and the scenario switch.
+- **Line tab follows the Go tab's route** (`TrainFocus`/`FocusLeg`, `LegTabs`, `RouteChart.swift`, `alertsAffecting`): the Line tab is a plain line picker on Android.
+- **Street map tiles** under the route map (MapKit on iOS): the geometry alone is drawn.
 - **The rider's own GitHub token** (`GitHubUploader`, the way before the relay) and the JSON export (`ShareLink`): the relay covers the upload.
 
 ## How a port pass goes

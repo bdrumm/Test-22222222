@@ -48,6 +48,7 @@ import com.whichway.app.trip.PlannerAccess
 import com.whichway.app.trip.TripSession
 import com.whichway.app.trip.TripUi
 import com.whichway.core.TripPhase
+import com.whichway.core.routeHealth
 import com.whichway.core.CommutePreset
 import com.whichway.core.NearbyStation
 import com.whichway.core.Place
@@ -124,6 +125,7 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
     var picking by remember { mutableStateOf<String?>(null) }
     var selected by holder.selectedState
     var onTrainSheet by remember { mutableStateOf(false) }
+    var showInsights by remember { mutableStateOf(false) }
     val routeStarted = trip.phase != null
     var editing by remember { mutableStateOf<CommutePreset?>(null) }
     var nearbySheet by remember { mutableStateOf(false) }
@@ -280,18 +282,25 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
         if (headline != null && reachableDest != null) {
             NowCard(headline, if (routeStarted) trip.rideItinerary ?: headline.live else headline.live, now, origin?.name ?: "", reachableDest.name,
                 if (trip.phase == null || trip.phase == TripPhase.approaching) walk else null, here, pace, trip)
+            TextButton(onClick = { showInsights = true }) { Text("Insights") }
             TripBar(session, trip, origin?.name ?: "the station", walk?.meters) { onTrainSheet = true }
+            holdOutlook(data, s, headline, sched)?.let { HoldOutlookCard(data, it) }
             if (routeStarted) DepartureBoard(data, headline, sched, origin?.name ?: "", reachableDest.name, now)
             Text(if (routeStarted) "Other ways" else if (list.size == 1) "1 way to get there" else "${list.size} ways to get there", style = MaterialTheme.typography.titleMedium)
             val maxSec = max(60.0, list.maxOf { max(it.expectedSec, it.live?.totalSec ?: 0.0) })
+            val ctx = healthContext(s, data.scenario)
             // the live itinerary is passed on its own: the row must recompose when the poll changes it
-            list.forEach { p -> PathRow(p, p.live, p.id == headline.id, maxSec) { selected = p.id } }
-            Caption("Bars: expected door-to-door time: wait (grey), ride (line colour), walk at the change (dark). Routes with a train on its way come first, by arrival.")
+            list.forEach { p -> PathRow(p, p.live, p.id == headline.id, maxSec, routeHealth(p, ctx)) { selected = p.id } }
+            Caption("Badge: expected extra minutes to your destination against the timetable. Bars: expected door-to-door time: wait (grey), ride (line colour), walk at the change (dark). Routes with a train on its way come first, by arrival.")
+            Caption("Route ${list.indexOfFirst { it.id == headline.id } + 1} of ${list.size}")
+            Text(headline.label, style = MaterialTheme.typography.titleMedium)
+            PathViewsView(data, s, headline, sched, origin?.name ?: "", reachableDest.name, now)
             val its = live[headline.id].orEmpty()
-            if (its.isNotEmpty()) {
-                Text("Next trains on ${headline.label}", style = MaterialTheme.typography.titleSmall)
-                its.forEach { ItineraryRow(it) }
-            }
+            Text("Next itineraries", style = MaterialTheme.typography.titleSmall)
+            if (its.isEmpty()) Caption(if (s.predictedBoards.isEmpty()) "Waiting for the live feeds…" else "No train in the feeds covers this path right now.")
+            its.forEach { ItineraryRow(it) }
+            Text("Insights", style = MaterialTheme.typography.titleSmall)
+            insightLines(s, headline, sched, data.scenario).forEach { Caption("• $it") }
         }
         s.lastError?.let { Caption(it, Color(0xFFD32F2F)) }
     }
@@ -301,6 +310,7 @@ private fun Planner(data: AppData, s: AppState, sched: ClientSchedule, index: St
         "to" -> StationPicker("To", index.sorted, reach, { picking = null }, nearTo = currentPreset?.let { index.station(it.destId) }, coords = commuteCoords, places = placePicks(places, index)) { setTrip(originId, it.id); pickedByHand() }
     }
     if (nearbySheet) NearbyStationsSheet(data, loc, { nearbySheet = false }) { setTrip(it.id, destId); pickedByHand() }
+    if (showInsights && headline != null && reachableDest != null) RouteInsightsSheet(data, headline, sched, origin?.name ?: "", reachableDest.name) { showInsights = false }
     if (onTrainSheet) OnTrainSheet(session, data, headline?.legs?.getOrNull(session.onTrainLeg)?.let { index.stations[index.stationOf(it.from)]?.name } ?: "the station") { onTrainSheet = false }
     // riding by the phone's own reading, with no departure to name the train: ask which
     LaunchedEffect(trip.needsTrainPick) { if (trip.needsTrainPick && !onTrainSheet) onTrainSheet = true }
@@ -386,7 +396,8 @@ private fun NowCard(p: PathOption, itin: Itinerary?, now: Double, originName: St
                 val tight = left != null && walkSec > left
                 var text = (here?.let { "${it.name}: " } ?: "") + if (usual != null) "usually $mins min" else "${Fmt.miles(walk.meters)} - $mins min"
                 if (usual == null && access >= 30) text += " · ${(access / 60).toInt()} min to platform"
-                if (tight) text += " · ${Fmt.miles(pace.walkSpeedMPerMin * max(0.0, (left ?: 0.0) - access) / 60)}"
+                val reachM = if (left != null) pace.walkSpeedMPerMin * max(0.0, left - access) / 60 else 0.0
+                if (tight) text += " · ${Fmt.miles(reachM)}"
                 Caption((if (tight) "⚠ Walk " else "Walk ") + text, if (tight) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurface)
             }
         }
@@ -394,7 +405,7 @@ private fun NowCard(p: PathOption, itin: Itinerary?, now: Double, originName: St
 }
 
 @Composable
-private fun PathRow(p: PathOption, live: Itinerary?, selected: Boolean, maxSec: Double, onClick: () -> Unit) {
+private fun PathRow(p: PathOption, live: Itinerary?, selected: Boolean, maxSec: Double, h: com.whichway.core.RouteHealth, onClick: () -> Unit) {
     val border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
     Surface(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(12.dp), border = border,
         color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant) {
@@ -405,12 +416,16 @@ private fun PathRow(p: PathOption, live: Itinerary?, selected: Boolean, maxSec: 
                     RouteBullets(leg.routes, 20.dp)
                 }
                 Spacer(Modifier.weight(1f))
+                HealthDot(h)
+                Spacer(Modifier.width(6.dp))
                 Text(Fmt.minTxt(live?.totalSec ?: p.expectedSec), fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
             Row {
                 Text(p.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Caption(live?.let { "next ${Fmt.hhmm(it.boardTs)} → ${Fmt.hhmm(it.arriveTs)}" } ?: "expected")
             }
+            // notes only once the route runs 5 min or more behind
+            if (h.level != com.whichway.core.RouteHealth.Level.smooth && h.reasons.isNotEmpty()) Caption(h.summary, h.textColor())
             TimeBar(p, maxSec)
         }
     }

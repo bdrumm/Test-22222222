@@ -229,3 +229,19 @@ fun lineBoard(schedule: ClientSchedule, lineSched: List<LineSchedEntry>, feeds: 
     return LineBoard(key, route, direction, now, trains, trains.count { it.position?.holding == true }, trains.count { it.position?.stalled == true },
         trains.count { it.corroboration == "feed_optimistic" })
 }
+
+/** Progress of a train along its line as a fractional stop index, dead-reckoned `age` seconds after the board. */
+data class TrainProgress(val idx: Double, val state: String, val since: Double?)   // state: moving | stopped | holding | stalled | terminal | unknown
+
+fun trainProgress(t: LiveTrain, age: Double, line: LineTopology): TrainProgress {
+    val p = t.position
+    val j = p?.stopIdx
+    if (p == null || j == null) return TrainProgress(max(0.0, t.nextIdx - 0.5), "unknown", null)
+    val since = p.sinceSec + max(0.0, age)
+    if (p.status == "STOPPED_AT") return TrainProgress(j.toDouble(), if (p.holding) "holding" else if (p.atTerminal) "terminal" else "stopped", since)
+    if (j <= 0) return TrainProgress(0.0, "moving", since)
+    val run = line.runSec.getOrNull(j - 1)?.toDouble()
+    var frac = if (run != null && run > 0) min(0.96, since / run) else 0.5
+    if (p.status == "INCOMING_AT") frac = max(frac, 0.85)
+    return TrainProgress((j - 1) + frac, if (p.stalled) "stalled" else "moving", since)
+}

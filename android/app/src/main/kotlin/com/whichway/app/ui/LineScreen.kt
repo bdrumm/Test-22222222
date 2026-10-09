@@ -34,6 +34,7 @@ import com.whichway.app.store.AppData
 import com.whichway.core.ClientSchedule
 import com.whichway.core.Fmt
 import com.whichway.core.LiveTrain
+import com.whichway.core.lineHealth
 
 private fun sortedKeys(s: ClientSchedule) = s.lines.keys.sortedWith(compareBy<String> { it.substringBefore("_") }.thenBy { it.substringAfter("_") })
 private fun title(key: String, s: ClientSchedule) = "${key.substringBefore("_")} → ${s.lines[key]?.names?.lastOrNull() ?: key.substringAfter("_")}"
@@ -64,12 +65,24 @@ fun LineScreen(data: AppData, modifier: Modifier = Modifier) {
             }
         }
         if (board == null) { Caption("Waiting for the feed…"); return@Column }
+        val line = sched.lines[lineKey]
+        lineHealth(lineKey, healthContext(s, data.scenario), sched, s.lineSched)?.let { LineHealthRow(it, route) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Tile("Trains", "${board.trains.size}", "started, in the feed", Modifier.weight(1f))
             Tile("Held / overdue", "${board.nHolding} / ${board.nStalled}", "at a stop / between stops", Modifier.weight(1f))
             Tile("Late ≥ 3 min", "${board.trains.count { (it.effectiveLatenessSec ?: 0.0) >= 180 }}", "vs the timetable", Modifier.weight(1f))
         }
         val lp = s.predictions[lineKey]?.let { it[data.scenario] ?: it["baseline"] }
+        val raw = s.boards[lineKey]
+        if (lp != null && raw != null && raw.trains.isNotEmpty() && line != null) {
+            val now = rememberNow(s.demoOffset ?: 0.0)
+            Card {
+                Text("What the engine projects", style = MaterialTheme.typography.titleSmall)
+                PredictionChart(line, raw, lp, null, null, route, now)
+                Caption("Each path is the model's arrival time at every stop ahead: the feed's ETA calibrated for its horizon, blended with how lateness carries on this line at this time of day, then corrected for holds and the headway to the train ahead. Hollow red dot: held.")
+            }
+        }
+        ScenarioPicker(data, s)
         lp?.worstGap?.let { g ->
             val line = sched.lines[lineKey]
             Caption("Largest gap in the next hour: ${Fmt.mmss(g.gapSec)} at ${line?.name(g.idx) ?: ""} (${Fmt.hhmm(g.atTs)})" +

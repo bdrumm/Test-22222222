@@ -360,6 +360,9 @@ class AppData(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(boards = boards, predictions = preds, predictedBoards = predictedBoards(boards, preds, scenario)) }
     }
 
+    /** The boards under one assumption about a held train (baseline | hold_persists | clears_now). */
+    fun predictedBoardsFor(scenario: String): Map<String, LineBoard> = _state.value.let { predictedBoards(it.boards, it.predictions, scenario) }
+
     /** Each train's points replaced by the engine's ETAs for a scenario, keeping the feed's own. */
     private fun predictedBoards(boards: Map<String, LineBoard>, preds: Map<String, Map<String, LinePrediction>>, scenario: String): Map<String, LineBoard> =
         boards.mapValues { (k, b) ->
