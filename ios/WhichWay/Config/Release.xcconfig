@@ -1,7 +1,7 @@
 // Release configuration: what TestFlight and the App Store get. Your team and bundle id come from
 // Local.xcconfig (git-ignored); the data source is always the published site, whatever Local.xcconfig says.
 WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/whichway/data/
-// Where the Debug build sends recorded trips (your Mac on the home network); empty: the data server, if it is one.
+// Where recorded trips go; empty: the data server, if it is one (the published site cannot receive).
 WHICHWAY_TRIP_SERVER =
 // The trip relay (relay/README.md): its https address and the app key it expects, from Local.xcconfig, which
 // reaches release builds: this is how every tester's trips arrive. Empty: trips stay on the phone unless the
@@ -18,3 +18,5 @@ INFOPLIST_FILE = Config/Info.plist
 
 // after the include: a local server address in Local.xcconfig must not reach a release build
 WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/whichway/data/
+// likewise the Mac that receives Debug trips: testers' phones send nothing to a local server
+WHICHWAY_TRIP_SERVER =

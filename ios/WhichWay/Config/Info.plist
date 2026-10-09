@@ -2,8 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Merged into the generated Info.plist (GENERATE_INFOPLIST_FILE); kept out of the synchronized app folder, where it would also be copied as a resource. Custom keys cannot be set with
-	     INFOPLIST_KEY_*, which Xcode only honors for its own known keys. Read by DataService.defaultBase. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>WhichWayBaseURL</key>
 	<string>$(WHICHWAY_BASE_URL)</string>
 	<key>WhichWayTripServer</key>
@@ -12,21 +19,5 @@
 	<string>$(WHICHWAY_TRIP_RELAY)</string>
 	<key>WhichWayRelayKey</key>
 	<string>$(WHICHWAY_RELAY_KEY)</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Sends your recorded trips to the local server on your own Mac, when you set one, so the predictions can be checked against real rides.</string>
-	<!-- Standard HTTPS only: TestFlight builds need no export-compliance answer. -->
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>location</string>
-	</array>
-	<key>NSMotionUsageDescription</key>
-	<string>When you opt in, WhichWay summarises the phone's motion during a route to notice when your train pulls away and when you walk off, to learn your own pace and to check its predictions against real trips. Nothing that identifies you is kept.</string>
 </dict>
 </plist>

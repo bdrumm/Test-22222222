@@ -394,7 +394,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WhichWay;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Sends your recorded trips to the local server on your own Mac, when you set one, so the predictions can be checked against real rides.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WhichWay uses your location to suggest the nearest station, to notice when you reach your station and your stop while a route is in progress, and, if you opt in, to learn how long your walks take. Your location stays on the phone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "When you opt in, WhichWay summarises the phone's motion during a route to notice when your train pulls away and when you walk off, to learn your own pace and to check its predictions against real trips. Nothing that identifies you is kept.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -425,7 +428,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WhichWay;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Sends your recorded trips to the local server on your own Mac, when you set one, so the predictions can be checked against real rides.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WhichWay uses your location to suggest the nearest station, to notice when you reach your station and your stop while a route is in progress, and, if you opt in, to learn how long your walks take. Your location stays on the phone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "When you opt in, WhichWay summarises the phone's motion during a route to notice when your train pulls away and when you walk off, to learn your own pace and to check its predictions against real trips. Nothing that identifies you is kept.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
