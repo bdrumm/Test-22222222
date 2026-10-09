@@ -10,3 +10,8 @@ WHICHWAY_BASE_URL = http:/$()/localhost:8000/data/
 // Where the phone sends its recorded trips: the same local server, reached by your Mac's Bonjour name on the
 // home network (System Settings > General > Sharing > Local hostname), e.g. http:/$()/my-mac.local:8000/.
 WHICHWAY_TRIP_SERVER =
+
+// The trip relay (relay/README.md), once deployed: the Worker's https address and the app key you gave it
+// (wrangler secret put APP_KEY). Both reach release builds too.
+WHICHWAY_TRIP_RELAY =
+WHICHWAY_RELAY_KEY =

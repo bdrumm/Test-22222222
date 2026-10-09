@@ -8,6 +8,10 @@
 	<string>$(WHICHWAY_BASE_URL)</string>
 	<key>WhichWayTripServer</key>
 	<string>$(WHICHWAY_TRIP_SERVER)</string>
+	<key>WhichWayTripRelay</key>
+	<string>$(WHICHWAY_TRIP_RELAY)</string>
+	<key>WhichWayRelayKey</key>
+	<string>$(WHICHWAY_RELAY_KEY)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

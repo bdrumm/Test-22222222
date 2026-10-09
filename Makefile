@@ -8,7 +8,7 @@ PYTHON := $(VENV)/bin/python
 SITE ?= _site
 PORT ?= 8000
 
-.PHONY: help local venv gtfs site-synthetic site data-branch serve serve-agent model test ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
+.PHONY: help local venv gtfs site-synthetic site data-branch serve serve-agent model test relay-test relay-deploy relay-health ios ios-build ios-test ios-ipa ios-testflight ios-organizer ios-fixtures
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
@@ -38,6 +38,17 @@ model: gtfs data-branch ## Train the arrival model on the archive + collected hi
 
 trips: ## Pull the phone's trips (when it is connected), merge them with the uploads, review them against the trains → data/trips/trip_review.md (IMPORT=file.json takes an export from the app)
 	$(PYTHON) -m pipeline.trip_review --pull $(if $(IMPORT),--import "$(IMPORT)") --db data/mta.sqlite --out data/trips
+
+relay-test: ## The trip relay's tests (relay/, a Cloudflare Worker; Node's own test runner)
+	cd relay && node --test
+
+relay-deploy: ## Deploy the trip relay (needs `npx wrangler login` once, and the two secrets: see relay/README.md)
+	cd relay && npx wrangler deploy
+
+relay-health: ## Ask the deployed relay whether it is configured and its token can see the data repository (RELAY=https://... or WHICHWAY_TRIP_RELAY from Local.xcconfig)
+	@u="$(RELAY)"; test -n "$$u" || u=$$(sed -n 's/^WHICHWAY_TRIP_RELAY *= *//p' ios/WhichWay/Config/Local.xcconfig | sed 's#\$$()##g'); \
+	test -n "$$u" || { echo "no relay address: set WHICHWAY_TRIP_RELAY in ios/WhichWay/Config/Local.xcconfig"; exit 1; }; \
+	curl -s -m 20 "$${u%/}/v1/health?probe=1"; echo
 
 trips-nightly: ## Install a launchd agent that runs `make trips` every night at 23:40 (remove with scripts/trips_agent.sh remove)
 	scripts/trips_agent.sh install

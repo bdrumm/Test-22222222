@@ -6,6 +6,10 @@
 WHICHWAY_BASE_URL = https:/$()/bdrumm.github.io/whichway/data/
 // Where the Debug build sends recorded trips (your Mac on the home network); empty: the data server, if it is one.
 WHICHWAY_TRIP_SERVER =
+// The trip relay (relay/README.md): its https address and the app key it expects; set in Local.xcconfig. Empty:
+// trips go to the rider's own GitHub repository if they set a token in Settings, else stay on the phone.
+WHICHWAY_TRIP_RELAY =
+WHICHWAY_RELAY_KEY =
 PRODUCT_BUNDLE_IDENTIFIER = com.whichway.app
 DEVELOPMENT_TEAM =
 

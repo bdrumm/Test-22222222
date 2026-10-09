@@ -89,7 +89,34 @@ struct TelemetrySection: View {
                     .disabled(tele.observations.isEmpty)
             }
         }
-        if tele.optIn { GitHubUploadSection() }
+        if tele.optIn {
+            if TripRelay.shared.configured { RelayUploadSection() } else { GitHubUploadSection() }
+        }
+    }
+}
+
+/// Trips to the WhichWay data repository through the relay the build names: nothing to set up on the phone.
+struct RelayUploadSection: View {
+    private var relay: TripRelay { TripRelay.shared }
+    private var tele: Telemetry { Telemetry.shared }
+    @State private var sending = false
+    @State private var refresh = 0
+
+    var body: some View {
+        Section("Trips to WhichWay") {
+            LabeledContent("Sent through", value: relay.host)
+            Text("Each trip you share, and its motion trace, goes to the WhichWay data repository when it ends and whenever the app opens, over Wi-Fi or cellular, so the predictions can be checked against real rides. It carries the route, the times and the trip's own measurements under this phone's random id; never your location or anything that identifies you.")
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Waiting to send", value: "\(tele.pendingGitHub) trip\(tele.pendingGitHub == 1 ? "" : "s")")
+            if let t = relay.lastUpload { LabeledContent("Last sent", value: Fmt.hhmmss(t.timeIntervalSince1970)) }
+            if let e = relay.lastError { Text(e).font(.caption).foregroundStyle(Color.red) }
+            Button(sending ? "Sending…" : "Send now") {
+                sending = true
+                Task { await tele.uploadToGitHub(); sending = false; refresh += 1 }
+            }
+            .disabled(sending || tele.pendingGitHub == 0)
+        }
+        .id(refresh)
     }
 }
 

@@ -116,8 +116,8 @@ struct PlannerView: View {
                 if Telemetry.shared.pendingUpload > 0, let u = Telemetry.shared.uploadURL(fallback: data.apiBase) {
                     Task { await Telemetry.shared.upload(to: u) }
                 }
-                // and to the private GitHub data repository, from wherever the phone is
-                if GitHubUploader.shared.configured { Task { await Telemetry.shared.uploadToGitHub() } }
+                // and to the private data repository (through the relay, or the rider's own token), from wherever the phone is
+                if TripRepository.configured { Task { await Telemetry.shared.uploadToGitHub() } }
             case .background:
                 if !routeStarted { loc.stopTracking() }           // a route in progress keeps the fixes coming
             default: break

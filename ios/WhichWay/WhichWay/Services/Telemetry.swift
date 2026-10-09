@@ -161,11 +161,11 @@ final class Telemetry {
         }
     }
 
-    /// Every trip not yet in the private GitHub data repository, one file each, from any connection; the motion
-    /// traces waiting on the phone follow.
+    /// Every trip not yet in the private data repository, one file each, from any connection: through the relay
+    /// when the build names one, else with the rider's own GitHub token; the motion traces waiting on the phone
+    /// follow.
     func uploadToGitHub() async {
-        let gh = GitHubUploader.shared
-        guard gh.configured else { return }
+        guard optIn, TripRepository.configured else { return }
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys, .prettyPrinted]
         for o in observations where o.uploadedGitHub != true {
@@ -173,12 +173,12 @@ final class Telemetry {
             copy.uploaded = nil
             copy.uploadedGitHub = nil
             do {
-                try await gh.put(path: GitHubUploader.tripPath(createdTs: o.createdTs, id: o.id), data: try enc.encode(copy), message: "trip: \(o.routeLabel)")
+                try await TripRepository.putTrip(createdTs: o.createdTs, id: o.id, data: try enc.encode(copy), message: "trip: \(o.routeLabel)")
                 if let i = observations.firstIndex(where: { $0.id == o.id }) { observations[i].uploadedGitHub = true }
                 save()
-                gh.noteResult(nil)
+                TripRepository.noteResult(nil)
             } catch {
-                gh.noteResult(error)
+                TripRepository.noteResult(error)
                 return
             }
         }

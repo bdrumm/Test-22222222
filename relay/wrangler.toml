@@ -1,0 +1,30 @@
+# The trip relay: a Cloudflare Worker (free plan) that takes each finished trip from any phone running the app
+# and writes it into the private data repository, so the Mac's `make trips` and the local server pull it as
+# they already do. The GitHub token lives here as a secret; the phones carry only a shared app key.
+#   npx wrangler login                      # once: a Cloudflare account, free
+#   npx wrangler secret put GITHUB_TOKEN    # fine-grained token: Contents read/write on the data repository only
+#   npx wrangler secret put APP_KEY         # the key the app sends (WHICHWAY_RELAY_KEY in Config/Local.xcconfig)
+#   npx wrangler deploy                     # prints the URL: put it in WHICHWAY_TRIP_RELAY and rebuild the app
+name = "whichway-trips"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+workers_dev = true
+
+[vars]
+GITHUB_REPO = "bdrumm/whichway-data"
+MAX_TRIP_BYTES = "262144"
+MAX_TRACE_BYTES = "4194304"
+# days a trip's start may lie in the past (or hours in the future) and still be taken
+MAX_AGE_DAYS = "120"
+
+# Per phone and per address: a trip every second is nobody's commute. The bindings are optional; the Worker
+# runs without them (local tests, a plan without the feature).
+[[ratelimits]]
+name = "RATE_INSTALL"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+[[ratelimits]]
+name = "RATE_IP"
+namespace_id = "1002"
+simple = { limit = 120, period = 60 }

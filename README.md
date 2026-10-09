@@ -626,6 +626,21 @@ allowance, the change time where the rider's is longer than the MTA's minimum, a
 place. It lives in Application Support and is never uploaded; with anonymous telemetry also on, each trip's own
 measurements travel with its observation, never the model, the places or any location.
 
+**Trips from every phone: the relay** (Oct 8). A trip used to reach the Mac
+only over the home network, by cable, or through the rider's own GitHub token
+pasted into Settings: fine for one phone, no good for testers. `relay/` is a
+Cloudflare Worker (free plan) that takes each finished trip, and from
+developer builds its motion trace, from any phone that has opted in to
+sharing trip motion, checks the app key and the document, and writes it into
+the private data repository with a GitHub token only the Worker holds; the
+layout is the one the app wrote directly before, so `make trips` and the local
+server go on pulling the repository as they did. The build carries the
+relay's address and the app key (`WHICHWAY_TRIP_RELAY`, `WHICHWAY_RELAY_KEY`
+in `Config/Local.xcconfig`, release builds included); without them the app
+falls back to the rider's own token, and without that trips stay on the
+phone. Setup, the API, the limits and what the relay does not do are in
+`relay/README.md`; `make relay-test` runs it against a fake GitHub.
+
 **Which train you boarded.** The route the planner picks is usually the one taken, but not always: the other
 line on the same platform may come first, or an express instead of a local. While a route is in progress the
 phone keeps a log, poll by poll, of every train of the leg's lines (and of the other lines at that platform in

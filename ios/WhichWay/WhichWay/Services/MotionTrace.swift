@@ -64,8 +64,7 @@ final class MotionTrace {
 
     /// Traces not yet in the GitHub data repository (traces/trace-<start>.json there), oldest first.
     func uploadPending() async {
-        let gh = GitHubUploader.shared
-        guard gh.configured else { return }
+        guard TripRepository.configured else { return }
         var sent = Set(UserDefaults.standard.stringArray(forKey: "tracesUploaded") ?? [])
         let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.lastPathComponent.hasPrefix("trace-") && !sent.contains($0.lastPathComponent) }
@@ -73,11 +72,11 @@ final class MotionTrace {
         for f in files {
             guard let data = try? Data(contentsOf: f) else { continue }
             do {
-                try await gh.put(path: "traces/\(f.lastPathComponent)", data: data, message: "motion trace")
+                try await TripRepository.putTrace(fileName: f.lastPathComponent, data: data)
                 sent.insert(f.lastPathComponent)
                 UserDefaults.standard.set(Array(sent), forKey: "tracesUploaded")
             } catch {
-                gh.noteResult(error)
+                TripRepository.noteResult(error)
                 return
             }
         }
