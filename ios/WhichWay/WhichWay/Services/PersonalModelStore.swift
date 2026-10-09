@@ -14,7 +14,8 @@ final class PersonalModelStore {
     @ObservationIgnored private let file: URL
 
     init() {
-        let on = UserDefaults.standard.bool(forKey: PersonalModelStore.optInKey)
+        // on unless switched off: the pace model never leaves the phone
+        let on = UserDefaults.standard.object(forKey: PersonalModelStore.optInKey) == nil ? true : UserDefaults.standard.bool(forKey: PersonalModelStore.optInKey)
         let root = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
         let dir = root.appendingPathComponent("WhichWay/personal", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

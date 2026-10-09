@@ -1,96 +1,132 @@
 import SwiftUI
 
+/// What a rider sets: commutes, places, their own pace, and whether their trips are shared. The data sources,
+/// the feed status and the upload plumbing live under Developer.
 struct SettingsView: View {
     @Environment(DataService.self) private var data
-    @State private var base = ""
-    @State private var poll = 30.0
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Data source") {
-                    TextField("Base URL of the published data", text: $base)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    Stepper("Poll the feeds every \(Int(poll)) s", value: $poll, in: 10...120, step: 5)
-                    Button("Apply and reload") { data.configure(baseURL: base, pollSec: poll) }
-                    Button("Use the local server (localhost:8000)") { base = DataService.localBase }
-                    Button("Use the published site") { base = DataService.publishedBase }
-                    Text("`make serve` in the repository serves the built site on port 8000 with live data refreshed from the feeds. The Simulator reaches localhost; a device needs your Mac's address on the local network, e.g. http://192.168.1.20:8000/data/.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Status") {
-                    LabeledContent("Schedule", value: data.schedule.map { "\($0.lines.count) line directions · \($0.serviceDate ?? "")" } ?? "not loaded")
-                    LabeledContent("Timetable extract", value: "\(data.lineSched.values.reduce(0) { $0 + $1.count }) trips")
-                    LabeledContent("Hold log", value: data.holds.map { "\($0.n) holds" } ?? "–")
-                    LabeledContent("Segment runs", value: data.segments.map { "\($0.n) runs · \($0.byKey.count) segments" } ?? "–")
-                    LabeledContent("Deviation grids", value: "\(data.deviations.count) lines")
-                    LabeledContent("Prediction engine", value: data.model?.summary ?? "no tables yet (physical priors)")
-                    LabeledContent("Next poll", value: data.isDemo ? "demo clock" : "in \(Int(data.nextPollSec.rounded())) s, aligned to the feed")
-                    LabeledContent("Feeds", value: data.feeds.keys.sorted().joined(separator: ", "))
-                    LabeledContent("Alerts", value: "\(data.alerts.count) active")
-                    LabeledContent("Last poll", value: data.lastUpdate.map { Fmt.hhmmss($0.timeIntervalSince1970) } ?? "–")
-                    LabeledContent("Offline copy", value: data.cacheSummary)
-                    Button("Clear the offline copy") { data.clearCache() }
-                    Text("Every file fetched is kept on the phone: without signal the app keeps planning from the timetable and the saved tables, with the trains where they were last seen.").font(.caption).foregroundStyle(.secondary)
-                    if data.isDemo { Text("Demo clock: the schedule pins the current time (demo_now).").font(.caption) }
-                    if let e = data.lastError { Text(e).font(.caption).foregroundStyle(Color.red) }
-                }
                 CommutesSection()
                 PlacesSection()
                 PaceSection()
-                TelemetrySection()
+                SharingSection()
+                Section {
+                    NavigationLink("Developer") { DeveloperSettingsView() }
+                } footer: {
+                    Text("Data sources, the feed status, the offline copy and where trips are sent.")
+                }
                 Section("About") {
                     Text("WhichWay reads the MTA GTFS-Realtime feeds directly and layers the published delay analysis on top: the timetable extract for lateness, the hold log for hold risk, per-line deviation grids for the time trains typically lose at this hour, and measured segment run times for speeds. Times are New York local.")
                         .font(.caption)
+                    LabeledContent("Version", value: SettingsView.version)
                 }
             }
             .navigationTitle("Settings")
-            .onAppear {
-                base = data.baseURL
-                poll = data.pollSec
-            }
         }
+    }
+
+    static var version: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (\(b))"
     }
 }
 
-/// Opt-in, anonymous trip motion: what it is, what is kept, and the controls over it.
-struct TelemetrySection: View {
-    @Environment(DataService.self) private var data
+/// Sharing trip data: on unless the rider switches it off, and the first launch says so. What is kept, what is
+/// never kept, how much has gone, and the switch; the plumbing (where it goes, send now, the rider's own token)
+/// is under Developer.
+struct SharingSection: View {
     private var tele: Telemetry { Telemetry.shared }
 
     var body: some View {
         Section("Improve the predictions") {
-            Toggle("Share anonymous trip motion", isOn: Binding(get: { tele.optIn }, set: { tele.setOptIn($0) }))
+            Toggle("Share my trips", isOn: Binding(get: { tele.optIn }, set: { tele.setOptIn($0) }))
                 .disabled(!tele.sensorsAvailable)
-            Text("Off unless you turn it on. While a route is in progress, the phone's motion sensors are summarised once a second to notice when your train pulls away and when you walk off it, so the predictions can be checked against real boardings and changes. Kept: the route's stations and lines, the predicted and observed times, the train's lateness, those moments, and the trip's own measurements (walking pace, time to the platform, time changing trains). Never kept: your location, your places, raw sensor data, or anything that identifies you. A random id groups this phone's trips; switching this off deletes what was collected and resets the id.")
+            Text(SharingSection.explanation)
                 .font(.caption).foregroundStyle(.secondary)
             if !tele.sensorsAvailable { Text("This device has no motion sensors.").font(.caption).foregroundStyle(.secondary) }
             if tele.optIn {
-                LabeledContent("Motion now", value: TripRecorder.shared.phase == nil ? "not on a route" : TripRecorder.shared.motionState.rawValue)
-                LabeledContent("Trips recorded", value: "\(tele.observations.count) · \(tele.pendingUpload) to send")
-                TextField("Trip server, e.g. http://my-mac.local:8000/", text: Binding(get: { tele.server }, set: { tele.setServer($0) }))
-                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Text("The local server on your Mac (make serve), reached on the home network. Trips are sent when they end and when the app opens; the Mac reviews each one against the trains (data/trips/trip_review.md).")
-                    .font(.caption).foregroundStyle(.secondary)
-                LabeledContent("Sent to", value: tele.uploadURL(fallback: data.apiBase)?.host ?? "nowhere: the published site cannot receive, trips stay on the phone")
-                if let t = tele.lastUpload { LabeledContent("Last sent", value: Fmt.hhmmss(t.timeIntervalSince1970)) }
-                if let e = tele.lastUploadError { Text(e).font(.caption).foregroundStyle(Color.red) }
-                Button("Send now") { Task { await tele.upload(to: tele.uploadURL(fallback: data.apiBase)) } }
-                    .disabled(tele.uploadURL(fallback: data.apiBase) == nil || tele.pendingUpload == 0)
-                if let u = tele.exportURL() { ShareLink("Export as JSON", item: u) }
-                #if DEBUG
-                Toggle("Keep motion traces (developer)", isOn: Binding(get: { MotionTrace.shared.enabled }, set: { MotionTrace.shared.enabled = $0 }))
-                Text("Keeps each route's summarised motion, one line a second, on this phone (the last 30 routes), to tune when a train is felt pulling away. Copied off with make trips, and written to your GitHub data repository when that is set up below.")
-                    .font(.caption).foregroundStyle(.secondary)
-                #endif
+                LabeledContent("Trips shared", value: "\(tele.observations.count - tele.pendingGitHub) sent · \(tele.pendingGitHub) waiting")
+                if let t = TripRepository.lastUpload { LabeledContent("Last sent", value: Fmt.hhmmss(t.timeIntervalSince1970)) }
                 Button("Delete collected data", role: .destructive) { tele.deleteAll() }
                     .disabled(tele.observations.isEmpty)
             }
         }
-        if tele.optIn {
+    }
+
+    static let explanation = "On unless you turn it off. While a route is in progress the phone's motion is summarised once a second to notice when your train pulls away and when you walk off it, so the predictions can be checked against real boardings and changes. Shared: the route's stations and lines, the predicted and observed times, the train's lateness, those moments, and the trip's own measurements (walking pace, time to the platform, time changing trains). Never shared: your location, your places, raw sensor data, or anything that identifies you. A random id groups this phone's trips; switching this off deletes what was collected and resets the id."
+}
+
+/// The data sources, the feed status, the offline copy, and the ways trips leave the phone.
+struct DeveloperSettingsView: View {
+    @Environment(DataService.self) private var data
+    private var tele: Telemetry { Telemetry.shared }
+    @State private var base = ""
+    @State private var poll = 30.0
+
+    var body: some View {
+        Form {
+            Section("Data source") {
+                TextField("Base URL of the published data", text: $base)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                Stepper("Poll the feeds every \(Int(poll)) s", value: $poll, in: 10...120, step: 5)
+                Button("Apply and reload") { data.configure(baseURL: base, pollSec: poll) }
+                Button("Use the local server (localhost:8000)") { base = DataService.localBase }
+                Button("Use the published site") { base = DataService.publishedBase }
+                Text("`make serve` in the repository serves the built site on port 8000 with live data refreshed from the feeds. The Simulator reaches localhost; a device needs your Mac's address on the local network, e.g. http://192.168.1.20:8000/data/.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Status") {
+                LabeledContent("Schedule", value: data.schedule.map { "\($0.lines.count) line directions · \($0.serviceDate ?? "")" } ?? "not loaded")
+                LabeledContent("Timetable extract", value: "\(data.lineSched.values.reduce(0) { $0 + $1.count }) trips")
+                LabeledContent("Hold log", value: data.holds.map { "\($0.n) holds" } ?? "–")
+                LabeledContent("Segment runs", value: data.segments.map { "\($0.n) runs · \($0.byKey.count) segments" } ?? "–")
+                LabeledContent("Deviation grids", value: "\(data.deviations.count) lines")
+                LabeledContent("Prediction engine", value: data.model?.summary ?? "no tables yet (physical priors)")
+                LabeledContent("Next poll", value: data.isDemo ? "demo clock" : "in \(Int(data.nextPollSec.rounded())) s, aligned to the feed")
+                LabeledContent("Feeds", value: data.feeds.keys.sorted().joined(separator: ", "))
+                LabeledContent("Alerts", value: "\(data.alerts.count) active")
+                LabeledContent("Last poll", value: data.lastUpdate.map { Fmt.hhmmss($0.timeIntervalSince1970) } ?? "–")
+                LabeledContent("Offline copy", value: data.cacheSummary)
+                Button("Clear the offline copy") { data.clearCache() }
+                Text("Every file fetched is kept on the phone: without signal the app keeps planning from the timetable and the saved tables, with the trains where they were last seen.").font(.caption).foregroundStyle(.secondary)
+                if data.isDemo { Text("Demo clock: the schedule pins the current time (demo_now).").font(.caption) }
+                if let e = data.lastError { Text(e).font(.caption).foregroundStyle(Color.red) }
+            }
+            Section("Trips leaving the phone") {
+                LabeledContent("Sharing", value: tele.optIn ? "on" : "off (Settings › Improve the predictions)")
+                LabeledContent("Motion now", value: TripRecorder.shared.phase == nil ? "not on a route" : TripRecorder.shared.motionState.rawValue)
+                LabeledContent("Trips recorded", value: "\(tele.observations.count) · \(tele.pendingUpload) to send to a local server · \(tele.pendingGitHub) to the repository")
+                TextField("Trip server, e.g. http://my-mac.local:8000/", text: Binding(get: { tele.server }, set: { tele.setServer($0) }))
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Text("The local server on your Mac (make serve), reached on the home network. Trips are sent when they end and when the app opens; the Mac reviews each one against the trains (data/trips/trip_review.md).")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("Local server", value: tele.uploadURL(fallback: data.apiBase)?.host ?? "none")
+                if let t = tele.lastUpload { LabeledContent("Last sent there", value: Fmt.hhmmss(t.timeIntervalSince1970)) }
+                if let e = tele.lastUploadError { Text(e).font(.caption).foregroundStyle(Color.red) }
+                Button("Send to the local server now") { Task { await tele.upload(to: tele.uploadURL(fallback: data.apiBase)) } }
+                    .disabled(!tele.optIn || tele.uploadURL(fallback: data.apiBase) == nil || tele.pendingUpload == 0)
+                if let u = tele.exportURL() { ShareLink("Export as JSON", item: u) }
+                #if DEBUG
+                Toggle("Keep motion traces (developer)", isOn: Binding(get: { MotionTrace.shared.enabled }, set: { MotionTrace.shared.enabled = $0 }))
+                Text("Keeps each route's summarised motion, one line a second, on this phone (the last 30 routes), to tune when a train is felt pulling away. Copied off with make trips, and sent to the data repository with the trips.")
+                    .font(.caption).foregroundStyle(.secondary)
+                #endif
+            }
             if TripRelay.shared.configured { RelayUploadSection() } else { GitHubUploadSection() }
+            Section("Build") {
+                LabeledContent("Version", value: SettingsView.version)
+                LabeledContent("Relay", value: TripRelay.shared.configured ? TripRelay.shared.host : "none in this build")
+            }
+        }
+        .navigationTitle("Developer")
+        .onAppear {
+            base = data.baseURL
+            poll = data.pollSec
         }
     }
 }
@@ -105,7 +141,7 @@ struct RelayUploadSection: View {
     var body: some View {
         Section("Trips to WhichWay") {
             LabeledContent("Sent through", value: relay.host)
-            Text("Each trip you share, and its motion trace, goes to the WhichWay data repository when it ends and whenever the app opens, over Wi-Fi or cellular, so the predictions can be checked against real rides. It carries the route, the times and the trip's own measurements under this phone's random id; never your location or anything that identifies you.")
+            Text("Each shared trip, and its motion trace, goes to the WhichWay data repository when it ends and whenever the app opens, over Wi-Fi or cellular, so the predictions can be checked against real rides. It carries the route, the times and the trip's own measurements under this phone's random id; never your location or anything that identifies you.")
                 .font(.caption).foregroundStyle(.secondary)
             LabeledContent("Waiting to send", value: "\(tele.pendingGitHub) trip\(tele.pendingGitHub == 1 ? "" : "s")")
             if let t = relay.lastUpload { LabeledContent("Last sent", value: Fmt.hhmmss(t.timeIntervalSince1970)) }
@@ -114,14 +150,15 @@ struct RelayUploadSection: View {
                 sending = true
                 Task { await tele.uploadToGitHub(); sending = false; refresh += 1 }
             }
-            .disabled(sending || tele.pendingGitHub == 0)
+            .disabled(!tele.optIn || sending || tele.pendingGitHub == 0)
         }
         .id(refresh)
     }
 }
 
 /// Trips to a private GitHub repository the rider owns, from any connection: the repository and a fine-grained
-/// token for it alone (Contents: read and write), kept in the Keychain.
+/// token for it alone (Contents: read and write), kept in the Keychain. The way before the relay; still the way
+/// for a build without one.
 struct GitHubUploadSection: View {
     private var gh: GitHubUploader { GitHubUploader.shared }
     private var tele: Telemetry { Telemetry.shared }
@@ -155,7 +192,7 @@ struct GitHubUploadSection: View {
                 sending = true
                 Task { await tele.uploadToGitHub(); sending = false; refresh += 1 }
             }
-            .disabled(!hasToken || sending)
+            .disabled(!tele.optIn || !hasToken || sending)
         }
         .id(refresh)
     }

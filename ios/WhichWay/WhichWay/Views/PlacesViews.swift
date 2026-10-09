@@ -153,7 +153,7 @@ struct PaceSection: View {
     var body: some View {
         Section("Learn my pace") {
             Toggle("Learn how long my trips really take", isOn: Binding(get: { pace.optIn }, set: { pace.setOptIn($0) }))
-            Text("Off unless you turn it on. While a route is in progress the phone's location and motion sensors measure how fast you walk, how long you take from the street to the platform at each station, how long your changes take, and how long your places are from their stations. The predictions then use your figures instead of averages. This stays on the phone; it is never sent anywhere unless you also share anonymous trip motion below, and then only each trip's own measurements go, never your places or location.")
+            Text("On unless you turn it off. While a route is in progress the phone's location and motion sensors measure how fast you walk, how long you take from the street to the platform at each station, how long your changes take, and how long your places are from their stations. The predictions then use your figures instead of averages. This stays on the phone; it is never sent anywhere unless you also share your trips below, and then only each trip's own measurements go, never your places or location.")
                 .font(.caption).foregroundStyle(.secondary)
             if pace.optIn || pace.model.trips > 0 {
                 LabeledContent("Learned so far", value: pace.summary)

@@ -77,9 +77,13 @@ final class Telemetry {
     var pendingGitHub: Int { observations.filter { $0.uploadedGitHub != true }.count }
     var sensorsAvailable: Bool { MotionSampler.isAvailable }
 
+    /// Whether the rider has ever set the switch themselves (else sharing is on, and the first launch says so).
+    static var decided: Bool { UserDefaults.standard.object(forKey: Telemetry.optInKey) != nil }
+
     init() {
         let d = UserDefaults.standard
-        let on = d.bool(forKey: Telemetry.optInKey)
+        // on unless the rider switched it off: the first launch tells them, with the switch to hand
+        let on = d.object(forKey: Telemetry.optInKey) == nil ? true : d.bool(forKey: Telemetry.optInKey)
         let id = d.string(forKey: Telemetry.installKey) ?? UUID().uuidString
         d.set(id, forKey: Telemetry.installKey)
         let root = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
