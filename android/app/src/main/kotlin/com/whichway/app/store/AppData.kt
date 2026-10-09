@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.whichway.app.BuildConfig
 import com.whichway.core.Alerts
+import com.whichway.core.ClientGeometry
 import com.whichway.core.ClientLines
 import com.whichway.core.ClientModel
 import com.whichway.core.ClientSchedule
@@ -55,6 +56,8 @@ data class AppState(
     val holds: HoldsSummary? = null,
     val model: ClientModel? = null,
     val deviations: Map<String, LineDeviation> = emptyMap(),
+    /** Stop coordinates and tracks (client_geometry.json), fetched the first time something needs it. */
+    val geometry: ClientGeometry? = null,
     val feeds: Map<String, RTFeed> = emptyMap(),
     val boards: Map<String, LineBoard> = emptyMap(),
     val predictions: Map<String, Map<String, LinePrediction>> = emptyMap(),
@@ -208,6 +211,18 @@ class AppData(app: Application) : AndroidViewModel(app) {
         wanted.forEach(::requestDeviation)
     }
 
+    private var geometryRequested = false
+
+    fun requestGeometry() {
+        if (geometryRequested) return
+        geometryRequested = true
+        viewModelScope.launch {
+            val g = runCatching { WWJson.decodeFromString(ClientGeometry.serializer(), fetchText("client_geometry.json")) }.getOrNull()
+            if (g == null) { geometryRequested = false; return@launch }
+            _state.update { it.copy(geometry = g, staticVersion = it.staticVersion + 1) }
+        }
+    }
+
     /** The deviation grid of one line (typical time lost per stop by hour), fetched once per line on demand. */
     private fun requestDeviation(key: String) {
         if (!deviationRequested.add(key)) return
@@ -260,6 +275,7 @@ class AppData(app: Application) : AndroidViewModel(app) {
         cache = DiskCache(getApplication(), cacheKey(b))
         history.reset()
         staleRuns = 0
+        geometryRequested = false
         _state.value = AppState(baseUrl = b, pollSec = maxOf(10.0, pollSec))
         start()
     }

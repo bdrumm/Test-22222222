@@ -36,6 +36,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whichway.app.store.AppData
+import com.whichway.app.store.LocationService
+import com.whichway.app.store.Stores
 import com.whichway.core.Fmt
 
 /** "0.1 (1)", as iOS shows CFBundleShortVersionString (CFBundleVersion). */
@@ -60,9 +62,15 @@ fun SettingsScreen(data: AppData, modifier: Modifier = Modifier) {
     }
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
+        val ctx = LocalContext.current.applicationContext
+        val stores = remember(ctx) { Stores.get(ctx) }
+        val loc = remember(ctx) { LocationService.get(ctx) }
+        CommutesSection(data, stores)
+        PlacesSection(data, stores, loc)
+        PaceSection(stores)
         Card {
-            Text("Commutes, places, your pace and trip sharing", style = MaterialTheme.typography.titleSmall)
-            Caption("These come to Android with ride tracking. On iPhone they live on this page.")
+            Text("Improve the predictions", style = MaterialTheme.typography.titleSmall)
+            Caption("Sharing your trips comes to Android with ride tracking; this build records and sends nothing.")
         }
         Card(Modifier.clickable { developer = true }) {
             Row(verticalAlignment = Alignment.CenterVertically) {

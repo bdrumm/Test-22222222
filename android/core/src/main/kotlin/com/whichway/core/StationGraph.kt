@@ -275,8 +275,9 @@ fun stationCoordinates(schedule: ClientSchedule, index: StationIndex, geometry: 
 }
 
 data class NearbyStation(val station: Station, val meters: Double) {
-    /** At 80 m a minute until a personal pace is learned. */
-    val walkMinutes: Int get() = maxOf(1, (meters / 80.0).roundToInt())
+    /** At the rider's street pace (80 m a minute until learned). */
+    val walkMinutes: Int get() = maxOf(1, (meters / speedMPerMin).roundToInt())
+    companion object { @Volatile var speedMPerMin = PersonalModel.DEFAULT_WALK_SPEED }
 }
 
 /** The n stations nearest to a point, nearest first. */

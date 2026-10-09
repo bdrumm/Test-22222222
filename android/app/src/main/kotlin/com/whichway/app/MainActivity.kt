@@ -31,6 +31,12 @@ import androidx.compose.ui.platform.LocalContext
 import com.whichway.app.ui.Welcome
 import com.whichway.app.ui.WelcomeSheet
 import com.whichway.app.store.AppData
+import com.whichway.app.store.LocationService
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whichway.app.ui.GoScreen
 import com.whichway.app.ui.LineScreen
 import com.whichway.app.ui.SettingsScreen
@@ -44,8 +50,10 @@ class MainActivity : ComponentActivity() {
         setContent { WhichWayTheme { Tabs(data) } }
     }
 
-    override fun onStart() { super.onStart(); data.start(); data.refreshIfStale() }
-    override fun onStop() { super.onStop(); data.stop() }
+    private val loc by lazy { LocationService.get(this) }
+
+    override fun onStart() { super.onStart(); data.start(); data.refreshIfStale(); if (loc.authorized) loc.startTracking() }
+    override fun onStop() { super.onStop(); data.stop(); loc.stopTracking() }
 }
 
 /** The iOS accent colour (AccentColor.colorset): MTA blue, lighter in dark mode. */
@@ -62,6 +70,11 @@ private fun Tabs(data: AppData) {
     val ctx = LocalContext.current
     var welcome by rememberSaveable { mutableStateOf(!Welcome.shown(ctx)) }
     if (welcome) WelcomeSheet { Welcome.markShown(ctx); welcome = false }
+    // the location permission, asked the first time a screen needs a fix
+    val loc = LocationService.get(ctx)
+    val needs by loc.needsPermission.collectAsStateWithLifecycle()
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r -> loc.permissionResult(r.values.any { it }) }
+    LaunchedEffect(needs) { if (needs) ask.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }
     Scaffold(bottomBar = {
         NavigationBar {
             NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Icon(Icons.Filled.Place, null) }, label = { Text("Go") })

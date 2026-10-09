@@ -11,7 +11,12 @@ ADB="$SDK/platform-tools/adb"
 export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 [ -x "$ADB" ] || { echo "no adb at $ADB (install Android Studio)"; exit 1; }
 "$ADB" get-state >/dev/null 2>&1 || { echo "no device: start an emulator in Android Studio first"; exit 1; }
+# the app must not be in front while it is replaced: Android 17 otherwise leaves a system "Updating…" screen
+# on top that only a Back, Home and a fresh start clear
+"$ADB" shell am force-stop com.whichway.app >/dev/null 2>&1 || true
+"$ADB" shell input keyevent KEYCODE_HOME >/dev/null 2>&1 || true
 ./gradlew :app:installDebug --console=plain -q
 "$ADB" reverse tcp:8000 tcp:8000 >/dev/null
+"$ADB" shell input keyevent KEYCODE_BACK >/dev/null 2>&1 || true
 "$ADB" shell am start -n com.whichway.app/.MainActivity >/dev/null
 echo "WhichWay launched; localhost:8000 on the device is this Mac's port 8000"

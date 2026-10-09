@@ -31,4 +31,21 @@ data class CommutePreset(
     }
 
     val windowText: String get() = "${Fmt.clock(startMinute)}–${Fmt.clock(endMinute)}${if (weekdaysOnly) " weekdays" else ""}"
+
+    companion object {
+        /** The first preset whose window covers this moment. */
+        fun active(presets: List<CommutePreset>, ts: Double): CommutePreset? = presets.firstOrNull { it.isActive(ts) }
+
+        /** A window around now for a new preset: from an hour before to two hours after, within the day. */
+        fun suggestedWindow(ts: Double): Pair<Int, Int> {
+            val h = Fmt.nyHour(ts)
+            val end = minOf(24, h + 2) * 60
+            return Pair(maxOf(0, h - 1) * 60, if (end == 1440) 1439 else end)
+        }
+
+        fun suggestedName(ts: Double): String {
+            val h = Fmt.nyHour(ts)
+            return if (h < 12) "Morning commute" else if (h < 16) "Afternoon trip" else "Evening commute"
+        }
+    }
 }
