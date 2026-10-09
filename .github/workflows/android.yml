@@ -1,0 +1,30 @@
+name: android
+# The Android port (android/): core tests on a JDK, then the app build. Runs only for Android changes or the
+# predictor fixture it shares with the iOS package, so iOS work never waits on it.
+on:
+  push:
+    branches: [claude/train-delay-analysis-framework-auxzv1, main]
+    paths: [android/**, ios/WhichWayCore/Tests/WhichWayCoreTests/Fixtures/**, .github/workflows/android.yml]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Core tests (the predictor against the shared fixture)
+        run: ./gradlew :core:test --console=plain
+      - name: App build (the runner has the Android SDK)
+        run: ./gradlew :app:assembleDebug --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whichway-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
