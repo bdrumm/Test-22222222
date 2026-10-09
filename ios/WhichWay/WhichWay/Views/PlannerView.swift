@@ -56,6 +56,12 @@ struct PlannerView: View {
     /// Per leg, the train the plan has the rider on: the planner's itinerary's train for the leg, kept up until the
     /// rider is at that leg's platform and its boarding time has passed (they presumably took it), then frozen.
     @State private var plannedTrains: [Int: BoardingCandidate] = [:]
+    /// The train the recorder's forecast names (the planner's live train, as of the last poll the forecast followed it).
+    /// When the planner moves on from it while the rider stands at the platform, that train has left.
+    @State private var forecastTrainId: String? = nil
+    /// Legs whose plan's train froze because the feed dropped it just before its time (`forecastTrainDeparted`), ahead
+    /// of the moment the time-based freeze in `followPlan` would have reached.
+    @State private var frozenLegs: Set<Int> = []
     /// The phone's belief in a line off the plan must be at least this sure before the route switches on its own.
     private let autoSwitchConfidence = 0.75
     /// The rider's own word on the train they are on (and the line to take at the change).
@@ -419,11 +425,19 @@ struct PlannerView: View {
         updateFocus()
         armBoardingTimer()
         if routeStarted {
+            // the planner moved on from the train the forecast named while the rider stood at the platform: it left (the
+            // feed drops a train a few seconds before its predicted platform moment, Oct 9 at 3:00:49 against 3:01:05),
+            // so the forecast freezes on it and the plan's train for the leg is kept as it was
+            let liveId = headline?.live?.legs.first?.train.id
+            if let fid = forecastTrainId, liveId != fid, trip.phase == .atStation, trip.forecastTrainDeparted(now: now) {
+                frozenLegs.insert(trip.currentLeg)
+            }
             followPlan(now: now)
             trip.observeBoards(data.boards, now: now)
             refreshRideArrival()
             updateActivity(); updateTelemetry()
             trip.updateForecast(boardTs: headline?.live?.boardTs, arriveTs: headline?.live?.arriveTs, now: now)
+            if trip.forecastBoardTs == headline?.live?.boardTs { forecastTrainId = liveId }
             trip.tick(now: now)
         }
     }
@@ -438,7 +452,7 @@ struct PlannerView: View {
         for i in p.legs.indices where i >= leg {
             if i == leg, trip.onTrain { continue }
             let atPlatform = i == leg && (trip.phase == .atStation || (i > 0 && trip.phase == .riding))
-            if atPlatform, let kept = plannedTrains[i], now >= PlatformTiming.atPlatform(kept.boardTs, route: kept.route) { continue }
+            if atPlatform, let kept = plannedTrains[i], frozenLegs.contains(i) || now >= PlatformTiming.atPlatform(kept.boardTs, route: kept.route) { continue }
             if let c = plannedCandidate(it, option: p, leg: i) { plannedTrains[i] = c }
         }
         var named: [Int: (key: String, trainId: String)] = [:]
@@ -737,6 +751,7 @@ struct PlannerView: View {
     /// the telemetry record and the Live Activity.
     private func adoptSelectedRoute() {
         guard routeStarted, let p = headline else { return }
+        forecastTrainId = nil        // another route's train is a choice, not the forecast's train leaving
         let plans = legPlans(p)
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
         trip.replan(legs: plans, transferStation: p.transfer?.station)
@@ -1054,7 +1069,7 @@ struct PlannerView: View {
         let obs = (Telemetry.shared.optIn && p != nil) ? observationBase(p!, startedBy: by) : nil
         let plans = legPlans(p)
         data.setWanted(Set(plans.flatMap { $0.platformKeys.keys }), for: "trip")
-        extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]
+        extraPaths = []; lastSwitchTs = 0; rideItinerary = nil; plannedTrains = [:]; preferredKeys = [:]; forecastTrainId = nil; frozenLegs = []
         trip.stopCoordinate = { [weak data] key, idx in data?.geometry?.lines[key]?.coord(idx) }
         withAnimation { trip.begin(tl, distanceToOriginM: d, observation: obs, legs: plans, now: data.now) }
         data.requestGeometry()
@@ -1097,7 +1112,7 @@ struct PlannerView: View {
         data.setWanted([], for: "trip")
         data.setWanted([], for: "onTrain")
         loc.stopTracking()
-        rideItinerary = nil; plannedTrains = [:]
+        rideItinerary = nil; plannedTrains = [:]; forecastTrainId = nil; frozenLegs = []
         TripActivityService.shared.end()
         let tl = trip.end(by: by, api: Telemetry.shared.uploadURL(fallback: data.apiBase), now: data.now)
         let destName = data.index?.stations[destId]?.name ?? "your stop"

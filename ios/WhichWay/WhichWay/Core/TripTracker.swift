@@ -298,6 +298,18 @@ struct TripTracker {
         timeline.forecastArriveTs = arriveTs
     }
 
+    /// The train the forecast named has gone from the feed a little before its predicted platform moment (the feed
+    /// moves a train on as it leaves, and its ETA for the stop ran a few seconds optimistic: Oct 9, gone at 3:00:49
+    /// against 3:01:05). At the station, that is the train leaving now: the forecast freezes here and the assumed
+    /// ride is counted from this moment. Without this, `updateForecast` follows the planner on to the next train,
+    /// the predicted time never having passed, and with no felt departure the ride is never assumed. `graceSec`
+    /// bounds how early a drop may come and still be that train leaving; a train gone five minutes ahead of its
+    /// time was withdrawn, not taken.
+    mutating func forecastTrainDeparted(now: Double, graceSec: Double = 90) {
+        guard phase == .atStation, let b = timeline.forecastBoardTs, b > now, b - now <= graceSec else { return }
+        timeline.forecastBoardTs = now
+    }
+
     /// The rider got off without walking: a same-platform change, told by the feed (the train they were on has
     /// moved past the transfer stop while the phone has stood still there since `ts`). Closes the ride as an
     /// alighting at `ts`; the next push or vibration the sensors feel is the next train leaving.

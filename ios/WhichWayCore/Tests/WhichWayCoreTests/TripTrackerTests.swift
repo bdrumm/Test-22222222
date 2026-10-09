@@ -134,6 +134,37 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertEqual(a.timeline.liveArriveTs, 2500)
     }
 
+    func testATrainGoneFromTheFeedJustBeforeItsTimeCountsAsDeparted() {
+        // Oct 9: the feed dropped the F sixteen seconds before its predicted platform moment (3:00:49 against 3:01:05),
+        // so the planner moved on; the forecast, waiting for 3:01:05 to pass, would have followed the next train and
+        // the ride would never have been assumed
+        var t = TripTracker(start(), distanceToOriginM: 30)
+        t.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)
+        t.forecastTrainDeparted(now: 1084)
+        XCTAssertEqual(t.timeline.forecastBoardTs, 1084)
+        t.updateForecast(boardTs: 1500, arriveTs: 2100, now: 1085)          // the planner's next train: frozen out
+        XCTAssertEqual(t.timeline.forecastBoardTs, 1084)
+        XCTAssertEqual(t.timeline.liveArriveTs, 1700)
+        t.tick(now: 1203); XCTAssertEqual(t.phase, .atStation)
+        t.tick(now: 1204); XCTAssertEqual(t.phase, .riding)                 // assumed two minutes after the drop
+        XCTAssertTrue(t.timeline.rideAssumed)
+        // a train dropped five minutes ahead of its time is not that train leaving
+        var u = TripTracker(start(), distanceToOriginM: 30)
+        u.updateForecast(boardTs: 1100, arriveTs: 1700, now: 700)
+        u.forecastTrainDeparted(now: 800)
+        XCTAssertEqual(u.timeline.forecastBoardTs, 1100)
+        // and on the way to the station nothing freezes
+        var v = TripTracker(start(), distanceToOriginM: 900)
+        v.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)
+        v.forecastTrainDeparted(now: 1084)
+        XCTAssertEqual(v.timeline.forecastBoardTs, 1100)
+        // once the predicted time has passed the freeze is updateForecast's own, and the drop changes nothing
+        var w = TripTracker(start(), distanceToOriginM: 30)
+        w.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)
+        w.forecastTrainDeparted(now: 1110)
+        XCTAssertEqual(w.timeline.forecastBoardTs, 1100)
+    }
+
     func testStandingStillAtTheDestinationEndsOnTheClock() {
         var t = TripTracker(start(), distanceToOriginM: 30)
         t.updateForecast(boardTs: 1100, arriveTs: 1700, now: 1000)

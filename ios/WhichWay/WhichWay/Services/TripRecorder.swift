@@ -219,6 +219,18 @@ final class TripRecorder {
         tracker?.updateForecast(boardTs: boardTs, arriveTs: arriveTs, now: now)
     }
 
+    /// The boarding time of the forecast the rider acted on, as the tracker holds it (frozen once that train left).
+    var forecastBoardTs: Double? { tracker?.timeline.forecastBoardTs }
+
+    /// The train the forecast named has gone from the feed just before its predicted platform moment while the rider
+    /// stood at the station: it left. Returns whether the forecast froze on it (see `TripTracker.forecastTrainDeparted`).
+    @discardableResult
+    func forecastTrainDeparted(now: Double) -> Bool {
+        let before = tracker?.timeline.forecastBoardTs
+        tracker?.forecastTrainDeparted(now: now)
+        return tracker?.timeline.forecastBoardTs != before
+    }
+
     /// Every feed poll while the route is on: the boards of the leg in hand (the feed's own times, not the
     /// engine's) go into the departure log, which keeps each train's time at the platform after the feed has
     /// moved the train on.
