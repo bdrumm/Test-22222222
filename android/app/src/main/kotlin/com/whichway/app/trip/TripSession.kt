@@ -12,6 +12,14 @@ import com.whichway.app.store.AppState
 import com.whichway.app.store.Fix
 import com.whichway.app.store.LocationService
 import com.whichway.app.store.Stores
+import com.whichway.app.store.Telemetry
+import com.whichway.core.HealthContext
+import com.whichway.core.TripObservation
+import com.whichway.core.routeHealth
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import com.whichway.core.BoardingCandidate
 import com.whichway.core.BoardingPrompt
 import com.whichway.core.ClientSchedule
@@ -82,6 +90,8 @@ class TripSession private constructor(context: Context) {
     private val stores = Stores.get(app)
     private val loc = LocationService.get(app)
     private val sampler = MotionSampler(app)
+    val telemetry = Telemetry.get(app)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     val recorder = TripRecorder()
     private val main = Handler(Looper.getMainLooper())
     private val _ui = MutableStateFlow(TripUi())
@@ -141,7 +151,7 @@ class TripSession private constructor(context: Context) {
 
     fun serviceStarted() {
         serviceRunning = true
-        if (stores.learnPace) sampler.start { m -> main.post { onMotion(m) } }
+        if (stores.learnPace || telemetry.optIn.value) sampler.start { m -> main.post { onMotion(m) } }
         loc.startTracking()
     }
 
@@ -181,6 +191,7 @@ class TripSession private constructor(context: Context) {
         refreshRideArrival()
         recorder.updateForecast(h?.live?.boardTs, h?.live?.arriveTs, n)
         if (recorder.tracker?.timeline?.forecastBoardTs == h?.live?.boardTs) forecastTrainId = liveId
+        updateTelemetry()
         recorder.tick(n)
         if (com.whichway.app.BuildConfig.DEBUG) android.util.Log.d("WhichWay", "poll ${Fmt.hhmmss(n)} phase=${recorder.phase} onTrain=${recorder.onTrain} assumed=${recorder.rideAssumed} live=${h?.live?.boardTs?.let { Fmt.hhmmss(it) }} forecast=${recorder.tracker?.timeline?.forecastBoardTs?.let { Fmt.hhmmss(it) }} belief=${recorder.currentBelief?.let { "${it.bestKey} ${it.evidence}" }}")
         afterRecorderChange()
@@ -252,6 +263,7 @@ class TripSession private constructor(context: Context) {
         recorder.stopCoordinate = { key, idx -> state()?.geometry?.lines?.get(key)?.coord(idx) }
         recorder.learnedShare = { o, dd, leg, ck -> stores.pace.value.chosenLineShare(o, dd, leg, ck) }
         recorder.begin(tl, d, plans, s.now)
+        if (telemetry.optIn.value && h != null) telemetry.beginTrip(observationBase(h, by))
         data()?.requestGeometry()
         if (!loc.authorized) loc.request()
         if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) needsNotificationPermission.value = true
@@ -293,6 +305,7 @@ class TripSession private constructor(context: Context) {
         TripService.stop(app)
         sampler.stop()
         tl?.let { if (stores.learnPace) stores.learnPace(it) }
+        if (telemetry.endTrip(tl)) uploadPending()
         val destName = index()?.stations?.get(planner?.destId ?: "")?.name ?: "your stop"
         val at = Fmt.hhmm(tl?.endedTs ?: now())
         lastEndNote = when (by) {
@@ -427,8 +440,46 @@ class TripSession private constructor(context: Context) {
         val plans = legPlans(p)
         data()?.setWanted(plans.flatMap { it.platformKeys.keys }.toSet(), "trip")
         recorder.replan(plans, p.transfer?.station)
+        telemetry.updateRoute(p.label, p.legs.map { TripObservation.Leg(it.primaryKey, it.from, it.to) }, p.transfer?.station, p.transfer?.walkSec)
         refreshRideArrival()
         publish()
+    }
+
+    // the opt-in trip record
+
+    private fun health(p: PathOption): com.whichway.core.RouteHealth? {
+        val s = state() ?: return null
+        return routeHealth(p, HealthContext(s.now, s.boards, s.predictions, data()?.scenario ?: "baseline", s.alerts))
+    }
+
+    private fun observationBase(p: PathOption, startedBy: String): TripObservation {
+        val h = health(p)
+        val it = p.live
+        val l0 = it?.legs?.firstOrNull()?.train
+        val version = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "" }.getOrDefault("")
+        return TripObservation(id = "", installId = "", appVersion = version, createdTs = 0.0, routeLabel = p.label,
+            legs = p.legs.map { TripObservation.Leg(it.primaryKey, it.from, it.to) }, transferStation = p.transfer?.station, transferWalkSec = p.transfer?.walkSec,
+            predictedBoardTs = it?.boardTs, predictedArriveTs = it?.arriveTs, expectedSec = p.expectedSec, schedSec = p.schedSec,
+            extraMin = if (h != null && h.extraSec >= 90) h.minutes else 0, trainLateSec = l0?.effectiveLatenessSec, trainHeld = l0?.isHeld ?: false,
+            offline = state()?.offline ?: false, startedBy = startedBy)
+    }
+
+    private fun updateTelemetry() {
+        if (!telemetry.optIn.value) return
+        val p = planner?.headline ?: return
+        val h = health(p)
+        val l0 = p.live?.legs?.firstOrNull()?.train
+        telemetry.updatePrediction(p.live?.boardTs, p.live?.arriveTs, p.expectedSec, if (h != null && h.extraSec >= 90) h.minutes else 0,
+            l0?.effectiveLatenessSec, l0?.isHeld ?: false, state()?.offline ?: false, recorder.phase == TripPhase.riding)
+    }
+
+    /** Trips not sent yet: to the local server when reachable, and to the data repository through the relay. */
+    fun uploadPending() {
+        if (!telemetry.optIn.value) return
+        scope.launch {
+            telemetry.uploadUrl(data()?.apiBase)?.let { if (telemetry.pendingUpload > 0) telemetry.upload(it) }
+            telemetry.uploadToRelay()
+        }
     }
 
     private fun followBoarded() {

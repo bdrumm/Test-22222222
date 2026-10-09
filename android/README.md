@@ -52,6 +52,18 @@ does for the iOS Debug build, and run the app with `scripts/emulator.sh`: it bui
 device's `localhost:8000` to the Mac's with `adb reverse` (the Mac's firewall blocks the emulator's own route to
 the host) and launches. Settings › Developer can switch the source at run time.
 
+Shared trips leave the phone two ways, as on iOS: to the local server on the home network (`make serve`; the
+Debug build reaches it through the tunnel above, a phone needs `whichway.tripServer=http://<your-mac>.local:8000/`
+or the field in Settings › Developer), and to the data repository through the trip relay (`relay/README.md`).
+The relay's address and app key come from `local.properties` too, as `Local.xcconfig` carries them for iOS:
+
+```
+whichway.tripRelay=https://whichway-trips.<account>.workers.dev
+whichway.relayKey=<the APP_KEY the Worker holds>
+```
+
+Without them the build names no relay, and shared trips stay on the phone (and the local server).
+
 `.github/workflows/android.yml` runs the core tests and builds the app on every push that touches `android/` or
 the shared fixture, and only then.
 

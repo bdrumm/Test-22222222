@@ -1,6 +1,5 @@
-// The first launch (ios/WhichWay/WhichWay/Views/WelcomeView.swift): what the app does. The iOS sheet is mostly
-// about trip sharing, which needs ride tracking; that is not in the Android build yet, so the sheet says so
-// instead of showing a switch that would control nothing.
+// The first launch (ios/WhichWay/WhichWay/Views/WelcomeView.swift): what the app does, that sharing trips is on,
+// what that means, and the switch to turn it off right here. Shown once; Settings keeps the switch.
 package com.whichway.app.ui
 
 import android.content.Context
@@ -23,6 +22,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,11 +52,20 @@ fun WelcomeSheet(onDone: () -> Unit) {
                     }
                 }
                 Text("WhichWay reads the MTA's live feeds and a model of where trains lose time, ranks every way to your destination and counts down to the train to take.")
+                val tele = com.whichway.app.trip.TripSession.get(LocalContext.current.applicationContext).telemetry
+                val sharing by tele.optIn.collectAsStateWithLifecycle()
                 Card {
-                    Text("Following your ride is coming", fontWeight = FontWeight.SemiBold)
-                    Caption("On iPhone, WhichWay also follows the ride in progress and, if you share your trips, checks the predictions against the trains that actually ran. This Android version plans routes; it does not record or send any trips yet.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (sharing) "Sharing your trips is on" else "Sharing your trips is off", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Switch(sharing, { tele.setOptIn(it) })
+                    }
+                    Caption("Your trips help the predictions improve: each route you ride is checked against the trains that actually ran.")
+                    Caption("✓ Shared: the stations and lines, the predicted and observed times, the moments your train pulled away and you walked off, your walking pace and change times.")
+                    Caption("✕ Never shared: your location, your places, raw sensor data, or anything that identifies you.")
+                    Caption("↺ Switching it off deletes what was collected. The switch is in Settings whenever you want it.")
                 }
-                Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Continue") }
+                Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text(if (sharing) "Keep sharing on" else "Continue without sharing") }
+                androidx.compose.material3.TextButton(onClick = { tele.setOptIn(!sharing) }, modifier = Modifier.fillMaxWidth()) { Text(if (sharing) "Turn sharing off" else "Turn sharing on") }
             }
         }
     }

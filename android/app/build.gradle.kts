@@ -22,6 +22,13 @@ android {
         // where the published data lives (Settings can change the source at run time)
         buildConfigField("String", "PUBLISHED_URL", "\"https://bdrumm.github.io/whichway/data/\"")
         buildConfigField("String", "DEFAULT_URL", "\"https://bdrumm.github.io/whichway/data/\"")
+        // The trip relay (relay/README.md): its https address and the app key it expects, from the git-ignored
+        // local.properties (whichway.tripRelay, whichway.relayKey), as Local.xcconfig carries them on iOS. Empty:
+        // shared trips stay on the phone (and go to the local trip server, whichway.tripServer, if one is set).
+        fun prop(k: String) = localProps.getProperty(k)?.trim().orEmpty().replace("\"", "")
+        buildConfigField("String", "TRIP_RELAY", "\"${prop("whichway.tripRelay")}\"")
+        buildConfigField("String", "RELAY_KEY", "\"${prop("whichway.relayKey")}\"")
+        buildConfigField("String", "TRIP_SERVER", "\"${prop("whichway.tripServer")}\"")
     }
     buildTypes {
         debug {

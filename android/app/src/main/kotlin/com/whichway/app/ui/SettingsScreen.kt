@@ -68,10 +68,7 @@ fun SettingsScreen(data: AppData, modifier: Modifier = Modifier) {
         CommutesSection(data, stores)
         PlacesSection(data, stores, loc)
         PaceSection(stores)
-        Card {
-            Text("Improve the predictions", style = MaterialTheme.typography.titleSmall)
-            Caption("Sharing your trips comes to Android with ride tracking; this build records and sends nothing.")
-        }
+        SharingSection(stores)
         Card(Modifier.clickable { developer = true }) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Developer", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -127,8 +124,37 @@ private fun DeveloperScreen(data: AppData, modifier: Modifier, onBack: () -> Uni
         if (s.isDemo) Caption("Demo clock: the schedule pins the current time (demo_now).")
         s.lastError?.let { Caption(it, Color(0xFFD32F2F)) }
 
+        Text("Trips leaving the phone", style = MaterialTheme.typography.titleMedium)
+        val session = com.whichway.app.trip.TripSession.get(LocalContext.current.applicationContext)
+        val tele = session.telemetry
+        val optIn by tele.optIn.collectAsStateWithLifecycle()
+        val obs by tele.observations.collectAsStateWithLifecycle()
+        val server by tele.server.collectAsStateWithLifecycle()
+        val lastSent by tele.lastUpload.collectAsStateWithLifecycle()
+        val sendErr by tele.lastUploadError.collectAsStateWithLifecycle()
+        var serverField by remember(server) { mutableStateOf(server) }
+        Status("Sharing", if (optIn) "on" else "off (Settings › Improve the predictions)")
+        Status("Trips recorded", "${obs.size} · ${tele.pendingUpload} to send to a local server · ${tele.pendingGitHub} to the repository")
+        OutlinedTextField(serverField, { serverField = it }, label = { Text("Trip server, e.g. http://my-mac.local:8000/") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        TextButton(onClick = { tele.setServer(serverField) }) { Text("Save trip server") }
+        Caption("The local server on your Mac (make serve), reached on the home network. Trips are sent when they end and when the app opens; the Mac reviews each one against the trains (data/trips/trip_review.md).")
+        Status("Local server", tele.uploadUrl(data.apiBase)?.let { runCatching { java.net.URL(it).host }.getOrNull() } ?: "none")
+        lastSent?.let { Status("Last sent there", Fmt.hhmmss(it)) }
+        sendErr?.let { Caption(it, Color(0xFFD32F2F)) }
+        TextButton(enabled = optIn && tele.uploadUrl(data.apiBase) != null && tele.pendingUpload > 0, onClick = { session.uploadPending() }) { Text("Send to the local server now") }
+        if (com.whichway.app.store.TripRelay.configured) {
+            val relayLast by com.whichway.app.store.TripRelay.lastUpload.collectAsStateWithLifecycle()
+            val relayErr by com.whichway.app.store.TripRelay.lastError.collectAsStateWithLifecycle()
+            Text("Trips to WhichWay", style = MaterialTheme.typography.titleMedium)
+            Status("Sent through", com.whichway.app.store.TripRelay.host)
+            Caption("Each shared trip goes to the WhichWay data repository when it ends and whenever the app opens, over Wi-Fi or cellular, so the predictions can be checked against real rides. It carries the route, the times and the trip's own measurements under this phone's random id; never your location or anything that identifies you.")
+            Status("Waiting to send", "${tele.pendingGitHub} trip${if (tele.pendingGitHub == 1) "" else "s"}")
+            relayLast?.let { Status("Last sent", Fmt.hhmmss(it)) }
+            relayErr?.let { Caption(it, Color(0xFFD32F2F)) }
+            TextButton(enabled = optIn && tele.pendingGitHub > 0, onClick = { session.uploadPending() }) { Text("Send now") }
+        }
         Text("Route in progress", style = MaterialTheme.typography.titleMedium)
-        val trip by com.whichway.app.trip.TripSession.get(LocalContext.current.applicationContext).ui.collectAsStateWithLifecycle()
+        val trip by session.ui.collectAsStateWithLifecycle()
         Status("Phase", trip.phase?.name ?: "not on a route")
         Status("Motion now", if (trip.phase == null) "–" else "${trip.motionState} · ${trip.motionSeconds} s")
         trip.lastMotion?.let { m -> Status("Last second", String.format(java.util.Locale.US, "step %.4f · push %.3f g · shake %.3f g", m.stepEnergy, m.pushG, m.shakeG)) }
@@ -137,7 +163,7 @@ private fun DeveloperScreen(data: AppData, modifier: Modifier, onBack: () -> Uni
         Status("Events", "${trip.events}")
         Text("Build", style = MaterialTheme.typography.titleMedium)
         Status("Version", versionText())
-        Status("Trips", "recorded for the pace model; not shared yet")
+        Status("Relay", if (com.whichway.app.store.TripRelay.configured) com.whichway.app.store.TripRelay.host else "none in this build (whichway.tripRelay in local.properties)")
     }
 }
 
@@ -148,3 +174,28 @@ private fun Status(label: String, value: String) {
         Caption(value)
     }
 }
+
+
+/** Sharing trip data: on unless the rider switches it off, and the first launch says so. */
+@Composable
+fun SharingSection(stores: Stores) {
+    val ctx = LocalContext.current.applicationContext
+    val session = remember(ctx) { com.whichway.app.trip.TripSession.get(ctx) }
+    val tele = session.telemetry
+    val optIn by tele.optIn.collectAsStateWithLifecycle()
+    val obs by tele.observations.collectAsStateWithLifecycle()
+    val relayLast by com.whichway.app.store.TripRelay.lastUpload.collectAsStateWithLifecycle()
+    Text("Improve the predictions", style = MaterialTheme.typography.titleMedium)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Share my trips", modifier = Modifier.weight(1f))
+        androidx.compose.material3.Switch(optIn, { tele.setOptIn(it) })
+    }
+    Caption(SHARING_EXPLANATION)
+    if (optIn) {
+        Status("Trips shared", "${obs.size - tele.pendingGitHub} sent · ${tele.pendingGitHub} waiting")
+        relayLast?.let { Status("Last sent", Fmt.hhmmss(it)) }
+        TextButton(enabled = obs.isNotEmpty(), onClick = { tele.deleteAll() }) { Text("Delete collected data", color = Color(0xFFD32F2F)) }
+    }
+}
+
+const val SHARING_EXPLANATION = "On unless you turn it off. While a route is in progress the phone's motion is summarised once a second to notice when your train pulls away and when you walk off it, so the predictions can be checked against real boardings and changes. Shared: the route's stations and lines, the predicted and observed times, the train's lateness, those moments, and the trip's own measurements (walking pace, time to the platform, time changing trains). Never shared: your location, your places, raw sensor data, or anything that identifies you. A random id groups this phone's trips; switching this off deletes what was collected and resets the id."

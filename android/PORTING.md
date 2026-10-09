@@ -32,6 +32,10 @@ so the next pass knows exactly what moved.
 | `Services/TripActivityService.swift`, `WhichWayShared/TripActivityAttributes.swift` | `app/…/trip/TripService.kt` | a foreground service (type location) with an ongoing notification in place of the Live Activity |
 | `Views/PlannerView.swift` (route in progress) | `app/…/trip/TripSession.kt` | start/end, the plan's trains, the ride's itinerary, following the train boarded / the stop got off at / staying on, the rider's word, auto-start by GPS |
 | `Views/OnTrainSheet.swift`, `PathViews.swift` (departure board) | `app/…/ui/TripViews.kt` | trip bar, boarding prompt, line chooser, on-train sheet, departure board |
+| `Services/Telemetry.swift`, `Services/TripRelay.swift` | `core/…/TripObservation.kt`, `app/…/store/Telemetry.kt` | the record, the switch (on by default), the local server and the relay; no rider's-own-GitHub-token path |
+| `Views/RouteHealth.swift` (logic) | `core/…/RouteHealth.kt` | for the record's `extraMin`; the badge is not drawn yet |
+| `Views/WelcomeView.swift` | `app/…/ui/WelcomeView.kt` | with the sharing switch |
+| `Views/SettingsView.swift` (sharing, Developer's trips section) | `app/…/ui/SettingsScreen.kt` | |
 | `Services/LocationService.swift` | `app/…/store/LocationService.kt` | platform LocationManager; the foreground service keeps the fixes coming during a route |
 | `Views/CommuteViews.swift` | `app/…/ui/CommuteViews.kt` | chip, setup prompt, editor, nearby sheet, Settings section |
 | `Views/PlacesViews.swift` | `app/…/ui/PlacesViews.kt` | places, editor with the pin, pace section |
@@ -46,8 +50,8 @@ so the next pass knows exactly what moved.
 
 - **Motion traces** (`MotionTrace`, Debug-only on iOS) and the route-health badge on the Now card (`RouteHealth`).
 - **Polling with the app gone**: the feeds are polled by the activity's view model, so a route survives the screen going off (the service holds the sensors and fixes) but not the activity being destroyed. Moving the poller into the service is the fix.
-- **Views**: track diagram, Marey chart, route map, hours profile, route chart, insights, route and line health, hold outlook and the scenario switch.
-- **Telemetry and trip upload**: `Telemetry`, `GitHubUploader`, `TripRelay` (sharing on by default since `21bc708`). The timeline each trip produces is already kept by the pace model; the observation record and the upload are what remain.
+- **Views**: track diagram, Marey chart, route map, hours profile, route chart, insights, the route and line health badges (the health logic is ported), hold outlook and the scenario switch.
+- **The rider's own GitHub token** (`GitHubUploader`, the way before the relay) and the JSON export (`ShareLink`): the relay covers the upload.
 
 ## How a port pass goes
 

@@ -371,6 +371,16 @@ class AppData(app: Application) : AndroidViewModel(app) {
             })
         }
 
+    /** The server behind the data (its /api/...): the data URL without its trailing data/. The published site is static and has no API. */
+    val apiBase: String?
+        get() {
+            var base = _state.value.baseUrl.trim()
+            if (!base.endsWith("/")) base += "/"
+            val host = runCatching { java.net.URL(base).host }.getOrNull() ?: return null
+            if (host.endsWith("github.io") || host.endsWith("githubusercontent.com")) return null
+            return if (base.endsWith("/data/")) base.removeSuffix("data/") else base
+        }
+
     fun statusLine(): String {
         val s = _state.value
         return "Last poll ${s.lastUpdateTs?.let { Fmt.hhmmss(it) } ?: "–"} · ${s.feeds.size} feeds · ${s.alerts.size} alerts"

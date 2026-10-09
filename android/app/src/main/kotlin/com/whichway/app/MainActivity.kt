@@ -58,7 +58,11 @@ class MainActivity : ComponentActivity() {
 
     private val session by lazy { TripSession.get(this) }
 
-    override fun onStart() { super.onStart(); data.start(); data.refreshIfStale(); if (loc.authorized) loc.startTracking() }
+    override fun onStart() {
+        super.onStart(); data.start(); data.refreshIfStale(); if (loc.authorized) loc.startTracking()
+        // trips recorded off the home network go to the Mac and the data repository the next time the app opens
+        session.uploadPending()
+    }
     // a route in progress keeps polling and the fixes coming (the foreground service holds them)
     override fun onStop() { super.onStop(); if (!session.started) { data.stop(); loc.stopTracking() } }
 }
