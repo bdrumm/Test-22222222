@@ -142,10 +142,8 @@ struct HomeCard: View {
     }
 
     private func minor(_ it: Itinerary) -> String {
-        var bits: [String] = []
-        if let lo = it.legs.last?.arriveLoTs, let hi = it.legs.last?.arriveHiTs { bits.append("likely \(Fmt.hhmm(lo)) to \(Fmt.hhmm(hi))") }
-        if let f = it.legs.last?.feedArriveTs, abs(f - it.arriveTs) >= 60 { bits.append("the feed says \(Fmt.hhmm(f))") }
-        return bits.isEmpty ? "engine estimate" : bits.joined(separator: " · ")
+        if let lo = it.legs.last?.arriveLoTs, let hi = it.legs.last?.arriveHiTs { return "likely \(Fmt.hhmm(lo)) to \(Fmt.hhmm(hi))" }
+        return "engine estimate"
     }
 
     @ViewBuilder private var change: some View {

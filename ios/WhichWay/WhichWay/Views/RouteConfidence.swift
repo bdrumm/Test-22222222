@@ -72,7 +72,7 @@ func routeConfidence(_ option: PathOption, itinerary: Itinerary?, outlook: HoldO
     if l0.position?.holding == true { take(0.2, "your train is held") }
     else if l0.position?.stalled == true { take(0.2, "your train is overdue between stops") }
     if l0.corroboration == "feed_optimistic" { take(0.1, "the feed looks optimistic for your train") }
-    else if l0.corroboration == "position_unknown" { take(0.1, "your train's position is unknown") }
+    else if l0.corroboration == "position_unknown" { take(0.1, "no position report for your train") }
 
     // the change
     if it.legs.count > 1, let m = it.connectionMarginSec {

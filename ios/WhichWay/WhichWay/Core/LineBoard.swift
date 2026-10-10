@@ -34,8 +34,12 @@ struct TrainPosition {
     var atTerminal: Bool
     var expectedRunSec: Double?
     var positionLatenessSec: Double?
+    /// No vehicle report for this trip: the position is read off the trip update (heading to its next stop), so
+    /// it carries no dwell, no hold, no stall and places the train by its ETA only.
+    var derived = false
 
     var text: String {
+        if derived { return "→ \(stopName) · no position report" }
         let verb = status == "STOPPED_AT" ? "at" : (status == "INCOMING_AT" ? "arriving" : "→")
         var s = "\(verb) \(stopName)"
         if sinceSec >= 60 { s += " · \(Int(sinceSec / 60)) min" }
@@ -110,7 +114,7 @@ struct TrainProgress {
 }
 
 func trainProgress(_ t: LiveTrain, age: Double, line: LineTopology) -> TrainProgress {
-    guard let p = t.position, let j = p.stopIdx else { return TrainProgress(idx: max(0, Double(t.nextIdx) - 0.5), state: "unknown", since: nil) }
+    guard let p = t.position, !p.derived, let j = p.stopIdx else { return TrainProgress(idx: max(0, Double(t.nextIdx) - 0.5), state: "unknown", since: nil) }
     let since = p.sinceSec + max(0, age)
     if p.status == "STOPPED_AT" { return TrainProgress(idx: Double(j), state: p.holding ? "holding" : (p.atTerminal ? "terminal" : "stopped"), since: since) }
     if j <= 0 { return TrainProgress(idx: 0, state: "moving", since: since) }
@@ -168,8 +172,16 @@ func lineBoard(schedule: ClientSchedule, lineSched: [LineSchedEntry], feeds: [St
     let c = schedule.constants
     var idx: [String: Int] = [:]
     for (i, s) in line.stops.enumerated() { idx[s] = i }
+    // vehicle reports by the dated trip key, and by trip id alone for a report whose start date is missing or
+    // differs from the trip update's (a train is otherwise left with no position at all)
     var vehicles: [String: RTVehicle] = [:]
-    for fd in feeds.values { for v in fd.vehicles where !v.trip.tripId.isEmpty { vehicles[v.trip.key] = v } }
+    var vehiclesByTrip: [String: RTVehicle] = [:]
+    for fd in feeds.values {
+        for v in fd.vehicles where !v.trip.tripId.isEmpty {
+            vehicles[v.trip.key] = v
+            if let ts = v.timestamp, now - ts <= 1200 { vehiclesByTrip[v.trip.tripId] = v }
+        }
+    }
     var trains: [LiveTrain] = []
     for fd in feeds.values {
         for tu in fd.trips {
@@ -177,7 +189,7 @@ func lineBoard(schedule: ClientSchedule, lineSched: [LineSchedEntry], feeds: [St
             var points: [TrainPoint] = []
             for s in tu.stops { if let i = idx[s.stopId], let t = s.eta { points.append(TrainPoint(idx: i, ts: t)) } }
             guard let firstPoint = points.first else { continue }
-            let veh = vehicles[tu.trip.key]
+            let veh = vehicles[tu.trip.key] ?? vehiclesByTrip[tu.trip.tripId]
             let hasPos = veh != nil && veh!.stopId != nil && veh!.timestamp != nil && veh!.timestamp! <= now + 60
             let lastRun = hasPos ? VehicleHistory.shared.observe(key: tu.trip.key, vehicle: veh!, now: now, line: line) : nil
             let started = hasPos || tu.trip.isAssigned == true
@@ -231,9 +243,15 @@ func lineBoard(schedule: ClientSchedule, lineSched: [LineSchedEntry], feeds: [St
                     corroboration = plate - lateness > 60 ? "feed_optimistic" : "agree"
                     effective = max(lateness, plate)
                 }
+            } else {
+                // no vehicle report at all: the trip update still says which stop the train reaches next, so the
+                // train is somewhere before it; nothing is known of dwell, holds or stalls
+                pos = TrainPosition(status: "IN_TRANSIT_TO", stopId: first.stopId, stopIdx: j, stopName: j < line.names.count ? line.names[j] : line.stops[j],
+                                    sinceSec: 0, holding: false, stalled: false, atTerminal: j == 0 || j == line.stops.count - 1,
+                                    expectedRunSec: nil, positionLatenessSec: nil, derived: true)
             }
             var segment: SegmentInfo? = nil
-            if let p = pos, let pj = p.stopIdx, p.status != "STOPPED_AT", pj > 0, pj - 1 < line.distM.count, let d = line.distM[pj - 1] {
+            if let p = pos, !p.derived, let pj = p.stopIdx, p.status != "STOPPED_AT", pj > 0, pj - 1 < line.distM.count, let d = line.distM[pj - 1] {
                 let run = pj - 1 < line.runSec.count ? line.runSec[pj - 1].map(Double.init) : nil
                 let frac: Double? = (run != nil && run! > 0) ? min(0.96, p.sinceSec / run!) : nil
                 segment = SegmentInfo(fromIdx: pj - 1, toIdx: pj, distM: Double(d), schedRunSec: run, schedSpeedKmh: run.map { Double(d) / $0 * 3.6 },
