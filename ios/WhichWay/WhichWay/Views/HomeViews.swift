@@ -24,6 +24,8 @@ struct HomeCard: View {
     let moreCount: Int
     var onPick: (PathOption) -> Void
     var onMore: () -> Void
+    /// How far the model trusts this arrival, shown under it.
+    var confidence: RouteConfidence? = nil
 
     private let countdownFont = Font.system(size: 112, weight: .heavy)
     private let rule = Color.primary.opacity(0.1)
@@ -45,6 +47,15 @@ struct HomeCard: View {
             JourneyBar(option: option).padding(.top, 14)
             Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
             arrive
+            if let c = confidence {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Circle().fill(c.color).frame(width: 7, height: 7).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                    (Text(c.label).fontWeight(.semibold) + Text(" · \(c.summary)").foregroundStyle(.secondary))
+                        .font(.subheadline).lineLimit(2)
+                }
+                .padding(.top, 6)
+                .accessibilityElement(children: .combine)
+            }
             change.padding(.top, 20)
             Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
             others
@@ -258,6 +269,8 @@ struct StrandView: View {
     var onPick: (PathOption) -> Void
     var onDetails: () -> Void
     var onInsights: () -> Void
+    /// How far the model trusts the arrival, a word on the destination's line.
+    var confidence: RouteConfidence? = nil
 
     private var leg0Train: TripCandidate? { rideLeg == 0 ? itinerary?.legs.first : nil }
     private var leg1Train: TripCandidate? { option.legs.count > 1 ? (rideLeg == 0 ? itinerary?.legs.dropFirst().first : itinerary?.legs.first) : nil }
@@ -428,10 +441,14 @@ struct StrandView: View {
     }
 
     private var arrivalNote: String {
-        guard let it = itinerary else { return "expected · \(Fmt.minTxt(option.expectedSec)) door to door" }
         var bits: [String] = []
-        if let lo = it.legs.last?.arriveLoTs, let hi = it.legs.last?.arriveHiTs { bits.append("likely \(Fmt.hhmm(lo)) to \(Fmt.hhmm(hi))") }
-        bits.append("\(Fmt.minTxt(it.totalSec)) door to door")
+        if let it = itinerary {
+            if let lo = it.legs.last?.arriveLoTs, let hi = it.legs.last?.arriveHiTs { bits.append("likely \(Fmt.hhmm(lo)) to \(Fmt.hhmm(hi))") }
+            bits.append("\(Fmt.minTxt(it.totalSec)) door to door")
+        } else {
+            bits.append("expected · \(Fmt.minTxt(option.expectedSec)) door to door")
+        }
+        if let c = confidence { bits.append(c.label.lowercased()) }
         return bits.joined(separator: " · ")
     }
 
@@ -472,9 +489,10 @@ func boardingUrgency(secondsLeft: Double, walkSec: Double?) -> Color {
 }
 
 /// How much the wash shows: the home page whispers; the line view and the routes after it are plainer to see.
+/// (Set against a phone in daylight: the Simulator flatters a faint tint.)
 enum GlowLevel {
     case whisper, soft
-    var wash: Double { self == .whisper ? 0.16 : 0.28 }
+    var wash: Double { self == .whisper ? 0.34 : 0.5 }
 }
 
 /// The glow: one soft wash of colour from the page's top-right corner, centred on the corner itself so a quarter
@@ -484,10 +502,13 @@ struct GlowWash: View {
     let color: Color
     var level: GlowLevel = .whisper
     var body: some View {
+        let w = level.wash
         Circle()
-            .fill(RadialGradient(colors: [color.opacity(level.wash), color.opacity(0)], center: .center, startRadius: 0, endRadius: 300))
-            .frame(width: 800, height: 800)
-            .offset(x: 400, y: -400)
+            .fill(RadialGradient(stops: [.init(color: color.opacity(w), location: 0), .init(color: color.opacity(w * 0.45), location: 0.4),
+                                         .init(color: color.opacity(w * 0.12), location: 0.75), .init(color: color.opacity(0), location: 1)],
+                                 center: .center, startRadius: 0, endRadius: 460))
+            .frame(width: 920, height: 920)
+            .offset(x: 460, y: -460)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }

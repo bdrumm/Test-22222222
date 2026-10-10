@@ -226,11 +226,11 @@ struct PlannerView: View {
                                  ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                                  walk: walkToOrigin.map { walkLineText($0, originId: originId, placeName: here?.name, placeUsualSec: placeUsualSec, boardTs: it?.boardTs, now: now) },
                                  alternatives: Array(others.prefix(3)), moreCount: max(0, others.count - 3),
-                                 onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } })
+                                 onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } },
+                                 confidence: routeConfidence(p, itinerary: it, outlook: outlook, data: data))
                     }
                     .padding(.top, 10)
                     tripBar(originName: originName.isEmpty ? "the station" : originName).padding(.top, 8)
-                    if let o = outlook { HoldOutlookCard(outlook: o) }
                 } else if !originId.isEmpty && !destId.isEmpty {
                     Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
                 }
@@ -322,11 +322,13 @@ struct PlannerView: View {
                 if let p = headline {
                     let ride = routeStarted ? rideItinerary : nil
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        StrandView(option: p, itinerary: ride ?? p.live, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: data.now,
+                        let it = ride ?? p.live
+                        StrandView(option: p, itinerary: it, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: data.now,
                                    originName: originName, destName: destName, onTrain: trip.onTrain, rideLeg: trip.currentLeg,
                                    ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                                    alternatives: Array(ranked.filter { $0.id != p.id }.prefix(4)),
-                                   onPick: { selectedPath = $0.id }, onDetails: { showDetails = true }, onInsights: { showInsights = true })
+                                   onPick: { selectedPath = $0.id }, onDetails: { showDetails = true }, onInsights: { showInsights = true },
+                                   confidence: routeConfidence(p, itinerary: it, outlook: outlook, data: data))
                     }
                     .padding(.top, 10)
                 } else {
