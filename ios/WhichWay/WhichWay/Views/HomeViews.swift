@@ -24,9 +24,12 @@ struct HomeCard: View {
     let moreCount: Int
     var onPick: (PathOption) -> Void
     var onMore: () -> Void
+    /// The glow on the time to the train: blue with time to reach it, yellow as it nears, red as it leaves.
+    var urgency: Color = .accentColor
+    /// The glow on the arrival: blue on time, amber running late, red well behind.
+    var delay: Color = .accentColor
 
     private let countdownFont = Font.system(size: 112, weight: .heavy)
-    private let rule = Color.primary.opacity(0.1)
 
     /// Where the rider leaves the train they are on: the change ahead, or the destination.
     private var offAt: String { option.legs.count > 1 && rideLeg == 0 ? (option.transfer?.station ?? "the change") : destName }
@@ -42,13 +45,14 @@ struct HomeCard: View {
                     .foregroundStyle(w.tight ? Color.orange : Color.secondary)
                     .lineLimit(1).padding(.top, 6)
             }
-            JourneyBar(option: option).padding(.top, 14)
-            Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
+            JourneyBar(option: option).padding(.top, 14).shadow(color: delay.opacity(0.2), radius: 8)
+            GlowRule(color: urgency).padding(.vertical, 22)
             arrive
             change.padding(.top, 20)
-            Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
+            GlowRule(color: delay).padding(.vertical, 22)
             others
         }
+        .background(alignment: .topLeading) { GlowWash(color: urgency).offset(x: -160, y: -40) }
     }
 
     // MARK: the countdown, the lines, the train
@@ -57,14 +61,17 @@ struct HomeCard: View {
         if onTrain, let l0 = itinerary?.legs.first {
             VStack(alignment: .leading, spacing: 2) {
                 Text(Fmt.mmss(max(0, l0.arriveTs - now))).font(countdownFont).tracking(-4).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                    .shadow(color: urgency.opacity(0.26), radius: 17)
                 Text("\(ridePresumed ? "presumably on the" : "on the") \(ridingRoute ?? l0.train.route) · off at \(offAt) \(Fmt.hhmm(l0.arriveTs))")
                     .font(.title3.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
             }
         } else if let it = itinerary {
             Text(Fmt.mmss(max(0, it.boardTs - now))).font(countdownFont).tracking(-4).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                .shadow(color: urgency.opacity(0.26), radius: 17)
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 Text(Fmt.minTxt(option.expectedSec)).font(.system(size: 72, weight: .heavy)).tracking(-2).lineLimit(1).minimumScaleFactor(0.5)
+                    .shadow(color: urgency.opacity(0.26), radius: 17)
                 Text("expected door to door").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             }
         }
@@ -113,6 +120,7 @@ struct HomeCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(Fmt.hhmm(it.arriveTs)).font(.system(size: 46, weight: .bold)).tracking(-1.5).monospacedDigit()
+                        .shadow(color: delay.opacity(0.2), radius: 10)
                     Text("arrive · \(Fmt.minTxt(it.totalSec))").font(.subheadline).foregroundStyle(.secondary)
                     let h = routeHealth(option, data: data)
                     if h.extraSec >= 90 { Text(h.label).font(.subheadline.weight(.semibold)).foregroundStyle(h.textColor) }
@@ -258,6 +266,9 @@ struct StrandView: View {
     var onPick: (PathOption) -> Void
     var onDetails: () -> Void
     var onInsights: () -> Void
+    /// The glows, as on the home card: the time to the train on the origin, the route's delay on the destination.
+    var urgency: Color = .accentColor
+    var delay: Color = .accentColor
 
     private var leg0Train: TripCandidate? { rideLeg == 0 ? itinerary?.legs.first : nil }
     private var leg1Train: TripCandidate? { option.legs.count > 1 ? (rideLeg == 0 ? itinerary?.legs.dropFirst().first : itinerary?.legs.first) : nil }
@@ -290,7 +301,7 @@ struct StrandView: View {
     /// One row of the thread: the node (a ring, a filled dot at the end, or a small dot for the train coming), the
     /// line down to the next row, and the text beside it.
     private func row<Content: View>(node: Color?, filled: Bool = false, small: Bool = false, line: Color?, dotted: Bool = false,
-                                    minHeight: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+                                    glow: Color? = nil, minHeight: CGFloat, @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .top, spacing: 14) {
             ZStack(alignment: .top) {
                 if let line {
@@ -306,9 +317,10 @@ struct StrandView: View {
                     if small {
                         Circle().fill(node).frame(width: 10, height: 10).padding(.top, 5)
                     } else if filled {
-                        Circle().fill(node).frame(width: 20, height: 20)
+                        Circle().fill(node).frame(width: 20, height: 20).shadow(color: (glow ?? .clear).opacity(0.6), radius: 9)
                     } else {
                         Circle().strokeBorder(node, lineWidth: 5).background(Circle().fill(Color(.systemBackground))).frame(width: 20, height: 20)
+                            .shadow(color: (glow ?? .clear).opacity(0.35), radius: 7)
                     }
                 }
             }
@@ -333,7 +345,7 @@ struct StrandView: View {
     }
 
     private var origin: some View {
-        row(node: c0, line: c0, minHeight: 116) {
+        row(node: c0, line: c0, glow: urgency, minHeight: 116) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(originName).font(.headline).lineLimit(1)
@@ -347,6 +359,7 @@ struct StrandView: View {
                     if rideLeg == 0, let it = itinerary, let l0 = it.legs.first {
                         Text(Fmt.mmss(max(0, (onTrain ? l0.arriveTs : it.boardTs) - now)))
                             .font(.system(size: 54, weight: .heavy)).tracking(-2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                            .shadow(color: urgency.opacity(0.3), radius: 14)
                         RouteBullet(route: route0, size: 28)
                     } else {
                         RouteBullets(routes: rideLeg > 0 ? [route0] : option.legs[0].routes, size: 28).opacity(rideLeg > 0 ? 0.45 : 1)
@@ -411,11 +424,12 @@ struct StrandView: View {
     }
 
     private var destination: some View {
-        row(node: c1 ?? c0, filled: true, line: nil, minHeight: 60) {
+        row(node: c1 ?? c0, filled: true, line: nil, glow: delay, minHeight: 60) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     if let it = itinerary {
                         Text(Fmt.hhmm(it.arriveTs)).font(.system(size: 32, weight: .bold)).monospacedDigit()
+                            .shadow(color: delay.opacity(0.25), radius: 9)
                     } else {
                         Text(Fmt.minTxt(option.expectedSec)).font(.system(size: 32, weight: .bold))
                     }
@@ -448,6 +462,59 @@ struct StrandView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - the whisper glow
+
+/// The glow's colours beyond the accent: yellow and red for a train about to leave, amber for a route running late.
+enum GlowColor {
+    static let yellow = Color(red: 1.0, green: 0.84, blue: 0.04)
+    static let amber = Color(red: 1.0, green: 0.70, blue: 0.25)
+    static let red = Color(red: 1.0, green: 0.27, blue: 0.23)
+}
+
+/// The colour of the glow on the time to the train: blue while there is time to reach it, yellow as it nears, red
+/// when it is about to leave. With a walk still to make, the slack after the walk counts (three minutes of slack is
+/// comfortable, under a minute is not); at the platform, or on the train counting down to the stop to get off at,
+/// the time itself (a minute and a half, half a minute).
+func boardingUrgency(secondsLeft: Double, walkSec: Double?) -> Color {
+    if let w = walkSec {
+        let slack = secondsLeft - w
+        return slack >= 180 ? .accentColor : (slack >= 60 ? GlowColor.yellow : GlowColor.red)
+    }
+    return secondsLeft >= 90 ? .accentColor : (secondsLeft >= 30 ? GlowColor.yellow : GlowColor.red)
+}
+
+/// The colour of the glow on the arrival: blue on time, amber running five to nine minutes late, red beyond.
+func delayGlow(_ h: RouteHealth) -> Color {
+    switch h.level {
+    case .smooth: return .accentColor
+    case .minor: return GlowColor.amber
+    case .heavy: return GlowColor.red
+    }
+}
+
+/// A hairline that fades from the glow colour to nothing, with a faint halo.
+struct GlowRule: View {
+    let color: Color
+    var body: some View {
+        Rectangle()
+            .fill(LinearGradient(colors: [color.opacity(0.5), color.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
+            .frame(height: 1)
+            .shadow(color: color.opacity(0.22), radius: 5)
+    }
+}
+
+/// A soft wash of the glow colour behind the top of a page, barely there.
+struct GlowWash: View {
+    let color: Color
+    var body: some View {
+        Ellipse()
+            .fill(RadialGradient(colors: [color.opacity(0.13), color.opacity(0)], center: .center, startRadius: 0, endRadius: 270))
+            .frame(width: 560, height: 440)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
