@@ -72,8 +72,6 @@ struct PlannerView: View {
     @AppStorage("classicGo") private var classicGo = false
     /// The paged Go tab's page: home, the line view, the routes.
     @State private var page = 0
-    /// A route was picked on the routes page: the next swipe back goes straight home, skipping the line view.
-    @State private var routeChosen = false
     /// The five detail views, the itineraries and the departure board, as a sheet from the line view.
     @State private var showDetails = false
 
@@ -189,17 +187,16 @@ struct PlannerView: View {
 
     // MARK: - the paged Go tab
 
-    /// Three pages side by side: home (the countdown and the numbers), the line view, the routes. A route picked
-    /// on the routes page takes the line view out of the stack, so the swipe back lands on home.
+    /// Three pages side by side: home (the countdown and the numbers), the line view, the routes. A route tapped
+    /// on the routes page is taken and the pages go straight back to home.
     private func pagedContent(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
         TabView(selection: $page) {
             homePage(sched, index).tag(0)
-            if !routeChosen { linePage(sched, index).tag(1) }
+            linePage(sched, index).tag(1)
             routesPage(sched, index).tag(2)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(alignment: .topLeading) { cornerGlow }
-        .onChange(of: page) { _, p in if p == 0 { routeChosen = false } }
+        .background(alignment: .topTrailing) { cornerGlow }
     }
 
     private func homePage(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
@@ -221,21 +218,18 @@ struct PlannerView: View {
                     let placeUsualSec = here.flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) }
                     let ride = routeStarted ? rideItinerary : nil
                     let others = ranked.filter { $0.id != p.id }
-                    let delay = delayGlow(routeHealth(p, data: data))
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         let now = data.now
                         let it = ride ?? p.live
-                        let urgency = glowUrgency(it, now: now, placeUsualSec: placeUsualSec)
                         HomeCard(option: p, itinerary: it, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: now,
                                  originName: originName, destName: destName, phase: trip.phase, onTrain: trip.onTrain, rideLeg: trip.currentLeg,
                                  ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                                  walk: walkToOrigin.map { walkLineText($0, originId: originId, placeName: here?.name, placeUsualSec: placeUsualSec, boardTs: it?.boardTs, now: now) },
                                  alternatives: Array(others.prefix(3)), moreCount: max(0, others.count - 3),
-                                 onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } },
-                                 urgency: urgency, delay: delay)
+                                 onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } })
                     }
                     .padding(.top, 10)
-                    tripBar(originName: originName.isEmpty ? "the station" : originName, glow: .accentColor).padding(.top, 8)
+                    tripBar(originName: originName.isEmpty ? "the station" : originName).padding(.top, 8)
                     if let o = outlook { HoldOutlookCard(outlook: o) }
                 } else if !originId.isEmpty && !destId.isEmpty {
                     Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
@@ -261,13 +255,6 @@ struct PlannerView: View {
         }
         .animation(.easeInOut(duration: 0.35), value: page)
         .ignoresSafeArea()
-    }
-
-    /// The glow on the chosen route's row: the time to its train, as on the home page; none on the classic page.
-    private var routeRowGlow: Color? {
-        guard !classicGo else { return nil }
-        let placeUsualSec = nearbyPlace().flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) }
-        return glowUrgency((routeStarted ? rideItinerary : nil) ?? headline?.live, now: data.now, placeUsualSec: placeUsualSec)
     }
 
     /// Where from and where to on one line, each a tap to change, with swap and nearest beside; the commute and
@@ -334,16 +321,12 @@ struct PlannerView: View {
                 pageTitle(index, caption: headline.map { Fmt.minTxt($0.live?.totalSec ?? $0.expectedSec) } ?? "")
                 if let p = headline {
                     let ride = routeStarted ? rideItinerary : nil
-                    let placeUsualSec = nearbyPlace().flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) }
-                    let delay = delayGlow(routeHealth(p, data: data))
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        let it = ride ?? p.live
-                        StrandView(option: p, itinerary: it, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: data.now,
+                        StrandView(option: p, itinerary: ride ?? p.live, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: data.now,
                                    originName: originName, destName: destName, onTrain: trip.onTrain, rideLeg: trip.currentLeg,
                                    ridingRoute: ridingRoute, ridePresumed: ridePresumed,
                                    alternatives: Array(ranked.filter { $0.id != p.id }.prefix(4)),
-                                   onPick: { selectedPath = $0.id }, onDetails: { showDetails = true }, onInsights: { showInsights = true },
-                                   urgency: glowUrgency(it, now: data.now, placeUsualSec: placeUsualSec), delay: delay)
+                                   onPick: { selectedPath = $0.id }, onDetails: { showDetails = true }, onInsights: { showInsights = true })
                     }
                     .padding(.top, 10)
                 } else {
@@ -359,7 +342,7 @@ struct PlannerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 pageTitle(index, caption: "")
-                Text("Tap a route to take it, then swipe back.").font(.caption).foregroundStyle(.secondary)
+                Text("Tap a route to take it.").font(.caption).foregroundStyle(.secondary)
                 if !paths.isEmpty {
                     pathList
                 } else if !originId.isEmpty && !destId.isEmpty {
@@ -583,12 +566,15 @@ struct PlannerView: View {
     private var pathList: some View {
         let list = ranked
         let maxSec = max(60, list.map { p in max(p.expectedSec, p.live?.totalSec ?? 0) }.max() ?? 60)
-        let glow = routeRowGlow
         return VStack(alignment: .leading, spacing: 6) {
             Text(routeStarted ? "Other ways" : "\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
             ForEach(Array(list.enumerated()), id: \.element.id) { i, p in
-                Button { selectedPath = p.id; routeChosen = true } label: {
-                    PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec, glow: glow)
+                Button {
+                    selectedPath = p.id
+                    // on the paged Go tab a tap takes the route and goes straight home
+                    if !classicGo { withAnimation(.easeInOut(duration: 0.3)) { page = 0 } }
+                } label: {
+                    PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec)
                 }
                 .buttonStyle(.plain)
             }
@@ -844,7 +830,7 @@ struct PlannerView: View {
 
     /// The route's phase and the way to end it, or the way to start it with why the last one ended on its own.
     /// On the train, the line the phone thinks the rider boarded, and the route's other lines to say otherwise.
-    private func tripBar(originName: String, glow: Color? = nil) -> some View {
+    private func tripBar(originName: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 if let ph = trip.phase {
@@ -863,7 +849,6 @@ struct PlannerView: View {
                         .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
                     Button("Start route") { startTrip(by: "hand") }
                         .font(.caption.weight(.semibold)).buttonStyle(.borderedProminent).controlSize(.small)
-                        .shadow(color: (glow ?? .clear).opacity(0.35), radius: 11)
                 }
             }
             if let pr = trip.prompt {
@@ -1482,8 +1467,6 @@ struct PathRow: View {
     let option: PathOption
     let selected: Bool
     let maxSec: Double
-    /// The chosen row carries the soft glow in this colour, the time to its train (the paged Go tab); nil: none.
-    var glow: Color? = nil
 
     private var health: RouteHealth { routeHealth(option, data: data) }
 
@@ -1519,7 +1502,6 @@ struct PathRow: View {
             }
         }
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: 1))
-        .shadow(color: (glow ?? .clear).opacity(selected ? GlowLevel.soft.row.opacity : 0), radius: GlowLevel.soft.row.radius)
         .contentShape(Rectangle())
     }
 

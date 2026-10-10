@@ -24,12 +24,9 @@ struct HomeCard: View {
     let moreCount: Int
     var onPick: (PathOption) -> Void
     var onMore: () -> Void
-    /// The glow on the time to the train: blue with time to reach it, yellow as it nears, red as it leaves.
-    var urgency: Color = .accentColor
-    /// The glow on the arrival: blue on time, amber running late, red well behind.
-    var delay: Color = .accentColor
 
     private let countdownFont = Font.system(size: 112, weight: .heavy)
+    private let rule = Color.primary.opacity(0.1)
 
     /// Where the rider leaves the train they are on: the change ahead, or the destination.
     private var offAt: String { option.legs.count > 1 && rideLeg == 0 ? (option.transfer?.station ?? "the change") : destName }
@@ -45,11 +42,11 @@ struct HomeCard: View {
                     .foregroundStyle(w.tight ? Color.orange : Color.secondary)
                     .lineLimit(1).padding(.top, 6)
             }
-            JourneyBar(option: option).padding(.top, 14).shadow(color: delay.opacity(0.2), radius: 8)
-            GlowRule(color: urgency).padding(.vertical, 22)
+            JourneyBar(option: option).padding(.top, 14)
+            Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
             arrive
             change.padding(.top, 20)
-            GlowRule(color: delay).padding(.vertical, 22)
+            Rectangle().fill(rule).frame(height: 1).padding(.vertical, 22)
             others
         }
     }
@@ -60,17 +57,14 @@ struct HomeCard: View {
         if onTrain, let l0 = itinerary?.legs.first {
             VStack(alignment: .leading, spacing: 2) {
                 Text(Fmt.mmss(max(0, l0.arriveTs - now))).font(countdownFont).tracking(-4).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
-                    .shadow(color: urgency.opacity(0.26), radius: 17)
                 Text("\(ridePresumed ? "presumably on the" : "on the") \(ridingRoute ?? l0.train.route) · off at \(offAt) \(Fmt.hhmm(l0.arriveTs))")
                     .font(.title3.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
             }
         } else if let it = itinerary {
             Text(Fmt.mmss(max(0, it.boardTs - now))).font(countdownFont).tracking(-4).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
-                .shadow(color: urgency.opacity(0.26), radius: 17)
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 Text(Fmt.minTxt(option.expectedSec)).font(.system(size: 72, weight: .heavy)).tracking(-2).lineLimit(1).minimumScaleFactor(0.5)
-                    .shadow(color: urgency.opacity(0.26), radius: 17)
                 Text("expected door to door").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             }
         }
@@ -119,7 +113,6 @@ struct HomeCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(Fmt.hhmm(it.arriveTs)).font(.system(size: 46, weight: .bold)).tracking(-1.5).monospacedDigit()
-                        .shadow(color: delay.opacity(0.2), radius: 10)
                     Text("arrive · \(Fmt.minTxt(it.totalSec))").font(.subheadline).foregroundStyle(.secondary)
                     let h = routeHealth(option, data: data)
                     if h.extraSec >= 90 { Text(h.label).font(.subheadline.weight(.semibold)).foregroundStyle(h.textColor) }
@@ -265,11 +258,6 @@ struct StrandView: View {
     var onPick: (PathOption) -> Void
     var onDetails: () -> Void
     var onInsights: () -> Void
-    /// The glows, as on the home card: the time to the train on the origin, the route's delay on the destination.
-    var urgency: Color = .accentColor
-    var delay: Color = .accentColor
-    /// The line view carries the softer, plainer glow.
-    var level: GlowLevel = .soft
 
     private var leg0Train: TripCandidate? { rideLeg == 0 ? itinerary?.legs.first : nil }
     private var leg1Train: TripCandidate? { option.legs.count > 1 ? (rideLeg == 0 ? itinerary?.legs.dropFirst().first : itinerary?.legs.first) : nil }
@@ -295,7 +283,6 @@ struct StrandView: View {
                 Spacer(minLength: 0)
             }
             .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
-            .shadow(color: Color.accentColor.opacity(level.button.opacity * 0.6), radius: level.button.radius)
             .padding(.top, 24)
         }
     }
@@ -303,7 +290,7 @@ struct StrandView: View {
     /// One row of the thread: the node (a ring, a filled dot at the end, or a small dot for the train coming), the
     /// line down to the next row, and the text beside it.
     private func row<Content: View>(node: Color?, filled: Bool = false, small: Bool = false, line: Color?, dotted: Bool = false,
-                                    glow: Color? = nil, minHeight: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+                                    minHeight: CGFloat, @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .top, spacing: 14) {
             ZStack(alignment: .top) {
                 if let line {
@@ -319,10 +306,9 @@ struct StrandView: View {
                     if small {
                         Circle().fill(node).frame(width: 10, height: 10).padding(.top, 5)
                     } else if filled {
-                        Circle().fill(node).frame(width: 20, height: 20).shadow(color: (glow ?? .clear).opacity(level.dot.opacity), radius: level.dot.radius)
+                        Circle().fill(node).frame(width: 20, height: 20)
                     } else {
                         Circle().strokeBorder(node, lineWidth: 5).background(Circle().fill(Color(.systemBackground))).frame(width: 20, height: 20)
-                            .shadow(color: (glow ?? .clear).opacity(level.ring.opacity), radius: level.ring.radius)
                     }
                 }
             }
@@ -347,7 +333,7 @@ struct StrandView: View {
     }
 
     private var origin: some View {
-        row(node: c0, line: c0, glow: urgency, minHeight: 116) {
+        row(node: c0, line: c0, minHeight: 116) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(originName).font(.headline).lineLimit(1)
@@ -361,8 +347,6 @@ struct StrandView: View {
                     if rideLeg == 0, let it = itinerary, let l0 = it.legs.first {
                         Text(Fmt.mmss(max(0, (onTrain ? l0.arriveTs : it.boardTs) - now)))
                             .font(.system(size: 54, weight: .heavy)).tracking(-2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
-                            .shadow(color: urgency.opacity(level.halo.opacity), radius: level.halo.radius)
-                            .shadow(color: urgency.opacity(level.haloWide.opacity), radius: level.haloWide.radius)
                         RouteBullet(route: route0, size: 28)
                     } else {
                         RouteBullets(routes: rideLeg > 0 ? [route0] : option.legs[0].routes, size: 28).opacity(rideLeg > 0 ? 0.45 : 1)
@@ -427,12 +411,11 @@ struct StrandView: View {
     }
 
     private var destination: some View {
-        row(node: c1 ?? c0, filled: true, line: nil, glow: delay, minHeight: 60) {
+        row(node: c1 ?? c0, filled: true, line: nil, minHeight: 60) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     if let it = itinerary {
                         Text(Fmt.hhmm(it.arriveTs)).font(.system(size: 32, weight: .bold)).monospacedDigit()
-                            .shadow(color: delay.opacity(level.halo.opacity * 0.8), radius: level.halo.radius * 0.6)
                     } else {
                         Text(Fmt.minTxt(option.expectedSec)).font(.system(size: 32, weight: .bold))
                     }
@@ -468,12 +451,11 @@ struct StrandView: View {
     }
 }
 
-// MARK: - the whisper glow
+// MARK: - the glow
 
-/// The glow's colours beyond the accent: yellow and red for a train about to leave, amber for a route running late.
+/// The glow's colours beyond the accent: yellow and red for a train about to leave.
 enum GlowColor {
     static let yellow = Color(red: 1.0, green: 0.84, blue: 0.04)
-    static let amber = Color(red: 1.0, green: 0.70, blue: 0.25)
     static let red = Color(red: 1.0, green: 0.27, blue: 0.23)
 }
 
@@ -489,44 +471,15 @@ func boardingUrgency(secondsLeft: Double, walkSec: Double?) -> Color {
     return secondsLeft >= 90 ? .accentColor : (secondsLeft >= 30 ? GlowColor.yellow : GlowColor.red)
 }
 
-/// The colour of the glow on the arrival: blue on time, amber running five to nine minutes late, red beyond.
-func delayGlow(_ h: RouteHealth) -> Color {
-    switch h.level {
-    case .smooth: return .accentColor
-    case .minor: return GlowColor.amber
-    case .heavy: return GlowColor.red
-    }
-}
-
-/// How much glow a page carries: the home page whispers; the line view and the routes after it are softer but
-/// plainer to see (the Oct 10 review's two levels).
+/// How much the wash shows: the home page whispers; the line view and the routes after it are plainer to see.
 enum GlowLevel {
     case whisper, soft
     var wash: Double { self == .whisper ? 0.16 : 0.28 }
-    var halo: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.26, 17) : (0.5, 18) }
-    var haloWide: (opacity: Double, radius: CGFloat) { self == .whisper ? (0, 0) : (0.28, 45) }
-    var rule: (lead: Double, halo: Double, radius: CGFloat) { self == .whisper ? (0.5, 0.22, 5) : (0.7, 0.4, 6) }
-    var bar: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.2, 8) : (0.36, 9) }
-    var button: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.35, 11) : (0.55, 15) }
-    var ring: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.35, 7) : (0.5, 8) }
-    var dot: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.6, 9) : (0.8, 10) }
-    var row: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.3, 11) : (0.45, 12) }
 }
 
-/// A hairline that fades from the glow colour to nothing, with a faint halo.
-struct GlowRule: View {
-    let color: Color
-    var level: GlowLevel = .whisper
-    var body: some View {
-        Rectangle()
-            .fill(LinearGradient(colors: [color.opacity(level.rule.lead), color.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
-            .frame(height: 1)
-            .shadow(color: color.opacity(level.rule.halo), radius: level.rule.radius)
-    }
-}
-
-/// A soft wash of the glow colour from a page's top-left corner: centred on the corner itself, so a quarter of it
-/// falls across the page and fades out before the numbers. Barely there on the home page, plainer after it.
+/// The glow: one soft wash of colour from the page's top-right corner, centred on the corner itself so a quarter
+/// of it falls across the page and fades out before the numbers. The only glow on the Go tab: the text and the
+/// controls carry none of their own.
 struct GlowWash: View {
     let color: Color
     var level: GlowLevel = .whisper
@@ -534,7 +487,7 @@ struct GlowWash: View {
         Circle()
             .fill(RadialGradient(colors: [color.opacity(level.wash), color.opacity(0)], center: .center, startRadius: 0, endRadius: 300))
             .frame(width: 800, height: 800)
-            .offset(x: -400, y: -400)
+            .offset(x: 400, y: -400)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
