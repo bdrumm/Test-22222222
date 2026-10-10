@@ -75,3 +75,26 @@ the app has no accounts. *Notes* for the reviewer:
   privacy manifest); the build still processes unless the mail says it was rejected.
 - The archive itself never needs the account: `make ios-organizer` builds it and opens Xcode's Organizer, where
   *Distribute App > TestFlight & App Store* does the same upload with whatever account Xcode has.
+
+## Uploading without an Xcode sign-in (the API key)
+
+Set up on Oct 10 2026 after Xcode's App Store Connect session lapsed and `make ios-testflight` failed with
+"Failed to Use Accounts". Three pieces, each made once:
+
+1. **An App Store Connect API key** (Users and Access > Integrations > App Store Connect API > Team Keys, role
+   App Manager). The `.p8` lives outside the repository, with its Key ID and the page's Issuer ID exported in
+   `~/.zshrc` as `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH`. The upload script uses them when they are set.
+2. **An Apple Distribution certificate on this Mac.** The team key cannot use Xcode's cloud-managed certificate
+   (Apple's "Access to Cloud Managed Distribution Certificate" is not offered for a Team Key), so the export signs
+   with a local one: a CSR made with `openssl req -new -newkey rsa:2048 -nodes -keyout distribution.key -out
+   distribution.csr -subj "/emailAddress=…/CN=…/C=US"`, uploaded at developer.apple.com > Certificates > + >
+   Apple Distribution, the downloaded `distribution.cer` and the key imported into the login keychain as a legacy
+   PKCS#12 (`openssl pkcs12 -export -legacy …` then `security import … -T /usr/bin/codesign`; OpenSSL 3's default
+   PKCS#12 format is one the keychain rejects). Certificates last a year; Apple allows three per team.
+3. **App Store profiles that name that certificate**, one per bundle id (`WhichWay App Store`,
+   `WhichWay LiveActivity App Store`), made through the API by `scripts/asc_profiles.py path/to/distribution.cer
+   --install` (also what to run after renewing the certificate). Xcode's own "iOS Team Store Provisioning Profile"s
+   only carry the cloud-managed certificate and cannot be regenerated with the key.
+
+With the three in place `make ios-testflight` archives, signs by hand with that certificate and those profiles,
+and uploads. Build 202610101120 went up this way.

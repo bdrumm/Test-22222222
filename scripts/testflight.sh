@@ -9,7 +9,9 @@
 # signing. Talking to Apple (the distribution certificate, the App Store profiles, the upload) needs one of:
 #   - the Apple ID of that team signed in to Xcode (Xcode > Settings > Accounts > +), or
 #   - an App Store Connect API key: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (the .p8 file), from
-#     App Store Connect > Users and Access > Integrations > App Store Connect API > Team Keys (role App Manager).
+#     App Store Connect > Users and Access > Integrations > App Store Connect API > Team Keys (role App Manager),
+#     plus a local "Apple Distribution" certificate and the App Store profiles made for it with
+#     scripts/asc_profiles.py (the key cannot use Xcode's cloud-managed certificate): docs/testflight.md.
 # The upload also needs the app record in App Store Connect (My Apps > + > New App, with the bundle id).
 # Full xcodebuild output goes to ios/WhichWay/build/archive.log and build/export.log.
 set -euo pipefail
@@ -59,6 +61,20 @@ fi
 
 say "2/3 Export options"
 DEST=export; [ "$UPLOAD" = 1 ] && DEST=upload
+# With the API key the export signs by hand: a Team Key cannot use Xcode's cloud-managed certificate, so the local
+# "Apple Distribution" certificate and the App Store profiles made for it (scripts/asc_profiles.py, docs/testflight.md)
+# do the signing. With the Apple ID in Xcode, automatic signing as before.
+if [ ${#AUTH[@]} -gt 0 ]; then
+  SIGNING="<key>signingStyle</key><string>manual</string>
+	<key>signingCertificate</key><string>Apple Distribution</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>$BUNDLE</key><string>${WHICHWAY_PROFILE:-WhichWay App Store}</string>
+		<key>$BUNDLE.LiveActivity</key><string>${WHICHWAY_LA_PROFILE:-WhichWay LiveActivity App Store}</string>
+	</dict>"
+else
+  SIGNING="<key>signingStyle</key><string>automatic</string>"
+fi
 cat > build/ExportOptions.plist <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -67,12 +83,13 @@ cat > build/ExportOptions.plist <<PLIST
 	<key>method</key><string>app-store-connect</string>
 	<key>destination</key><string>$DEST</string>
 	<key>teamID</key><string>$TEAM</string>
-	<key>signingStyle</key><string>automatic</string>
+	$SIGNING
 	<key>uploadSymbols</key><true/>
 	<key>manageAppVersionAndBuildNumber</key><false/>
 </dict>
 </plist>
 PLIST
+plutil -lint build/ExportOptions.plist >/dev/null || { echo "bad export options"; exit 1; }
 
 say "3/3 $([ "$UPLOAD" = 1 ] && echo "Upload to App Store Connect" || echo "Export the .ipa")"
 rm -rf build/export
