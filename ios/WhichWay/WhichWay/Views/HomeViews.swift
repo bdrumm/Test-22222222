@@ -495,7 +495,7 @@ enum GlowLevel {
     var wash: Double { self == .whisper ? 0.34 : 0.5 }
 }
 
-/// The glow: one soft wash of colour from the page's top-right corner, centred on the corner itself so a quarter
+/// The glow: one soft wash of colour from the page's top-left corner, centred on the corner itself so a quarter
 /// of it falls across the page and fades out before the numbers. The only glow on the Go tab: the text and the
 /// controls carry none of their own.
 struct GlowWash: View {
@@ -508,7 +508,7 @@ struct GlowWash: View {
                                          .init(color: color.opacity(w * 0.12), location: 0.75), .init(color: color.opacity(0), location: 1)],
                                  center: .center, startRadius: 0, endRadius: 460))
             .frame(width: 920, height: 920)
-            .offset(x: 460, y: -460)
+            .offset(x: -460, y: -460)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }

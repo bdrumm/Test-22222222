@@ -196,7 +196,7 @@ struct PlannerView: View {
             routesPage(sched, index).tag(2)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(alignment: .topTrailing) { cornerGlow }
+        .background(alignment: .topLeading) { cornerGlow }
     }
 
     private func homePage(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
