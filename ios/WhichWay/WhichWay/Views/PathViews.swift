@@ -602,7 +602,7 @@ func walkLineText(_ w: NearbyStation, originId: String, placeName: String?, plac
 func stopsToGo(_ c: TripCandidate, option p: PathOption, leg: Int, offAt: String) -> (text: String, fraction: Double) {
     guard p.legs.indices.contains(leg), let ix = p.legs[leg].idx[c.key] else { return ("", 0) }
     let total = max(1, ix.to - ix.from)
-    if let pos = c.train.position, pos.status == "STOPPED_AT", pos.stopIdx == ix.to { return ("At \(offAt)", 1) }
+    if let pos = c.train.position, !pos.derived, pos.status == "STOPPED_AT", pos.stopIdx == ix.to { return ("At \(offAt)", 1) }
     let n = ix.to - c.train.nextIdx + 1
     if n <= 0 { return ("Arriving at \(offAt)", 0.95) }
     return ("\(min(n, total)) stop\(n == 1 ? "" : "s") to go", max(0, 1 - Double(min(n, total)) / Double(total)))
@@ -610,7 +610,7 @@ func stopsToGo(_ c: TripCandidate, option p: PathOption, leg: Int, offAt: String
 
 func stopsAway(_ c: TripCandidate, option: PathOption, leg: Int = 0) -> (text: String, fraction: Double) {
     guard option.legs.indices.contains(leg), let from = option.legs[leg].idx[c.key]?.from else { return ("", 0) }
-    if let p = c.train.position, p.status == "STOPPED_AT", p.stopIdx == from { return ("At the platform", 1) }
+    if let p = c.train.position, !p.derived, p.status == "STOPPED_AT", p.stopIdx == from { return ("At the platform", 1) }
     let n = from - c.train.nextIdx
     if n <= 0 { return ("Arriving", 0.95) }
     return ("\(n) stop\(n == 1 ? "" : "s") away", max(0, 1 - Double(min(n, 10)) / 10))

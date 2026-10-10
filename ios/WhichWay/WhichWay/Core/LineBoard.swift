@@ -34,12 +34,13 @@ struct TrainPosition {
     var atTerminal: Bool
     var expectedRunSec: Double?
     var positionLatenessSec: Double?
-    /// No vehicle report for this trip: the position is read off the trip update (heading to its next stop), so
-    /// it carries no dwell, no hold, no stall and places the train by its ETA only.
+    /// No vehicle report for this trip: the position is read off the trip update, so it carries no dwell, no hold,
+    /// no stall and places the train by its ETA only. In the live feeds (Oct 10) every such train was one assigned
+    /// to a trip and still at its first terminal: the numbered lines' feed reports a vehicle only once it has left.
     var derived = false
 
     var text: String {
-        if derived { return "→ \(stopName) · no position report" }
+        if derived { return status == "STOPPED_AT" ? "at \(stopName) · not yet departed" : "→ \(stopName) · no position report" }
         let verb = status == "STOPPED_AT" ? "at" : (status == "INCOMING_AT" ? "arriving" : "→")
         var s = "\(verb) \(stopName)"
         if sinceSec >= 60 { s += " · \(Int(sinceSec / 60)) min" }
@@ -244,9 +245,11 @@ func lineBoard(schedule: ClientSchedule, lineSched: [LineSchedEntry], feeds: [St
                     effective = max(lateness, plate)
                 }
             } else {
-                // no vehicle report at all: the trip update still says which stop the train reaches next, so the
-                // train is somewhere before it; nothing is known of dwell, holds or stalls
-                pos = TrainPosition(status: "IN_TRANSIT_TO", stopId: first.stopId, stopIdx: j, stopName: j < line.names.count ? line.names[j] : line.stops[j],
+                // no vehicle report at all: the trip update still says which stop the train reaches next. With the
+                // line's first stop ahead the train is assigned and waiting at its terminal (the only case seen in
+                // the live feeds); otherwise it is somewhere before that stop. Nothing is known of dwell, holds or stalls.
+                pos = TrainPosition(status: j == 0 ? "STOPPED_AT" : "IN_TRANSIT_TO", stopId: first.stopId, stopIdx: j,
+                                    stopName: j < line.names.count ? line.names[j] : line.stops[j],
                                     sinceSec: 0, holding: false, stalled: false, atTerminal: j == 0 || j == line.stops.count - 1,
                                     expectedRunSec: nil, positionLatenessSec: nil, derived: true)
             }
