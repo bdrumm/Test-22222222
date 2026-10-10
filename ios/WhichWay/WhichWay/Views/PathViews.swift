@@ -82,17 +82,7 @@ struct NowCard: View {
 
     /// The itinerary after the one on the card, on the same route: the train to take if this one is missed. On the
     /// train, the connection after the one the ride makes.
-    private var nextItinerary: Itinerary? {
-        if let r = ride {
-            guard !onTrain || r.legs.count > 1, let s = r.nextIfMissedSec else { return nil }
-            var n = r
-            n.boardTs = (onTrain ? r.legs[1].boardTs : r.boardTs) + s
-            n.legs = onTrain ? Array(r.legs.dropFirst()) : r.legs
-            return n
-        }
-        guard let p = option, let it = p.live, let sched = data.schedule else { return nil }
-        return pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
-    }
+    private var nextItinerary: Itinerary? { nextItineraryAfter(ride: ride, onTrain: onTrain, option: option, data: data) }
 
     // The card keeps one fixed row structure whichever route is chosen and whether or not a train is in the
     // feeds, so its height never changes and the list under it never jumps: every row reserves its space.
@@ -182,12 +172,7 @@ struct NowCard: View {
 
     /// On the train: how many stops are left before the rider gets off, from the feed's progress.
     private func stopsToGo(_ c: TripCandidate, option p: PathOption) -> (text: String, fraction: Double) {
-        guard p.legs.indices.contains(rideLeg), let ix = p.legs[rideLeg].idx[c.key] else { return ("", 0) }
-        let total = max(1, ix.to - ix.from)
-        if let pos = c.train.position, pos.status == "STOPPED_AT", pos.stopIdx == ix.to { return ("At \(offAt(p))", 1) }
-        let n = ix.to - c.train.nextIdx + 1
-        if n <= 0 { return ("Arriving at \(offAt(p))", 0.95) }
-        return ("\(min(n, total)) stop\(n == 1 ? "" : "s") to go", max(0, 1 - Double(min(n, total)) / Double(total)))
+        WhichWay.stopsToGo(c, option: p, leg: rideLeg, offAt: offAt(p))
     }
 
     /// Where that train is: stops from your platform on one line, the stop it is at on the next, a small track to
@@ -218,18 +203,7 @@ struct NowCard: View {
     /// The walk to the station in the rider's own pace and time to the platform where learned, else 80 m a
     /// minute; whether it fits in the countdown, and how far it gets them if not.
     private func walkLine(_ w: NearbyStation, boardTs: Double?, now: Double) -> (text: String, tight: Bool) {
-        let pm = PersonalModelStore.shared.model
-        let access = pm.accessSec(station: originId) ?? 0
-        let walkSec = placeUsualSec ?? (w.meters / pm.walkSpeedMPerMin * 60 + access)
-        let mins = max(1, Int((walkSec / 60).rounded()))
-        let left = boardTs.map { max(0, $0 - now) }
-        let tight = left.map { walkSec > $0 } ?? false
-        let reach = pm.walkSpeedMPerMin * max(0, (left ?? 0) - access) / 60
-        var text = placeName.map { "\($0): " } ?? ""
-        text += placeUsualSec != nil ? "usually \(mins) min" : "\(Fmt.miles(w.meters)) - \(mins) min"
-        if placeUsualSec == nil, access >= 30 { text += " · \(Int((access / 60).rounded())) min to platform" }
-        if tight { text += " · \(Fmt.miles(reach))" }
-        return (text, tight)
+        walkLineText(w, originId: originId, placeName: placeName, placeUsualSec: placeUsualSec, boardTs: boardTs, now: now)
     }
 
     /// The step before boarding while the rider is still on the way: the walk to the station.
@@ -591,6 +565,49 @@ struct HourStrip: View {
 
 /// How far a train is from the rider's platform: the words, and a fraction along a ten-stop approach for a
 /// small track (0 = ten or more stops out, 1 = at the platform).
+/// The itinerary after `ride` or the option's next one, on the same route: the train to take if this one is
+/// missed. On the train, the connection after the one the ride makes. Shared by the Now card and the home card.
+@MainActor
+func nextItineraryAfter(ride: Itinerary?, onTrain: Bool, option: PathOption?, data: DataService) -> Itinerary? {
+    if let r = ride {
+        guard !onTrain || r.legs.count > 1, let s = r.nextIfMissedSec else { return nil }
+        var n = r
+        n.boardTs = (onTrain ? r.legs[1].boardTs : r.boardTs) + s
+        n.legs = onTrain ? Array(r.legs.dropFirst()) : r.legs
+        return n
+    }
+    guard let p = option, let it = p.live, let sched = data.schedule else { return nil }
+    return pathTrips(boards: data.predictedBoards, schedule: sched, option: p, now: data.now, maxN: 3).first { $0.boardTs > it.boardTs + 30 }
+}
+
+/// The walk to the station in the rider's own pace and time to the platform where learned, else 80 m a minute;
+/// whether it fits in the countdown, and how far it gets them if not.
+@MainActor
+func walkLineText(_ w: NearbyStation, originId: String, placeName: String?, placeUsualSec: Double?, boardTs: Double?, now: Double) -> (text: String, tight: Bool) {
+    let pm = PersonalModelStore.shared.model
+    let access = pm.accessSec(station: originId) ?? 0
+    let walkSec = placeUsualSec ?? (w.meters / pm.walkSpeedMPerMin * 60 + access)
+    let mins = max(1, Int((walkSec / 60).rounded()))
+    let left = boardTs.map { max(0, $0 - now) }
+    let tight = left.map { walkSec > $0 } ?? false
+    let reach = pm.walkSpeedMPerMin * max(0, (left ?? 0) - access) / 60
+    var text = placeName.map { "\($0): " } ?? ""
+    text += placeUsualSec != nil ? "usually \(mins) min" : "\(Fmt.miles(w.meters)) - \(mins) min"
+    if placeUsualSec == nil, access >= 30 { text += " · \(Int((access / 60).rounded())) min to platform" }
+    if tight { text += " · \(Fmt.miles(reach))" }
+    return (text, tight)
+}
+
+/// On the train: how many stops are left before the rider gets off at `offAt`, from the feed's progress.
+func stopsToGo(_ c: TripCandidate, option p: PathOption, leg: Int, offAt: String) -> (text: String, fraction: Double) {
+    guard p.legs.indices.contains(leg), let ix = p.legs[leg].idx[c.key] else { return ("", 0) }
+    let total = max(1, ix.to - ix.from)
+    if let pos = c.train.position, pos.status == "STOPPED_AT", pos.stopIdx == ix.to { return ("At \(offAt)", 1) }
+    let n = ix.to - c.train.nextIdx + 1
+    if n <= 0 { return ("Arriving at \(offAt)", 0.95) }
+    return ("\(min(n, total)) stop\(n == 1 ? "" : "s") to go", max(0, 1 - Double(min(n, total)) / Double(total)))
+}
+
 func stopsAway(_ c: TripCandidate, option: PathOption, leg: Int = 0) -> (text: String, fraction: Double) {
     guard option.legs.indices.contains(leg), let from = option.legs[leg].idx[c.key]?.from else { return ("", 0) }
     if let p = c.train.position, p.status == "STOPPED_AT", p.stopIdx == from { return ("At the platform", 1) }

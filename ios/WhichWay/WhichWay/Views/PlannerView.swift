@@ -68,6 +68,14 @@ struct PlannerView: View {
     @State private var onTrainSheet = false
     /// Per leg, the line the rider said they will take where a leg allows several (the A rather than the C).
     @State private var preferredKeys: [Int: String] = [:]
+    /// The earlier Go tab: the title, the pickers, the full card, the route list and the five views on one page.
+    @AppStorage("classicGo") private var classicGo = false
+    /// The paged Go tab's page: home, the line view, the routes.
+    @State private var page = 0
+    /// A route was picked on the routes page: the next swipe back goes straight home, skipping the line view.
+    @State private var routeChosen = false
+    /// The five detail views, the itineraries and the departure board, as a sheet from the line view.
+    @State private var showDetails = false
 
     var body: some View {
         NavigationStack {
@@ -142,6 +150,234 @@ struct PlannerView: View {
     }
 
     private func content(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
+        Group {
+            if classicGo { classicContent(sched, index) } else { pagedContent(sched, index) }
+        }
+        .sheet(isPresented: $pickingOrigin) {
+            StationPickerSheet(title: "From", stations: index.sorted, reach: nil,
+                               nearTo: currentPreset.flatMap { index.station($0.originId) }, coords: commuteCoords(sched, index), places: places.picks(index)) { st in
+                originId = st.id
+                pickedByHand()
+            }
+        }
+        .sheet(isPresented: $pickingDest) {
+            StationPickerSheet(title: "To", stations: index.sorted, reach: reach,
+                               nearTo: currentPreset.flatMap { index.station($0.destId) }, coords: commuteCoords(sched, index), places: places.picks(index)) { st in
+                destId = st.id
+                pickedByHand()
+            }
+        }
+        .sheet(isPresented: $showInsights) {
+            if let p = headline {
+                RouteInsightsView(option: p, schedule: sched, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
+            }
+        }
+        .sheet(isPresented: $showDetails) { detailsSheet(sched, index) }
+        .sheet(isPresented: $nearbySheet) {
+            NearbyStationsSheet { st in
+                originId = st.id
+                pickedByHand()
+            }
+        }
+        .sheet(item: $editing) { p in
+            PresetEditorView(preset: p) { saved in
+                presets.update(saved)
+                applyPreset(saved, byHand: true)
+            }
+        }
+    }
+
+    // MARK: - the paged Go tab
+
+    /// Three pages side by side: home (the countdown and the numbers), the line view, the routes. A route picked
+    /// on the routes page takes the line view out of the stack, so the swipe back lands on home.
+    private func pagedContent(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
+        TabView(selection: $page) {
+            homePage(sched, index).tag(0)
+            if !routeChosen { linePage(sched, index).tag(1) }
+            routesPage(sched, index).tag(2)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .onChange(of: page) { _, p in if p == 0 { routeChosen = false } }
+    }
+
+    private func homePage(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
+        let originName = index.stations[originId]?.name ?? ""
+        let destName = index.stations[destId]?.name ?? ""
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                homeHeader(index)
+                if let n = habitNote, !routeStarted {
+                    Label(n, systemImage: "clock.arrow.circlepath").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+                if pendingNearest {
+                    Text(loc.error ?? "Finding the nearest station…").font(.footnote).foregroundStyle(loc.error == nil ? Color.secondary : Color.red)
+                } else if originId.isEmpty || destId.isEmpty {
+                    SetupPrompt(originSet: !originId.isEmpty, destSet: !destId.isEmpty, reachable: reach.count) { editing = newPresetFromCurrent() }
+                }
+                if let p = headline {
+                    let here = nearbyPlace()
+                    let ride = routeStarted ? rideItinerary : nil
+                    let others = ranked.filter { $0.id != p.id }
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        let now = data.now
+                        let it = ride ?? p.live
+                        HomeCard(option: p, itinerary: it, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: now,
+                                 originName: originName, destName: destName, phase: trip.phase, onTrain: trip.onTrain, rideLeg: trip.currentLeg,
+                                 ridingRoute: ridingRoute, ridePresumed: ridePresumed,
+                                 walk: walkToOrigin.map { walkLineText($0, originId: originId, placeName: here?.name,
+                                                                        placeUsualSec: here.flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) },
+                                                                        boardTs: it?.boardTs, now: now) },
+                                 alternatives: Array(others.prefix(3)), moreCount: max(0, others.count - 3),
+                                 onPick: { selectedPath = $0.id }, onMore: { withAnimation { page = 2 } })
+                    }
+                    .padding(.top, 10)
+                    tripBar(originName: originName.isEmpty ? "the station" : originName).padding(.top, 8)
+                    if let o = outlook { HoldOutlookCard(outlook: o) }
+                } else if !originId.isEmpty && !destId.isEmpty {
+                    Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
+                }
+                if let err = data.lastError { Text(err).font(.caption2).foregroundStyle(Color.red) }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
+        }
+        .onAppear {
+            data.requestGeometry()
+            loc.request()
+        }
+    }
+
+    /// Where from and where to on one line, each a tap to change, with swap and nearest beside; the commute and
+    /// the feed's freshness under.
+    private func homeHeader(_ index: StationIndex) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Button { pickingOrigin = true } label: {
+                    Text(index.stations[originId]?.name ?? "Choose a station").font(.title3.weight(.semibold))
+                        .foregroundStyle(originId.isEmpty ? Color.accentColor : Color.primary).lineLimit(1).minimumScaleFactor(0.75)
+                }
+                .buttonStyle(.plain).accessibilityLabel("From")
+                Text("to").foregroundStyle(.secondary)
+                Button { pickingDest = true } label: {
+                    Text(index.stations[destId]?.name ?? "where?").font(.title3.weight(.semibold))
+                        .foregroundStyle(destId.isEmpty ? Color.accentColor : Color.primary).lineLimit(1).minimumScaleFactor(0.75)
+                }
+                .buttonStyle(.plain).disabled(originId.isEmpty).accessibilityLabel("To")
+                Spacer(minLength: 8)
+                Button {
+                    let o = originId
+                    originId = destId
+                    destId = o
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down").font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+                        .frame(width: 34, height: 34).background(Circle().fill(Color(.secondarySystemBackground)))
+                }
+                .buttonStyle(.plain).disabled(originId.isEmpty || destId.isEmpty).accessibilityLabel("Swap stations")
+                Button { nearbySheet = true } label: {
+                    Image(systemName: "location.fill").font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+                        .frame(width: 34, height: 34).background(Circle().fill(Color(.secondarySystemBackground)))
+                }
+                .buttonStyle(.plain).accessibilityLabel("Nearest station")
+            }
+            HStack(alignment: .center, spacing: 12) {
+                CommuteChip(presets: presets.presets, activeId: presets.active(at: data.now)?.id, currentId: currentPresetId,
+                            onPick: { applyPreset($0, byHand: true) },
+                            onEdit: { editing = $0 },
+                            onAdd: { editing = newPresetFromCurrent() })
+                Spacer(minLength: 8)
+                StatusDot(chip: true).fixedSize()
+            }
+        }
+        .padding(.top, 12)
+    }
+
+    /// The line and routes pages' title: where from and where to, and a word on the right.
+    private func pageTitle(_ index: StationIndex, caption: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(index.stations[originId]?.name ?? "").font(.title3.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.75)
+            Text("to").foregroundStyle(.secondary)
+            Text(index.stations[destId]?.name ?? "").font(.title3.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.75)
+            Spacer(minLength: 8)
+            Text(caption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(.top, 12)
+    }
+
+    private func linePage(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
+        let originName = index.stations[originId]?.name ?? ""
+        let destName = index.stations[destId]?.name ?? ""
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                pageTitle(index, caption: headline.map { Fmt.minTxt($0.live?.totalSec ?? $0.expectedSec) } ?? "")
+                if let p = headline {
+                    let ride = routeStarted ? rideItinerary : nil
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        StrandView(option: p, itinerary: ride ?? p.live, next: nextItineraryAfter(ride: ride, onTrain: trip.onTrain, option: p, data: data), now: data.now,
+                                   originName: originName, destName: destName, onTrain: trip.onTrain, rideLeg: trip.currentLeg,
+                                   ridingRoute: ridingRoute, ridePresumed: ridePresumed,
+                                   alternatives: Array(ranked.filter { $0.id != p.id }.prefix(4)),
+                                   onPick: { selectedPath = $0.id }, onDetails: { showDetails = true }, onInsights: { showInsights = true })
+                    }
+                    .padding(.top, 10)
+                } else {
+                    Text("Pick where you are and where you're going.").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
+        }
+    }
+
+    private func routesPage(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                pageTitle(index, caption: "")
+                Text("Tap a route to take it, then swipe back.").font(.caption).foregroundStyle(.secondary)
+                if !paths.isEmpty {
+                    pathList
+                } else if !originId.isEmpty && !destId.isEmpty {
+                    Text("No path with at most one change between these stations.").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
+        }
+    }
+
+    /// The route's five views, its next itineraries and insights, and the departure board while a route is on: the
+    /// classic page's detail, as a sheet.
+    private func detailsSheet(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
+        let originName = index.stations[originId]?.name ?? ""
+        let destName = index.stations[destId]?.name ?? ""
+        return NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let sel = headline {
+                        if routeStarted { DepartureBoardView(option: sel, schedule: sched, originName: originName, destName: destName) }
+                        PathDetailView(option: sel, schedule: sched, index: index, originName: originName, destName: destName)
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Route detail")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showDetails = false } } }
+        }
+    }
+
+    /// The walk from the phone to the origin station, when the phone's position and the station's are known.
+    private var walkToOrigin: NearbyStation? {
+        guard !originId.isEmpty, let l = loc.location, let sched = data.schedule, let index = data.index, let geo = data.geometry,
+              let st = index.stations[originId], let c = stationCoordinates(schedule: sched, index: index, geometry: geo)[originId] else { return nil }
+        return NearbyStation(station: st, meters: haversineM((l.coordinate.latitude, l.coordinate.longitude), c))
+    }
+
+    // MARK: - the classic Go tab
+
+    /// The earlier Go tab, kept whole: the title, the pickers, the full card, the route list and the five views on
+    /// one page, a sideways swipe stepping through the routes (Settings → Go tab → Classic).
+    private func classicContent(_ sched: ClientSchedule, _ index: StationIndex) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Which way?").font(.largeTitle.bold()).lineLimit(1).minimumScaleFactor(0.8).padding(.top, 8)
@@ -191,37 +427,6 @@ struct PlannerView: View {
             .padding(.bottom, 24)
             // a sideways swipe anywhere on the page steps through the routes; scrolling is untouched
             .background(SwipeCatcher { stepRoute($0) })
-        }
-        .sheet(isPresented: $pickingOrigin) {
-            StationPickerSheet(title: "From", stations: index.sorted, reach: nil,
-                               nearTo: currentPreset.flatMap { index.station($0.originId) }, coords: commuteCoords(sched, index), places: places.picks(index)) { st in
-                originId = st.id
-                pickedByHand()
-            }
-        }
-        .sheet(isPresented: $pickingDest) {
-            StationPickerSheet(title: "To", stations: index.sorted, reach: reach,
-                               nearTo: currentPreset.flatMap { index.station($0.destId) }, coords: commuteCoords(sched, index), places: places.picks(index)) { st in
-                destId = st.id
-                pickedByHand()
-            }
-        }
-        .sheet(isPresented: $showInsights) {
-            if let p = headline {
-                RouteInsightsView(option: p, schedule: sched, originName: index.stations[originId]?.name ?? "", destName: index.stations[destId]?.name ?? "")
-            }
-        }
-        .sheet(isPresented: $nearbySheet) {
-            NearbyStationsSheet { st in
-                originId = st.id
-                pickedByHand()
-            }
-        }
-        .sheet(item: $editing) { p in
-            PresetEditorView(preset: p) { saved in
-                presets.update(saved)
-                applyPreset(saved, byHand: true)
-            }
         }
     }
 
@@ -342,7 +547,7 @@ struct PlannerView: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text(routeStarted ? "Other ways" : "\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
             ForEach(Array(list.enumerated()), id: \.element.id) { i, p in
-                Button { selectedPath = p.id } label: {
+                Button { selectedPath = p.id; routeChosen = true } label: {
                     PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec)
                 }
                 .buttonStyle(.plain)
@@ -1211,9 +1416,24 @@ struct PlannerView: View {
     }
 }
 
-private struct BarSeg {
+struct BarSeg {
     var sec: Double
     var color: Color
+}
+
+/// The route's door-to-door time as a bar: wait (grey), ride (line colour), walk at the change (dark), wait, ride.
+func journeySegments(_ option: PathOption) -> [BarSeg] {
+    var out: [BarSeg] = []
+    let l0 = option.legs[0]
+    out.append(BarSeg(sec: option.wait1Sec, color: Color.primary.opacity(0.22)))
+    out.append(BarSeg(sec: Double(l0.schedRideSec ?? 0) + (l0.typicalSec ?? 0) + l0.holdRiskSec, color: RouteStyle.color(l0.primaryRoute)))
+    if option.legs.count > 1, let tr = option.transfer {
+        let l1 = option.legs[1]
+        if tr.walkSec > 0 { out.append(BarSeg(sec: Double(tr.walkSec), color: Color.primary.opacity(0.7))) }
+        out.append(BarSeg(sec: option.wait2Sec, color: Color.primary.opacity(0.22)))
+        out.append(BarSeg(sec: Double(l1.schedRideSec ?? 0) + (l1.typicalSec ?? 0) + l1.holdRiskSec, color: RouteStyle.color(l1.primaryRoute)))
+    }
+    return out.map { BarSeg(sec: max(0, $0.sec), color: $0.color) }
 }
 
 struct PathRow: View {
@@ -1273,19 +1493,7 @@ struct PathRow: View {
         }
     }
 
-    private var segments: [BarSeg] {
-        var out: [BarSeg] = []
-        let l0 = option.legs[0]
-        out.append(BarSeg(sec: option.wait1Sec, color: Color.primary.opacity(0.22)))
-        out.append(BarSeg(sec: Double(l0.schedRideSec ?? 0) + (l0.typicalSec ?? 0) + l0.holdRiskSec, color: RouteStyle.color(l0.primaryRoute)))
-        if option.legs.count > 1, let tr = option.transfer {
-            let l1 = option.legs[1]
-            if tr.walkSec > 0 { out.append(BarSeg(sec: Double(tr.walkSec), color: Color.primary.opacity(0.7))) }
-            out.append(BarSeg(sec: option.wait2Sec, color: Color.primary.opacity(0.22)))
-            out.append(BarSeg(sec: Double(l1.schedRideSec ?? 0) + (l1.typicalSec ?? 0) + l1.holdRiskSec, color: RouteStyle.color(l1.primaryRoute)))
-        }
-        return out.map { BarSeg(sec: max(0, $0.sec), color: $0.color) }
-    }
+    private var segments: [BarSeg] { journeySegments(option) }
 
     private var bar: some View {
         GeometryReader { geo in

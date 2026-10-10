@@ -4,6 +4,7 @@ import SwiftUI
 /// the feed status and the upload plumbing live under Developer.
 struct SettingsView: View {
     @Environment(DataService.self) private var data
+    @AppStorage("classicGo") private var classicGo = false
 
     var body: some View {
         NavigationStack {
@@ -12,6 +13,13 @@ struct SettingsView: View {
                 PlacesSection()
                 PaceSection()
                 SharingSection()
+                Section {
+                    Toggle("Classic layout", isOn: $classicGo)
+                } header: {
+                    Text("Go tab")
+                } footer: {
+                    Text("Off: the countdown and the numbers, with the line view one swipe to the right and the other routes two. On: the earlier page with the full card, the route list and the five views together.")
+                }
                 Section {
                     NavigationLink("Developer") { DeveloperSettingsView() }
                 } footer: {
