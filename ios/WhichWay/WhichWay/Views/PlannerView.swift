@@ -257,9 +257,17 @@ struct PlannerView: View {
         let ride = routeStarted ? rideItinerary : nil
         let placeUsualSec = nearbyPlace().flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) }
         return TimelineView(.periodic(from: .now, by: 1)) { _ in
-            GlowWash(color: glowUrgency(ride ?? p?.live, now: data.now, placeUsualSec: placeUsualSec))
+            GlowWash(color: glowUrgency(ride ?? p?.live, now: data.now, placeUsualSec: placeUsualSec), level: page == 0 ? .whisper : .soft)
         }
+        .animation(.easeInOut(duration: 0.35), value: page)
         .ignoresSafeArea()
+    }
+
+    /// The glow on the chosen route's row: the time to its train, as on the home page; none on the classic page.
+    private var routeRowGlow: Color? {
+        guard !classicGo else { return nil }
+        let placeUsualSec = nearbyPlace().flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) }
+        return glowUrgency((routeStarted ? rideItinerary : nil) ?? headline?.live, now: data.now, placeUsualSec: placeUsualSec)
     }
 
     /// Where from and where to on one line, each a tap to change, with swap and nearest beside; the commute and
@@ -575,11 +583,12 @@ struct PlannerView: View {
     private var pathList: some View {
         let list = ranked
         let maxSec = max(60, list.map { p in max(p.expectedSec, p.live?.totalSec ?? 0) }.max() ?? 60)
+        let glow = routeRowGlow
         return VStack(alignment: .leading, spacing: 6) {
             Text(routeStarted ? "Other ways" : "\(list.count) way\(list.count == 1 ? "" : "s") to get there").font(.headline)
             ForEach(Array(list.enumerated()), id: \.element.id) { i, p in
                 Button { selectedPath = p.id; routeChosen = true } label: {
-                    PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec, glow: !classicGo)
+                    PathRow(option: p, selected: p.id == selectedPath, maxSec: maxSec, glow: glow)
                 }
                 .buttonStyle(.plain)
             }
@@ -1473,8 +1482,8 @@ struct PathRow: View {
     let option: PathOption
     let selected: Bool
     let maxSec: Double
-    /// The chosen row carries the whisper glow (the paged Go tab).
-    var glow = false
+    /// The chosen row carries the soft glow in this colour, the time to its train (the paged Go tab); nil: none.
+    var glow: Color? = nil
 
     private var health: RouteHealth { routeHealth(option, data: data) }
 
@@ -1510,7 +1519,7 @@ struct PathRow: View {
             }
         }
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: 1))
-        .shadow(color: Color.accentColor.opacity(selected && glow ? 0.3 : 0), radius: 11)
+        .shadow(color: (glow ?? .clear).opacity(selected ? GlowLevel.soft.row.opacity : 0), radius: GlowLevel.soft.row.radius)
         .contentShape(Rectangle())
     }
 

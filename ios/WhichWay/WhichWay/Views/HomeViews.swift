@@ -268,6 +268,8 @@ struct StrandView: View {
     /// The glows, as on the home card: the time to the train on the origin, the route's delay on the destination.
     var urgency: Color = .accentColor
     var delay: Color = .accentColor
+    /// The line view carries the softer, plainer glow.
+    var level: GlowLevel = .soft
 
     private var leg0Train: TripCandidate? { rideLeg == 0 ? itinerary?.legs.first : nil }
     private var leg1Train: TripCandidate? { option.legs.count > 1 ? (rideLeg == 0 ? itinerary?.legs.dropFirst().first : itinerary?.legs.first) : nil }
@@ -293,6 +295,7 @@ struct StrandView: View {
                 Spacer(minLength: 0)
             }
             .font(.caption.weight(.semibold)).buttonStyle(.bordered).controlSize(.small)
+            .shadow(color: Color.accentColor.opacity(level.button.opacity * 0.6), radius: level.button.radius)
             .padding(.top, 24)
         }
     }
@@ -316,10 +319,10 @@ struct StrandView: View {
                     if small {
                         Circle().fill(node).frame(width: 10, height: 10).padding(.top, 5)
                     } else if filled {
-                        Circle().fill(node).frame(width: 20, height: 20).shadow(color: (glow ?? .clear).opacity(0.6), radius: 9)
+                        Circle().fill(node).frame(width: 20, height: 20).shadow(color: (glow ?? .clear).opacity(level.dot.opacity), radius: level.dot.radius)
                     } else {
                         Circle().strokeBorder(node, lineWidth: 5).background(Circle().fill(Color(.systemBackground))).frame(width: 20, height: 20)
-                            .shadow(color: (glow ?? .clear).opacity(0.35), radius: 7)
+                            .shadow(color: (glow ?? .clear).opacity(level.ring.opacity), radius: level.ring.radius)
                     }
                 }
             }
@@ -358,7 +361,8 @@ struct StrandView: View {
                     if rideLeg == 0, let it = itinerary, let l0 = it.legs.first {
                         Text(Fmt.mmss(max(0, (onTrain ? l0.arriveTs : it.boardTs) - now)))
                             .font(.system(size: 54, weight: .heavy)).tracking(-2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
-                            .shadow(color: urgency.opacity(0.3), radius: 14)
+                            .shadow(color: urgency.opacity(level.halo.opacity), radius: level.halo.radius)
+                            .shadow(color: urgency.opacity(level.haloWide.opacity), radius: level.haloWide.radius)
                         RouteBullet(route: route0, size: 28)
                     } else {
                         RouteBullets(routes: rideLeg > 0 ? [route0] : option.legs[0].routes, size: 28).opacity(rideLeg > 0 ? 0.45 : 1)
@@ -428,7 +432,7 @@ struct StrandView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     if let it = itinerary {
                         Text(Fmt.hhmm(it.arriveTs)).font(.system(size: 32, weight: .bold)).monospacedDigit()
-                            .shadow(color: delay.opacity(0.25), radius: 9)
+                            .shadow(color: delay.opacity(level.halo.opacity * 0.8), radius: level.halo.radius * 0.6)
                     } else {
                         Text(Fmt.minTxt(option.expectedSec)).font(.system(size: 32, weight: .bold))
                     }
@@ -494,24 +498,41 @@ func delayGlow(_ h: RouteHealth) -> Color {
     }
 }
 
+/// How much glow a page carries: the home page whispers; the line view and the routes after it are softer but
+/// plainer to see (the Oct 10 review's two levels).
+enum GlowLevel {
+    case whisper, soft
+    var wash: Double { self == .whisper ? 0.16 : 0.28 }
+    var halo: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.26, 17) : (0.5, 18) }
+    var haloWide: (opacity: Double, radius: CGFloat) { self == .whisper ? (0, 0) : (0.28, 45) }
+    var rule: (lead: Double, halo: Double, radius: CGFloat) { self == .whisper ? (0.5, 0.22, 5) : (0.7, 0.4, 6) }
+    var bar: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.2, 8) : (0.36, 9) }
+    var button: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.35, 11) : (0.55, 15) }
+    var ring: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.35, 7) : (0.5, 8) }
+    var dot: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.6, 9) : (0.8, 10) }
+    var row: (opacity: Double, radius: CGFloat) { self == .whisper ? (0.3, 11) : (0.45, 12) }
+}
+
 /// A hairline that fades from the glow colour to nothing, with a faint halo.
 struct GlowRule: View {
     let color: Color
+    var level: GlowLevel = .whisper
     var body: some View {
         Rectangle()
-            .fill(LinearGradient(colors: [color.opacity(0.5), color.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
+            .fill(LinearGradient(colors: [color.opacity(level.rule.lead), color.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
             .frame(height: 1)
-            .shadow(color: color.opacity(0.22), radius: 5)
+            .shadow(color: color.opacity(level.rule.halo), radius: level.rule.radius)
     }
 }
 
-/// A soft wash of the glow colour from a page's top-left corner, barely there: centred on the corner itself, so
-/// a quarter of it falls across the page and fades out before the numbers.
+/// A soft wash of the glow colour from a page's top-left corner: centred on the corner itself, so a quarter of it
+/// falls across the page and fades out before the numbers. Barely there on the home page, plainer after it.
 struct GlowWash: View {
     let color: Color
+    var level: GlowLevel = .whisper
     var body: some View {
         Circle()
-            .fill(RadialGradient(colors: [color.opacity(0.16), color.opacity(0)], center: .center, startRadius: 0, endRadius: 300))
+            .fill(RadialGradient(colors: [color.opacity(level.wash), color.opacity(0)], center: .center, startRadius: 0, endRadius: 300))
             .frame(width: 800, height: 800)
             .offset(x: -400, y: -400)
             .allowsHitTesting(false)
