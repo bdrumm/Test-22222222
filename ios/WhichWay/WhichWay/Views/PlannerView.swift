@@ -198,6 +198,7 @@ struct PlannerView: View {
             routesPage(sched, index).tag(2)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .background(alignment: .topLeading) { cornerGlow }
         .onChange(of: page) { _, p in if p == 0 { routeChosen = false } }
     }
 
@@ -248,6 +249,17 @@ struct PlannerView: View {
             data.requestGeometry()
             loc.request()
         }
+    }
+
+    /// The whisper glow from the page's top-left corner, in the colour of the time to the train, kept up every second.
+    private var cornerGlow: some View {
+        let p = headline
+        let ride = routeStarted ? rideItinerary : nil
+        let placeUsualSec = nearbyPlace().flatMap { PersonalModelStore.shared.model.placeToStationSec(place: $0.id.uuidString, station: originId) }
+        return TimelineView(.periodic(from: .now, by: 1)) { _ in
+            GlowWash(color: glowUrgency(ride ?? p?.live, now: data.now, placeUsualSec: placeUsualSec))
+        }
+        .ignoresSafeArea()
     }
 
     /// Where from and where to on one line, each a tap to change, with swap and nearest beside; the commute and

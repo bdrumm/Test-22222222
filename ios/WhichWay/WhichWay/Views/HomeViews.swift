@@ -52,7 +52,6 @@ struct HomeCard: View {
             GlowRule(color: delay).padding(.vertical, 22)
             others
         }
-        .background(alignment: .topLeading) { GlowWash(color: urgency).offset(x: -160, y: -40) }
     }
 
     // MARK: the countdown, the lines, the train
@@ -506,13 +505,15 @@ struct GlowRule: View {
     }
 }
 
-/// A soft wash of the glow colour behind the top of a page, barely there.
+/// A soft wash of the glow colour from a page's top-left corner, barely there: centred on the corner itself, so
+/// a quarter of it falls across the page and fades out before the numbers.
 struct GlowWash: View {
     let color: Color
     var body: some View {
-        Ellipse()
-            .fill(RadialGradient(colors: [color.opacity(0.13), color.opacity(0)], center: .center, startRadius: 0, endRadius: 270))
-            .frame(width: 560, height: 440)
+        Circle()
+            .fill(RadialGradient(colors: [color.opacity(0.16), color.opacity(0)], center: .center, startRadius: 0, endRadius: 300))
+            .frame(width: 800, height: 800)
+            .offset(x: -400, y: -400)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
